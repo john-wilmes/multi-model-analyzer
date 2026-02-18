@@ -62,6 +62,7 @@ async function main(): Promise<void> {
         mirrorDir: config.mirrorDir,
         kvStore,
         graphStore,
+        searchStore,
         verbose,
       });
       break;

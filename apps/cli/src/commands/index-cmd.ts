@@ -18,6 +18,7 @@ import type {
   LogTemplateIndex,
   MethodPurposeMap,
   SymbolInfo,
+  Summary,
 } from "@mma/core";
 import { detectChanges, classifyFiles } from "@mma/ingestion";
 import { parseFiles } from "@mma/parsing";
@@ -31,13 +32,15 @@ import {
   analyzeNaming,
 } from "@mma/heuristics";
 import type { PackageJsonInfo } from "@mma/heuristics";
-import type { KVStore, GraphStore } from "@mma/storage";
+import type { KVStore, GraphStore, SearchStore } from "@mma/storage";
+import { tier1Summarize, tier2Summarize } from "@mma/summarization";
 
 export interface IndexOptions {
   readonly repos: readonly RepoConfig[];
   readonly mirrorDir: string;
   readonly kvStore: KVStore;
   readonly graphStore: GraphStore;
+  readonly searchStore: SearchStore;
   readonly verbose: boolean;
   readonly enableTsMorph?: boolean;
 }
@@ -247,8 +250,61 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
     }
   }
 
-  // Phase 6-7: summarization, models (still stubbed)
-  log("Phase 6-7: Summarization and model generation (stubbed)");
+  // Phase 6: Summarization (tier-1 + tier-2)
+  log("Phase 6: Generating summaries...");
+  const summariesByRepo = new Map<string, Map<string, Summary>>();
+
+  for (const repo of repos) {
+    const parsedFiles = parsedFilesByRepo.get(repo.name);
+    const namingResult = namingByRepo.get(repo.name);
+    if (!parsedFiles) continue;
+
+    try {
+      const summaryMap = new Map<string, Summary>();
+
+      // Tier 1: template-based summaries from AST
+      for (const pf of parsedFiles) {
+        try {
+          const absPath = join(repo.localPath, pf.path);
+          const sourceText = await readFile(absPath, "utf-8");
+          const tier1 = tier1Summarize(pf.symbols, pf.path, sourceText);
+          for (const s of tier1) {
+            summaryMap.set(s.entityId, s);
+          }
+        } catch {
+          // Skip files that can't be read (e.g., long paths on Windows)
+        }
+      }
+
+      const tier1Count = summaryMap.size;
+
+      // Tier 2: naming-based summaries (overwrites tier 1 for same entityId)
+      if (namingResult) {
+        const tier2 = tier2Summarize(namingResult.methods);
+        for (const s of tier2) {
+          summaryMap.set(s.entityId, s);
+        }
+      }
+
+      const tier2Count = summaryMap.size - tier1Count;
+      summariesByRepo.set(repo.name, summaryMap);
+
+      // Index summaries in search store for query support
+      const searchDocs = [...summaryMap.values()].map((s) => ({
+        id: s.entityId,
+        content: `${s.entityId} ${s.description}`,
+        metadata: { tier: String(s.tier), repo: repo.name },
+      }));
+      await options.searchStore.index(searchDocs);
+
+      log(`  ${repo.name}: ${tier1Count} tier-1 summaries, ${tier2Count} tier-2 summaries`);
+    } catch (error) {
+      console.error(`  Failed to generate summaries for ${repo.name}:`, error);
+    }
+  }
+
+  // Phase 7: Model generation (stubbed)
+  log("Phase 7: Model generation (stubbed)");
 
   // Save commit hashes
   for (const changeSet of changeSets) {
