@@ -19,11 +19,17 @@ import type {
   MethodPurposeMap,
   SymbolInfo,
   Summary,
+  ControlFlowGraph,
+  CallGraph,
 } from "@mma/core";
 import { detectChanges, classifyFiles } from "@mma/ingestion";
 import { parseFiles } from "@mma/parsing";
 import type { TreeSitterTree } from "@mma/parsing";
-import { extractDependencyGraph } from "@mma/structural";
+import { extractDependencyGraph, buildControlFlowGraph, resetNodeIdCounter } from "@mma/structural";
+import type { TreeSitterNode } from "@mma/parsing";
+import { buildFeatureModel, extractConstraintsFromCode, validateFeatureModel } from "@mma/model-config";
+import { identifyLogRoots, traceBackwardFromLog, buildFaultTree, analyzeGaps } from "@mma/model-fault";
+import { buildServiceCatalog, generateDocumentation } from "@mma/model-functional";
 import {
   inferServices,
   detectPatterns,
@@ -303,8 +309,110 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
     }
   }
 
-  // Phase 7: Model generation (stubbed)
-  log("Phase 7: Model generation (stubbed)");
+  // Phase 7: Model generation
+  log("Phase 7: Generating models...");
+
+  for (const repo of repos) {
+    const trees = treesByRepo.get(repo.name);
+    const depGraph = depGraphByRepo.get(repo.name);
+    const flagInventory = flagsByRepo.get(repo.name);
+    const logIndex = logIndexByRepo.get(repo.name);
+    const services = servicesByRepo.get(repo.name);
+    const summaryMap = summariesByRepo.get(repo.name);
+
+    // 7a: Feature/Config model
+    if (flagInventory && depGraph && flagInventory.flags.length > 0) {
+      try {
+        let featureModel = buildFeatureModel(flagInventory, depGraph);
+
+        if (trees && trees.size > 0) {
+          const codeConstraints = extractConstraintsFromCode(trees, featureModel.flags);
+          if (codeConstraints.length > 0) {
+            featureModel = {
+              flags: featureModel.flags,
+              constraints: [
+                ...featureModel.constraints,
+                ...codeConstraints.map((c) => c.constraint),
+              ],
+            };
+          }
+        }
+
+        const { results: configResults, validation } = await validateFeatureModel(featureModel, repo.name);
+        await kvStore.set(`sarif:config:${repo.name}`, JSON.stringify(configResults));
+
+        log(`  ${repo.name} [config]: ${featureModel.flags.length} flags, ${featureModel.constraints.length} constraints, ${configResults.length} findings`);
+        log(`    dead=${validation.deadFlags.length} always-on=${validation.alwaysOnFlags.length} untested=${validation.untestedInteractions.length}`);
+      } catch (error) {
+        console.error(`  Failed to build feature model for ${repo.name}:`, error);
+      }
+    }
+
+    // 7b: Fault model
+    if (logIndex && logIndex.templates.length > 0 && trees) {
+      try {
+        const logRoots = identifyLogRoots(logIndex);
+
+        // Build CFGs only for files that contain log templates
+        const logFiles = new Set<string>();
+        for (const tmpl of logIndex.templates) {
+          for (const loc of tmpl.locations) {
+            logFiles.add(loc.module);
+          }
+        }
+
+        resetNodeIdCounter();
+        const cfgs = new Map<string, ControlFlowGraph>();
+        for (const filePath of logFiles) {
+          const tree = trees.get(filePath);
+          if (!tree) continue;
+
+          const fnNodes = findFunctionNodes(tree.rootNode);
+          for (const fnNode of fnNodes) {
+            const functionId = `${filePath}#${fnNode.name}`;
+            const cfg = buildControlFlowGraph(fnNode.node, functionId, repo.name, filePath);
+            cfgs.set(functionId, cfg);
+          }
+        }
+
+        // Empty call graph for POC (intra-function tracing still works)
+        const emptyCallGraph: CallGraph = { repo: repo.name, edges: [], nodeCount: 0 };
+
+        let faultTreeCount = 0;
+        const tracedRoots = logRoots.slice(0, 50);
+        for (const root of tracedRoots) {
+          const trace = traceBackwardFromLog(root, cfgs, emptyCallGraph);
+          if (trace.steps.length > 0) {
+            buildFaultTree(trace, repo.name);
+            faultTreeCount++;
+          }
+        }
+
+        const gapResults = analyzeGaps(cfgs, repo.name);
+        await kvStore.set(`sarif:fault:${repo.name}`, JSON.stringify(gapResults));
+
+        log(`  ${repo.name} [fault]: ${logRoots.length} log roots, ${cfgs.size} CFGs, ${faultTreeCount} fault trees, ${gapResults.length} gap findings`);
+      } catch (error) {
+        console.error(`  Failed to build fault model for ${repo.name}:`, error);
+      }
+    }
+
+    // 7c: Functional model (service catalog)
+    if (services && services.length > 0) {
+      try {
+        const svcSummaries = summaryMap ?? new Map<string, Summary>();
+        const svcLogIndex = logIndex ?? { repo: repo.name, templates: [] };
+
+        const catalog = buildServiceCatalog(services, svcSummaries, svcLogIndex);
+        const docs = generateDocumentation(catalog, svcSummaries);
+        await kvStore.set(`docs:functional:${repo.name}`, docs);
+
+        log(`  ${repo.name} [functional]: ${catalog.length} catalog entries, ${docs.length} chars of documentation`);
+      } catch (error) {
+        console.error(`  Failed to build service catalog for ${repo.name}:`, error);
+      }
+    }
+  }
 
   // Save commit hashes
   for (const changeSet of changeSets) {
@@ -312,4 +420,34 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
   }
 
   log("Indexing complete.");
+}
+
+interface FunctionNodeInfo {
+  readonly name: string;
+  readonly node: TreeSitterNode;
+}
+
+function findFunctionNodes(rootNode: TreeSitterNode): FunctionNodeInfo[] {
+  const results: FunctionNodeInfo[] = [];
+
+  function walk(node: TreeSitterNode): void {
+    if (
+      node.type === "function_declaration" ||
+      node.type === "method_definition" ||
+      node.type === "arrow_function"
+    ) {
+      const nameNode = node.namedChildren.find(
+        (c) => c.type === "identifier" || c.type === "property_identifier",
+      );
+      const name = nameNode?.text ?? `anon_${node.startPosition.row}`;
+      results.push({ name, node });
+    }
+
+    for (const child of node.namedChildren) {
+      walk(child);
+    }
+  }
+
+  walk(rootNode);
+  return results;
 }
