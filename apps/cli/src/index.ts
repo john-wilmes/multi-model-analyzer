@@ -11,8 +11,10 @@
 import { parseArgs } from "node:util";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { mkdirSync } from "node:fs";
 import type { RepoConfig } from "@mma/core";
-import { InMemoryGraphStore, InMemorySearchStore, InMemoryKVStore } from "@mma/storage";
+import { createSqliteStores } from "@mma/storage";
+import type { SqliteStores } from "@mma/storage";
 import { indexCommand } from "./commands/index-cmd.js";
 import { queryCommand } from "./commands/query-cmd.js";
 
@@ -50,42 +52,49 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // POC: in-memory stores (replace with persistent adapters)
-  const graphStore = new InMemoryGraphStore();
-  const searchStore = new InMemorySearchStore();
-  const kvStore = new InMemoryKVStore();
+  // Persistent SQLite stores in data/mma.db
+  const dataDir = resolve("data");
+  mkdirSync(dataDir, { recursive: true });
+  const stores: SqliteStores = createSqliteStores({
+    dbPath: resolve(dataDir, "mma.db"),
+  });
+  const { graphStore, searchStore, kvStore } = stores;
 
-  switch (command) {
-    case "index":
-      await indexCommand({
-        repos: config.repos,
-        mirrorDir: config.mirrorDir,
-        kvStore,
-        graphStore,
-        searchStore,
-        verbose,
-      });
-      break;
+  try {
+    switch (command) {
+      case "index":
+        await indexCommand({
+          repos: config.repos,
+          mirrorDir: config.mirrorDir,
+          kvStore,
+          graphStore,
+          searchStore,
+          verbose,
+        });
+        break;
 
-    case "query": {
-      const query = positionals.slice(1).join(" ");
-      if (!query) {
-        console.error("Usage: mma query <your question>");
-        process.exit(1);
+      case "query": {
+        const query = positionals.slice(1).join(" ");
+        if (!query) {
+          console.error("Usage: mma query <your question>");
+          process.exit(1);
+        }
+        await queryCommand(query, {
+          graphStore,
+          searchStore,
+          kvStore,
+          verbose,
+        });
+        break;
       }
-      await queryCommand(query, {
-        graphStore,
-        searchStore,
-        kvStore,
-        verbose,
-      });
-      break;
-    }
 
-    default:
-      console.error(`Unknown command: ${command}`);
-      printUsage();
-      process.exit(1);
+      default:
+        console.error(`Unknown command: ${command}`);
+        printUsage();
+        process.exit(1);
+    }
+  } finally {
+    stores.close();
   }
 }
 
