@@ -1,0 +1,40 @@
+{
+  "name": "multi-model-analyzer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "workspaces": [
+    "packages/core",
+    "packages/ingestion",
+    "packages/parsing",
+    "packages/structural",
+    "packages/heuristics",
+    "packages/summarization",
+    "packages/storage",
+    "packages/models/config",
+    "packages/models/fault",
+    "packages/models/functional",
+    "packages/diagnostics",
+    "packages/query",
+    "apps/cli"
+  ],
+  "scripts": {
+    "build": "tsc --build",
+    "type-check": "tsc --build --noEmit",
+    "lint": "eslint 'packages/*/src/**/*.ts' 'apps/*/src/**/*.ts'",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "clean": "tsc --build --clean",
+    "setup": "bash scripts/setup.sh"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "eslint": "^9.0.0",
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.0.0",
+    "vitest": "^3.0.0"
+  }
+}

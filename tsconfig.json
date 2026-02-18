@@ -1,0 +1,18 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/core" },
+    { "path": "packages/ingestion" },
+    { "path": "packages/parsing" },
+    { "path": "packages/structural" },
+    { "path": "packages/heuristics" },
+    { "path": "packages/summarization" },
+    { "path": "packages/storage" },
+    { "path": "packages/models/config" },
+    { "path": "packages/models/fault" },
+    { "path": "packages/models/functional" },
+    { "path": "packages/diagnostics" },
+    { "path": "packages/query" },
+    { "path": "apps/cli" }
+  ]
+}
