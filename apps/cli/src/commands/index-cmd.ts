@@ -285,14 +285,17 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
       const tier1Count = summaryMap.size;
 
       // Tier 2: naming-based summaries (overwrites tier 1 for same entityId)
+      let tier2Total = 0;
+      let tier2Upgraded = 0;
       if (namingResult) {
         const tier2 = tier2Summarize(namingResult.methods);
+        tier2Total = tier2.length;
         for (const s of tier2) {
+          if (summaryMap.has(s.entityId)) tier2Upgraded++;
           summaryMap.set(s.entityId, s);
         }
       }
 
-      const tier2Count = summaryMap.size - tier1Count;
       summariesByRepo.set(repo.name, summaryMap);
 
       // Index summaries in search store for query support
@@ -303,7 +306,7 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
       }));
       await options.searchStore.index(searchDocs);
 
-      log(`  ${repo.name}: ${tier1Count} tier-1 summaries, ${tier2Count} tier-2 summaries`);
+      log(`  ${repo.name}: ${tier1Count} tier-1, ${tier2Total} tier-2 (${tier2Upgraded} upgraded from tier-1), ${summaryMap.size} total`);
     } catch (error) {
       console.error(`  Failed to generate summaries for ${repo.name}:`, error);
     }

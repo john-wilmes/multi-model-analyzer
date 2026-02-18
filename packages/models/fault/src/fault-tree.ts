@@ -154,23 +154,6 @@ export function analyzeGaps(
           ),
         );
       }
-
-      if (!hasLogging && !hasRethrow) {
-        results.push(
-          createSarifResult(
-            "fault/silent-failure",
-            "warning",
-            `Error silently swallowed in ${functionId}`,
-            {
-              locations: [{
-                logicalLocations: [
-                  createLogicalLocation(repo, functionId, `${functionId}#catch`),
-                ],
-              }],
-            },
-          ),
-        );
-      }
     }
   }
 

@@ -35,8 +35,14 @@ export function buildControlFlowGraph(
   nodes.push({ id: entryId, kind: "entry", label: "entry", location });
   nodes.push({ id: exitId, kind: "exit", label: "exit", location });
 
+  // Find the function body (statement_block) rather than iterating the
+  // function node's top-level children (identifier, params, etc.)
+  const body = functionNode.namedChildren.find(
+    (c) => c.type === "statement_block",
+  );
+
   const lastNodeIds = buildCfgFromBlock(
-    functionNode,
+    body ?? functionNode,
     [entryId],
     exitId,
     nodes,

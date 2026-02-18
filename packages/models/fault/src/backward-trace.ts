@@ -37,13 +37,31 @@ export function traceBackwardFromLog(
   const steps: TraceStep[] = [];
   const crossServiceCalls: CrossServiceCall[] = [];
 
-  // Find the CFG containing this log statement
-  const containingFunction = root.location.fullyQualifiedName?.split(":")[0];
-  if (!containingFunction) {
+  // Find the CFG containing this log statement.
+  // fullyQualifiedName is "filePath:lineNumber" -- extract the file path
+  // and search for a CFG whose key starts with that path.
+  const fqn = root.location.fullyQualifiedName;
+  const filePath = fqn?.split(":")[0];
+  if (!filePath) {
     return { root, steps: [], crossServiceCalls: [] };
   }
 
-  const cfg = cfgs.get(containingFunction);
+  // Try exact match first, then prefix match on file path
+  let cfg = cfgs.get(filePath);
+  let containingFunction = filePath;
+  if (!cfg) {
+    for (const [key, candidate] of cfgs) {
+      if (key.startsWith(filePath + "#")) {
+        // Pick the first function in this file that contains a log-like node
+        const logNode = findLogNode(candidate, root);
+        if (logNode) {
+          cfg = candidate;
+          containingFunction = key;
+          break;
+        }
+      }
+    }
+  }
   if (!cfg) {
     return { root, steps: [], crossServiceCalls: [] };
   }

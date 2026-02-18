@@ -26,7 +26,7 @@ const DEFAULT_SDK_IMPORTS = [
   "unleash-client",
 ];
 
-const FLAG_ENV_PATTERN = /^(FEATURE_|FF_|FLAG_|ENABLE_|DISABLE_)/;
+const FLAG_ENV_PATTERN = /^(FEATURE_|FF_|FLAG_|ENABLE_|DISABLE_|IS_\w+_ENABLED)/;
 
 export function scanForFlags(
   files: ReadonlyMap<string, TreeSitterTree>,
@@ -53,6 +53,12 @@ export function scanForFlags(
     // Scan for env-based flags
     const envFlags = findEnvFlags(tree.rootNode, filePath, repo);
     for (const flag of envFlags) {
+      mergeFlag(flagMap, flag);
+    }
+
+    // Scan for enum-based feature flags (e.g., FeatureFlagKey.IS_AI_ENABLED)
+    const enumFlags = findEnumFlags(tree.rootNode, filePath, repo);
+    for (const flag of enumFlags) {
       mergeFlag(flagMap, flag);
     }
 
@@ -180,6 +186,40 @@ function mergeFlag(
   } else {
     map.set(flag.name, flag);
   }
+}
+
+const ENUM_FLAG_PATTERN = /^(IS_\w+_ENABLED|FEATURE_\w+|ENABLE_\w+|DISABLE_\w+)$/;
+
+function findEnumFlags(
+  node: TreeSitterNode,
+  filePath: string,
+  repo: string,
+): FeatureFlag[] {
+  const flags: FeatureFlag[] = [];
+
+  visitAll(node, (n) => {
+    // Match enum declarations with flag-like members
+    if (n.type === "enum_declaration") {
+      const body = n.namedChildren.find((c) => c.type === "enum_body");
+      if (!body) return;
+
+      for (const member of body.namedChildren) {
+        if (member.type !== "enum_assignment" && member.type !== "property_identifier") continue;
+        const nameNode = member.type === "enum_assignment"
+          ? member.namedChildren.find((c) => c.type === "property_identifier")
+          : member;
+        const memberName = nameNode?.text ?? member.text;
+        if (ENUM_FLAG_PATTERN.test(memberName)) {
+          flags.push({
+            name: memberName,
+            locations: [{ repo, module: filePath }],
+          });
+        }
+      }
+    }
+  });
+
+  return flags;
 }
 
 function visitAll(
