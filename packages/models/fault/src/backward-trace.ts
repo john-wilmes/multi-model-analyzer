@@ -100,15 +100,29 @@ function findLogNode(
   cfg: ControlFlowGraph,
   root: LogRoot,
 ): string | null {
-  // Prefer matching by the root's template text for precision
-  const templateText = root.template.template.toLowerCase();
-  for (const node of cfg.nodes) {
-    if (node.kind === "statement" && node.label.toLowerCase().includes(templateText)) {
-      return node.id;
+  // Strategy 1: match by line number (most precise)
+  const fqn = root.location.fullyQualifiedName ?? "";
+  const colonIdx = fqn.lastIndexOf(":");
+  const lineNum = colonIdx >= 0 ? parseInt(fqn.slice(colonIdx + 1), 10) : NaN;
+  if (!isNaN(lineNum)) {
+    for (const node of cfg.nodes) {
+      if (node.line === lineNum) {
+        return node.id;
+      }
     }
   }
 
-  // Fallback: match by severity keywords
+  // Strategy 2: match by the root's template text
+  const templateText = root.template.template.toLowerCase();
+  if (templateText.length > 0) {
+    for (const node of cfg.nodes) {
+      if (node.kind === "statement" && node.label.toLowerCase().includes(templateText)) {
+        return node.id;
+      }
+    }
+  }
+
+  // Strategy 3: match by severity keywords (least precise)
   for (const node of cfg.nodes) {
     if (
       node.kind === "statement" &&

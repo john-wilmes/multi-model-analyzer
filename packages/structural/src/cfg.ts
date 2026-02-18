@@ -115,6 +115,7 @@ function buildCfgFromStatement(
     kind,
     label: summarizeNode(node),
     location,
+    line: node.startPosition.row + 1,
   });
 
   for (const predId of predecessorIds) {

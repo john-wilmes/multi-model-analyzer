@@ -113,6 +113,7 @@ export interface ControlFlowNode {
   readonly kind: CfgNodeKind;
   readonly label: string;
   readonly location: LogicalLocation;
+  readonly line?: number;
 }
 
 export type CfgNodeKind =
