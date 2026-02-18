@@ -7,6 +7,7 @@
 
 import type { RepoConfig, ChangeSet } from "@mma/core";
 import { detectChanges, classifyFiles } from "@mma/ingestion";
+import { parseFiles } from "@mma/parsing";
 import type { KVStore } from "@mma/storage";
 
 export interface IndexOptions {
@@ -14,6 +15,7 @@ export interface IndexOptions {
   readonly mirrorDir: string;
   readonly kvStore: KVStore;
   readonly verbose: boolean;
+  readonly enableTsMorph?: boolean;
 }
 
 export async function indexCommand(options: IndexOptions): Promise<void> {
@@ -48,14 +50,43 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
 
   // Phase 2: Classify files
   log("Phase 2: Classifying files...");
+  const classifiedByRepo = new Map<string, ReturnType<typeof classifyFiles>>();
   for (const changeSet of changeSets) {
     const classified = classifyFiles(changeSet);
+    classifiedByRepo.set(changeSet.repo, classified);
     log(`  ${changeSet.repo}: ${classified.length} files classified`);
   }
 
-  // Phase 3-7 would follow: parsing, structural, heuristics, summarization, models
-  // These are stubbed -- full implementation requires runtime dependencies
-  log("Phase 3-7: Analysis pipeline (stubbed for initial scaffold)");
+  // Phase 3: Parsing
+  log("Phase 3: Parsing files...");
+  for (const repo of repos) {
+    const classified = classifiedByRepo.get(repo.name);
+    if (!classified || classified.length === 0) continue;
+
+    try {
+      const result = await parseFiles(classified, repo.name, repo.localPath, {
+        enableTsMorph: options.enableTsMorph,
+        onProgress: verbose
+          ? (info) => {
+              if (info.current === 1 || info.current % 100 === 0 || info.current === info.total) {
+                log(`  [${info.phase}] ${info.current}/${info.total}`);
+              }
+            }
+          : undefined,
+      });
+
+      log(`  ${repo.name}: ${result.stats.fileCount} files, ${result.stats.symbolCount} symbols, ${result.stats.errorCount} errors`);
+      log(`    tree-sitter: ${result.stats.treeSitterTimeMs}ms, ts-morph: ${result.stats.tsMorphTimeMs}ms`);
+
+      // Store tree-sitter trees for Phase 4 (structural analysis)
+      // TODO: Pass treeSitterTrees to structural analysis when implemented
+    } catch (error) {
+      console.error(`  Failed to parse ${repo.name}:`, error);
+    }
+  }
+
+  // Phase 4-7: structural, heuristics, summarization, models (still stubbed)
+  log("Phase 4-7: Analysis pipeline (stubbed for initial scaffold)");
 
   // Save commit hashes
   for (const changeSet of changeSets) {

@@ -20,5 +20,8 @@ Thumbs.db
 *.swp
 *.swo
 
+# Generated WASM grammars (built from node_modules)
+packages/parsing/wasm/
+
 # Test coverage
 coverage/

@@ -58,8 +58,8 @@ export function classifyFiles(
 }
 
 function inferFileKind(filePath: string): FileKind {
-  if (filePath.endsWith(".ts") || filePath.endsWith(".tsx")) return "typescript";
-  if (filePath.endsWith(".js") || filePath.endsWith(".jsx")) return "javascript";
+  if (/\.(ts|tsx|mts|cts)$/.test(filePath)) return "typescript";
+  if (/\.(js|jsx|mjs|cjs)$/.test(filePath)) return "javascript";
   if (filePath.endsWith(".json")) return "json";
   if (filePath.endsWith(".yml") || filePath.endsWith(".yaml")) return "yaml";
   if (/[Dd]ockerfile/.test(filePath)) return "dockerfile";

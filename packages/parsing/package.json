@@ -12,9 +12,15 @@
   },
   "scripts": {
     "build": "tsc --build",
-    "type-check": "tsc --build --noEmit"
+    "type-check": "tsc --build --noEmit",
+    "build:wasm": "node scripts/build-wasm.mjs",
+    "postinstall": "node scripts/build-wasm.mjs"
   },
   "dependencies": {
-    "@mma/core": "*"
+    "@mma/core": "*",
+    "web-tree-sitter": "^0.24.0",
+    "tree-sitter-typescript": "^0.23.0",
+    "tree-sitter-javascript": "^0.23.0",
+    "ts-morph": "^27.0.0"
   }
 }

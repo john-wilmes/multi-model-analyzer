@@ -3,82 +3,70 @@
  *
  * Slower than tree-sitter but provides full TypeScript type information.
  * Used when we need type-resolved call graphs and cross-file references.
- *
- * External dependency: ts-morph
  */
 
+import {
+  Project,
+  ScriptTarget,
+  ModuleKind,
+} from "ts-morph";
+import type {
+  SourceFile,
+  FunctionDeclaration,
+  ClassDeclaration,
+  MethodDeclaration,
+  InterfaceDeclaration,
+  TypeAliasDeclaration,
+  EnumDeclaration,
+} from "ts-morph";
 import type { ParsedFile, SymbolInfo } from "@mma/core";
 import { hashContent } from "./treesitter.js";
 
-// ts-morph facade -- actual imports added when dep is installed
-export interface TsMorphProject {
-  addSourceFilesAtPaths(globs: string[]): TsMorphSourceFile[];
-  getSourceFiles(): TsMorphSourceFile[];
-  getSourceFile(filePath: string): TsMorphSourceFile | undefined;
-}
-
-export interface TsMorphSourceFile {
-  getFilePath(): string;
-  getFunctions(): TsMorphFunction[];
-  getClasses(): TsMorphClass[];
-  getInterfaces(): TsMorphInterface[];
-  getTypeAliases(): TsMorphTypeAlias[];
-  getEnums(): TsMorphEnum[];
-  getExportedDeclarations(): Map<string, TsMorphDeclaration[]>;
-  getFullText(): string;
-}
-
-export interface TsMorphFunction {
-  getName(): string | undefined;
-  getStartLineNumber(): number;
-  getEndLineNumber(): number;
-  isExported(): boolean;
-}
-
-export interface TsMorphClass {
-  getName(): string | undefined;
-  getStartLineNumber(): number;
-  getEndLineNumber(): number;
-  isExported(): boolean;
-  getMethods(): TsMorphMethod[];
-}
-
-export interface TsMorphMethod {
-  getName(): string;
-  getStartLineNumber(): number;
-  getEndLineNumber(): number;
-}
-
-export interface TsMorphInterface {
-  getName(): string;
-  getStartLineNumber(): number;
-  getEndLineNumber(): number;
-  isExported(): boolean;
-}
-
-export interface TsMorphTypeAlias {
-  getName(): string;
-  getStartLineNumber(): number;
-  getEndLineNumber(): number;
-  isExported(): boolean;
-}
-
-export interface TsMorphEnum {
-  getName(): string;
-  getStartLineNumber(): number;
-  getEndLineNumber(): number;
-  isExported(): boolean;
-}
-
+// Backward-compatible type aliases
+export type TsMorphProject = Project;
+export type TsMorphSourceFile = SourceFile;
+export type TsMorphFunction = FunctionDeclaration;
+export type TsMorphClass = ClassDeclaration;
+export type TsMorphMethod = MethodDeclaration;
+export type TsMorphInterface = InterfaceDeclaration;
+export type TsMorphTypeAlias = TypeAliasDeclaration;
+export type TsMorphEnum = EnumDeclaration;
 export type TsMorphDeclaration =
-  | TsMorphFunction
-  | TsMorphClass
-  | TsMorphInterface
-  | TsMorphTypeAlias
-  | TsMorphEnum;
+  | FunctionDeclaration
+  | ClassDeclaration
+  | InterfaceDeclaration
+  | TypeAliasDeclaration
+  | EnumDeclaration;
+
+export interface CreateProjectOptions {
+  readonly tsconfigPath?: string;
+  readonly skipFileDependencyResolution?: boolean;
+}
+
+export function createTsMorphProject(options?: CreateProjectOptions): Project {
+  if (options?.tsconfigPath) {
+    return new Project({
+      tsConfigFilePath: options.tsconfigPath,
+      skipFileDependencyResolution: options.skipFileDependencyResolution ?? true,
+    });
+  }
+
+  return new Project({
+    compilerOptions: {
+      target: ScriptTarget.ESNext,
+      module: ModuleKind.ESNext,
+      // JsxEmit.ReactJSX = 4 (not re-exported by ts-morph)
+      jsx: 4 as never,
+      allowJs: true,
+      skipLibCheck: true,
+      strict: false,
+    },
+    skipFileDependencyResolution: options?.skipFileDependencyResolution ?? true,
+  });
+}
 
 export function extractSymbolsFromSourceFile(
-  sourceFile: TsMorphSourceFile,
+  sourceFile: SourceFile,
 ): SymbolInfo[] {
   const symbols: SymbolInfo[] = [];
   const exported = sourceFile.getExportedDeclarations();
@@ -154,11 +142,31 @@ export function extractSymbolsFromSourceFile(
     });
   }
 
+  // Variable declarations (const/let/var with initializers)
+  for (const varStmt of sourceFile.getVariableStatements()) {
+    const isVarExported = varStmt.isExported();
+    for (const decl of varStmt.getDeclarations()) {
+      const name = decl.getName();
+      const initKind = decl.getInitializer()?.getKindName();
+      const kind: SymbolInfo["kind"] =
+        initKind === "ArrowFunction" || initKind === "FunctionExpression"
+          ? "function"
+          : "variable";
+      symbols.push({
+        name,
+        kind,
+        startLine: decl.getStartLineNumber(),
+        endLine: decl.getEndLineNumber(),
+        exported: isVarExported || exportedNames.has(name),
+      });
+    }
+  }
+
   return symbols;
 }
 
 export function parseFileWithTsMorph(
-  sourceFile: TsMorphSourceFile,
+  sourceFile: SourceFile,
   repo: string,
 ): ParsedFile {
   const content = sourceFile.getFullText();

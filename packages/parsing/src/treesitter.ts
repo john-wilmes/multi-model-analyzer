@@ -1,36 +1,70 @@
 /**
  * tree-sitter wrapper for fast incremental parsing.
  *
- * tree-sitter provides sub-5ms reparse on changed ranges.
- * This module wraps the tree-sitter API to produce our ParsedFile type.
- *
- * External dependency: tree-sitter + tree-sitter-typescript
- * These will be installed when we wire up the POC.
+ * Uses web-tree-sitter (WASM-based) for cross-platform compatibility.
+ * Loads TypeScript, TSX, and JavaScript grammars.
  */
 
-import type { ParseError, ParsedFile, SymbolInfo, SymbolKind } from "@mma/core";
+import Parser from "web-tree-sitter";
+import type { FileKind, ParseError, ParsedFile, SymbolInfo, SymbolKind } from "@mma/core";
 import { createHash } from "node:crypto";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-// tree-sitter types (will be replaced with actual imports when deps installed)
-export interface TreeSitterTree {
-  readonly rootNode: TreeSitterNode;
+// Backward-compatible type aliases for @mma/structural
+export type TreeSitterTree = Parser.Tree;
+export type TreeSitterNode = Parser.SyntaxNode;
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const wasmDir = join(__dirname, "..", "wasm");
+
+let initialized = false;
+let tsGrammar: Parser.Language;
+let tsxGrammar: Parser.Language;
+let jsGrammar: Parser.Language;
+
+export async function initTreeSitter(): Promise<void> {
+  if (initialized) return;
+
+  await Parser.init({
+    locateFile(scriptName: string) {
+      return join(wasmDir, scriptName);
+    },
+  });
+
+  tsGrammar = await Parser.Language.load(join(wasmDir, "tree-sitter-typescript.wasm"));
+  tsxGrammar = await Parser.Language.load(join(wasmDir, "tree-sitter-tsx.wasm"));
+  jsGrammar = await Parser.Language.load(join(wasmDir, "tree-sitter-javascript.wasm"));
+
+  initialized = true;
 }
 
-export interface TreeSitterNode {
-  readonly type: string;
-  readonly text: string;
-  readonly startPosition: { row: number; column: number };
-  readonly endPosition: { row: number; column: number };
-  readonly childCount: number;
-  readonly children: readonly TreeSitterNode[];
-  readonly namedChildren: readonly TreeSitterNode[];
-  readonly isNamed: boolean;
-  readonly hasError: boolean;
+export function selectGrammar(filePath: string): Parser.Language {
+  const ext = filePath.split(".").pop()?.toLowerCase();
+  switch (ext) {
+    case "tsx":
+    case "jsx":
+      return tsxGrammar;
+    case "ts":
+    case "mts":
+    case "cts":
+      return tsGrammar;
+    case "js":
+    case "mjs":
+    case "cjs":
+      return jsGrammar;
+    default:
+      return tsGrammar;
+  }
 }
 
-export interface TreeSitterParser {
-  parse(input: string, oldTree?: TreeSitterTree): TreeSitterTree;
-  setLanguage(language: unknown): void;
+export function parseSource(content: string, filePath: string): Parser.Tree {
+  const grammar = selectGrammar(filePath);
+  const parser = new Parser();
+  parser.setLanguage(grammar);
+  const tree = parser.parse(content);
+  parser.delete();
+  return tree;
 }
 
 export function extractSymbolsFromTree(
@@ -47,7 +81,7 @@ export function extractSymbolsFromTree(
 }
 
 function visitNode(
-  node: TreeSitterNode,
+  node: Parser.SyntaxNode,
   container: string | null,
   symbols: SymbolInfo[],
   errors: ParseError[],
@@ -62,23 +96,51 @@ function visitNode(
     });
   }
 
-  const symbolKind = nodeTypeToSymbolKind(node.type);
-  if (symbolKind) {
-    const name = extractName(node);
-    if (name) {
-      const exported = isExported(node);
-      symbols.push({
-        name,
-        kind: symbolKind,
-        startLine: node.startPosition.row + 1,
-        endLine: node.endPosition.row + 1,
-        exported,
-        containerName: container ?? undefined,
-      });
+  // Handle variable/const/let declarations specially (may contain arrow functions)
+  if (node.type === "lexical_declaration" || node.type === "variable_declaration") {
+    const exported = isExported(node);
+    for (const child of node.namedChildren) {
+      if (child.type === "variable_declarator") {
+        const name = child.childForFieldName("name")?.text ?? null;
+        if (name) {
+          const value = child.childForFieldName("value");
+          const kind: SymbolKind =
+            value?.type === "arrow_function" || value?.type === "function_expression"
+              ? "function"
+              : "variable";
+          symbols.push({
+            name,
+            kind,
+            startLine: child.startPosition.row + 1,
+            endLine: child.endPosition.row + 1,
+            exported,
+            containerName: container ?? undefined,
+          });
+        }
+      }
+    }
+  } else {
+    const symbolKind = nodeTypeToSymbolKind(node.type);
+    if (symbolKind) {
+      const name = extractName(node);
+      if (name) {
+        symbols.push({
+          name,
+          kind: symbolKind,
+          startLine: node.startPosition.row + 1,
+          endLine: node.endPosition.row + 1,
+          exported: isExported(node),
+          containerName: container ?? undefined,
+        });
+      }
     }
   }
 
-  const newContainer = symbolKind ? extractName(node) ?? container : container;
+  const newContainer =
+    node.type === "class_declaration" || node.type === "interface_declaration"
+      ? (extractName(node) ?? container)
+      : container;
+
   for (const child of node.namedChildren) {
     visitNode(child, newContainer, symbols, errors, filePath);
   }
@@ -87,7 +149,6 @@ function visitNode(
 function nodeTypeToSymbolKind(nodeType: string): SymbolKind | null {
   switch (nodeType) {
     case "function_declaration":
-    case "arrow_function":
       return "function";
     case "class_declaration":
       return "class";
@@ -99,27 +160,18 @@ function nodeTypeToSymbolKind(nodeType: string): SymbolKind | null {
       return "enum";
     case "method_definition":
       return "method";
-    case "lexical_declaration":
-    case "variable_declaration":
-      return "variable";
     default:
       return null;
   }
 }
 
-function extractName(node: TreeSitterNode): string | null {
-  for (const child of node.namedChildren) {
-    if (child.type === "identifier" || child.type === "type_identifier") {
-      return child.text;
-    }
-  }
-  return null;
+function extractName(node: Parser.SyntaxNode): string | null {
+  const nameNode = node.childForFieldName("name");
+  return nameNode?.text ?? null;
 }
 
-function isExported(_node: TreeSitterNode): boolean {
-  // In tree-sitter-typescript, exported declarations are wrapped in
-  // export_statement nodes
-  return false; // simplified -- full impl checks parent node
+function isExported(node: Parser.SyntaxNode): boolean {
+  return node.parent?.type === "export_statement" || false;
 }
 
 export function hashContent(content: string): string {
@@ -130,15 +182,14 @@ export function createParsedFile(
   filePath: string,
   repo: string,
   content: string,
+  kind: FileKind,
   symbols: SymbolInfo[],
   errors: ParseError[],
 ): ParsedFile {
   return {
     path: filePath,
     repo,
-    kind: filePath.endsWith(".ts") || filePath.endsWith(".tsx")
-      ? "typescript"
-      : "javascript",
+    kind,
     symbols,
     errors,
     contentHash: hashContent(content),
