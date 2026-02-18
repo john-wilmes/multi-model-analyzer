@@ -81,6 +81,29 @@ describe("buildFeatureModel", () => {
     expect(implies).toHaveLength(1);
   });
 
+  it("preserves both directions for bidirectional requires constraints", () => {
+    const inventory: FlagInventory = {
+      repo: "test-repo",
+      flags: [
+        flag("FEATURE_X", "src/x.ts"),
+        flag("FEATURE_Y", "src/y.ts"),
+      ],
+    };
+    // Bidirectional dependency: X imports Y AND Y imports X
+    const graph = makeGraph([
+      { source: "src/x.ts", target: "src/y.ts" },
+      { source: "src/y.ts", target: "src/x.ts" },
+    ]);
+
+    const model = buildFeatureModel(inventory, graph);
+    const requires = model.constraints.filter((c) => c.kind === "requires");
+    // Both directions should be preserved: X->Y and Y->X
+    expect(requires).toHaveLength(2);
+    const directions = requires.map((c) => `${c.flags[0]}->${c.flags[1]}`);
+    expect(directions).toContain("FEATURE_X->FEATURE_Y");
+    expect(directions).toContain("FEATURE_Y->FEATURE_X");
+  });
+
   it("returns empty constraints when flags are in separate files with no deps", () => {
     const inventory: FlagInventory = {
       repo: "test-repo",

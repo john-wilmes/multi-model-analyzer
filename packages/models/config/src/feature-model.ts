@@ -96,7 +96,12 @@ function deduplicateConstraints(
 ): FeatureConstraint[] {
   const seen = new Set<string>();
   return constraints.filter((c) => {
-    const key = `${c.kind}:${[...c.flags].sort().join(",")}`;
+    // "excludes" is symmetric (A excludes B == B excludes A), so sort for dedup.
+    // "implies" and "requires" are directional (A->B != B->A), so preserve order.
+    const flagKey = c.kind === "excludes"
+      ? [...c.flags].sort().join(",")
+      : c.flags.join(",");
+    const key = `${c.kind}:${flagKey}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
