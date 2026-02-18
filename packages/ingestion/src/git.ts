@@ -51,7 +51,7 @@ export async function diffFiles(
     const { stdout } = await execFileAsync(
       "git",
       ["ls-tree", "-r", "--name-only", toCommit],
-      { cwd: repoPath },
+      { cwd: repoPath, maxBuffer: 50 * 1024 * 1024 },
     );
     return {
       added: stdout.trim().split("\n").filter(Boolean),
@@ -63,7 +63,7 @@ export async function diffFiles(
   const { stdout } = await execFileAsync(
     "git",
     ["diff", "--name-status", fromCommit, toCommit],
-    { cwd: repoPath },
+    { cwd: repoPath, maxBuffer: 50 * 1024 * 1024 },
   );
 
   const added: string[] = [];

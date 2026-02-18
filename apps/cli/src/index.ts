@@ -61,6 +61,7 @@ async function main(): Promise<void> {
         repos: config.repos,
         mirrorDir: config.mirrorDir,
         kvStore,
+        graphStore,
         verbose,
       });
       break;
