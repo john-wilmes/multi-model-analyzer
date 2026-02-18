@@ -46,29 +46,22 @@ export function traceBackwardFromLog(
     return { root, steps: [], crossServiceCalls: [] };
   }
 
-  // Try exact match first, then prefix match on file path
-  let cfg = cfgs.get(filePath);
-  let containingFunction = filePath;
-  if (!cfg) {
-    for (const [key, candidate] of cfgs) {
-      if (key.startsWith(filePath + "#")) {
-        // Pick the first function in this file that contains a log-like node
-        const logNode = findLogNode(candidate, root);
-        if (logNode) {
-          cfg = candidate;
-          containingFunction = key;
-          break;
-        }
+  // CFGs are keyed as "filePath#functionName" -- find by file prefix
+  let cfg: ControlFlowGraph | undefined;
+  let containingFunction = "";
+  let logNode: string | null = null;
+  for (const [key, candidate] of cfgs) {
+    if (key.startsWith(filePath + "#")) {
+      const found = findLogNode(candidate, root);
+      if (found) {
+        cfg = candidate;
+        containingFunction = key;
+        logNode = found;
+        break;
       }
     }
   }
-  if (!cfg) {
-    return { root, steps: [], crossServiceCalls: [] };
-  }
-
-  // Find the CFG node corresponding to the log statement
-  const logNode = findLogNode(cfg, root);
-  if (!logNode) {
+  if (!cfg || !logNode) {
     return { root, steps: [], crossServiceCalls: [] };
   }
 
@@ -105,9 +98,17 @@ export function traceBackwardFromLog(
 
 function findLogNode(
   cfg: ControlFlowGraph,
-  _root: LogRoot,
+  root: LogRoot,
 ): string | null {
-  // Match by label content (log statements contain severity keywords)
+  // Prefer matching by the root's template text for precision
+  const templateText = root.template.template.toLowerCase();
+  for (const node of cfg.nodes) {
+    if (node.kind === "statement" && node.label.toLowerCase().includes(templateText)) {
+      return node.id;
+    }
+  }
+
+  // Fallback: match by severity keywords
   for (const node of cfg.nodes) {
     if (
       node.kind === "statement" &&

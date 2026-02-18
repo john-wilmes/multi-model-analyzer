@@ -214,14 +214,14 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
         }
       }
 
-      const importsByFile = new Map<string, readonly string[]>();
+      const importsByFile = new Map<string, string[]>();
       for (const edge of depGraph.edges) {
-        const existing = importsByFile.get(edge.source);
-        if (existing) {
-          importsByFile.set(edge.source, [...existing, edge.target]);
-        } else {
-          importsByFile.set(edge.source, [edge.target]);
+        let imports = importsByFile.get(edge.source);
+        if (!imports) {
+          imports = [];
+          importsByFile.set(edge.source, imports);
         }
+        imports.push(edge.target);
       }
 
       // 5b: Pattern detection
@@ -381,20 +381,22 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
         // Empty call graph for POC (intra-function tracing still works)
         const emptyCallGraph: CallGraph = { repo: repo.name, edges: [], nodeCount: 0 };
 
-        let faultTreeCount = 0;
-        const tracedRoots = logRoots.slice(0, 50);
+        const faultTrees = [];
+        // Limit tracing for POC performance; full-scale tracing requires call graph
+        const MAX_TRACED_ROOTS = 50;
+        const tracedRoots = logRoots.slice(0, MAX_TRACED_ROOTS);
         for (const root of tracedRoots) {
           const trace = traceBackwardFromLog(root, cfgs, emptyCallGraph);
           if (trace.steps.length > 0) {
-            buildFaultTree(trace, repo.name);
-            faultTreeCount++;
+            faultTrees.push(buildFaultTree(trace, repo.name));
           }
         }
 
         const gapResults = analyzeGaps(cfgs, repo.name);
         await kvStore.set(`sarif:fault:${repo.name}`, JSON.stringify(gapResults));
+        await kvStore.set(`faultTrees:${repo.name}`, JSON.stringify(faultTrees));
 
-        log(`  ${repo.name} [fault]: ${logRoots.length} log roots, ${cfgs.size} CFGs, ${faultTreeCount} fault trees, ${gapResults.length} gap findings`);
+        log(`  ${repo.name} [fault]: ${logRoots.length} log roots, ${cfgs.size} CFGs, ${faultTrees.length} fault trees, ${gapResults.length} gap findings`);
       } catch (error) {
         console.error(`  Failed to build fault model for ${repo.name}:`, error);
       }
@@ -436,13 +438,25 @@ function findFunctionNodes(rootNode: TreeSitterNode): FunctionNodeInfo[] {
   function walk(node: TreeSitterNode): void {
     if (
       node.type === "function_declaration" ||
-      node.type === "method_definition" ||
-      node.type === "arrow_function"
+      node.type === "method_definition"
     ) {
       const nameNode = node.namedChildren.find(
         (c) => c.type === "identifier" || c.type === "property_identifier",
       );
       const name = nameNode?.text ?? `anon_${node.startPosition.row}`;
+      results.push({ name, node });
+    } else if (node.type === "arrow_function") {
+      // Arrow function names live in the parent variable_declarator, not the arrow_function itself
+      let name = `anon_${node.startPosition.row}`;
+      const parent = node.parent;
+      if (parent?.type === "variable_declarator") {
+        const varName = parent.childForFieldName("name");
+        if (varName) name = varName.text;
+      } else if (parent?.type === "pair") {
+        // Object property: { handler: (e) => ... }
+        const key = parent.namedChildren.find((c) => c.type === "property_identifier" || c.type === "string");
+        if (key) name = key.text;
+      }
       results.push({ name, node });
     }
 

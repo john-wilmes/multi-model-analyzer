@@ -38,10 +38,10 @@ describe("buildFeatureModel", () => {
     };
 
     const model = buildFeatureModel(inventory, makeGraph());
-    expect(model.constraints.length).toBeGreaterThanOrEqual(1);
+    expect(model.constraints).toHaveLength(1);
 
     const implies = model.constraints.filter((c) => c.kind === "implies");
-    expect(implies.length).toBeGreaterThanOrEqual(1);
+    expect(implies).toHaveLength(1);
     expect(implies[0]!.flags).toContain("FEATURE_A");
     expect(implies[0]!.flags).toContain("FEATURE_B");
     expect(implies[0]!.source).toBe("inferred");
@@ -61,7 +61,7 @@ describe("buildFeatureModel", () => {
 
     const model = buildFeatureModel(inventory, graph);
     const requires = model.constraints.filter((c) => c.kind === "requires");
-    expect(requires.length).toBeGreaterThanOrEqual(1);
+    expect(requires).toHaveLength(1);
     expect(requires[0]!.flags).toContain("FEATURE_X");
     expect(requires[0]!.flags).toContain("FEATURE_Y");
   });
