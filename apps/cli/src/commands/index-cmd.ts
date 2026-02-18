@@ -7,12 +7,29 @@
 
 import { readFile } from "node:fs/promises";
 import { join, dirname } from "node:path";
-import type { RepoConfig, ChangeSet, DependencyGraph } from "@mma/core";
+import type {
+  RepoConfig,
+  ChangeSet,
+  DependencyGraph,
+  ParsedFile,
+  InferredService,
+  DetectedPattern,
+  FlagInventory,
+  LogTemplateIndex,
+  MethodPurposeMap,
+  SymbolInfo,
+} from "@mma/core";
 import { detectChanges, classifyFiles } from "@mma/ingestion";
 import { parseFiles } from "@mma/parsing";
 import type { TreeSitterTree } from "@mma/parsing";
 import { extractDependencyGraph } from "@mma/structural";
-import { inferServices } from "@mma/heuristics";
+import {
+  inferServices,
+  detectPatterns,
+  scanForFlags,
+  extractLogStatements,
+  analyzeNaming,
+} from "@mma/heuristics";
 import type { PackageJsonInfo } from "@mma/heuristics";
 import type { KVStore, GraphStore } from "@mma/storage";
 
@@ -67,6 +84,7 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
   // Phase 3: Parsing
   log("Phase 3: Parsing files...");
   const treesByRepo = new Map<string, ReadonlyMap<string, TreeSitterTree>>();
+  const parsedFilesByRepo = new Map<string, ParsedFile[]>();
   for (const repo of repos) {
     const classified = classifiedByRepo.get(repo.name);
     if (!classified || classified.length === 0) continue;
@@ -87,6 +105,7 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
       log(`    tree-sitter: ${result.stats.treeSitterTimeMs}ms, ts-morph: ${result.stats.tsMorphTimeMs}ms`);
 
       treesByRepo.set(repo.name, result.treeSitterTrees);
+      parsedFilesByRepo.set(repo.name, result.parsedFiles);
     } catch (error) {
       console.error(`  Failed to parse ${repo.name}:`, error);
     }
@@ -122,15 +141,23 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
     }
   }
 
-  // Phase 5: Heuristic analysis (service inference)
-  log("Phase 5: Inferring services...");
+  // Phase 5: Heuristic analysis
+  log("Phase 5: Running heuristics...");
+  const servicesByRepo = new Map<string, InferredService[]>();
+  const patternsByRepo = new Map<string, DetectedPattern[]>();
+  const flagsByRepo = new Map<string, FlagInventory>();
+  const logIndexByRepo = new Map<string, LogTemplateIndex>();
+  const namingByRepo = new Map<string, MethodPurposeMap>();
+
   for (const repo of repos) {
     const classified = classifiedByRepo.get(repo.name);
     const depGraph = depGraphByRepo.get(repo.name);
+    const trees = treesByRepo.get(repo.name);
+    const parsedFiles = parsedFilesByRepo.get(repo.name);
     if (!classified || !depGraph) continue;
 
     try {
-      // Collect package.json files from classified files
+      // 5a: Service inference
       const packageJsonFiles = classified.filter(
         (f) => f.kind === "json" && f.path.endsWith("package.json"),
       );
@@ -160,6 +187,7 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
         packageJsons,
         dependencyGraph: depGraph,
       });
+      servicesByRepo.set(repo.name, services);
 
       log(`  ${repo.name}: ${services.length} services inferred, ${packageJsons.size} package.json files`);
       for (const svc of services.slice(0, 10)) {
@@ -168,8 +196,54 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
       if (services.length > 10) {
         log(`    ... and ${services.length - 10} more`);
       }
+
+      // Build intermediate maps for remaining heuristics
+      const symbolsByFile = new Map<string, readonly SymbolInfo[]>();
+      if (parsedFiles) {
+        for (const pf of parsedFiles) {
+          symbolsByFile.set(pf.path, pf.symbols);
+        }
+      }
+
+      const importsByFile = new Map<string, readonly string[]>();
+      for (const edge of depGraph.edges) {
+        const existing = importsByFile.get(edge.source);
+        if (existing) {
+          importsByFile.set(edge.source, [...existing, edge.target]);
+        } else {
+          importsByFile.set(edge.source, [edge.target]);
+        }
+      }
+
+      // 5b: Pattern detection
+      const patterns = detectPatterns({
+        repo: repo.name,
+        symbols: symbolsByFile,
+        imports: importsByFile,
+      });
+      patternsByRepo.set(repo.name, patterns);
+      log(`  ${repo.name}: ${patterns.length} patterns detected`);
+
+      // 5c: Feature flag scanning
+      if (trees && trees.size > 0) {
+        const flagInventory = scanForFlags(trees, repo.name);
+        flagsByRepo.set(repo.name, flagInventory);
+        log(`  ${repo.name}: ${flagInventory.flags.length} feature flags found`);
+
+        // 5d: Log statement extraction
+        const logIndex = extractLogStatements(trees, repo.name);
+        logIndexByRepo.set(repo.name, logIndex);
+        log(`  ${repo.name}: ${logIndex.templates.length} log templates extracted`);
+      }
+
+      // 5e: Naming analysis
+      if (symbolsByFile.size > 0) {
+        const namingResult = analyzeNaming(symbolsByFile, repo.name);
+        namingByRepo.set(repo.name, namingResult);
+        log(`  ${repo.name}: ${namingResult.methods.length} method purposes inferred`);
+      }
     } catch (error) {
-      console.error(`  Failed to infer services for ${repo.name}:`, error);
+      console.error(`  Failed to run heuristics for ${repo.name}:`, error);
     }
   }
 
