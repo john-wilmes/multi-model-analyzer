@@ -1,0 +1,86 @@
+/**
+ * Graph store adapter.
+ *
+ * POC: SQLite with adjacency list tables.
+ * Scale: Neo4j cluster.
+ *
+ * Stores: call graphs, dependency graphs, CFGs, fault trees, feature model relationships.
+ */
+
+import type { GraphEdge, EdgeKind } from "@mma/core";
+
+export interface GraphStore {
+  addEdges(edges: readonly GraphEdge[]): Promise<void>;
+  getEdgesFrom(source: string): Promise<GraphEdge[]>;
+  getEdgesTo(target: string): Promise<GraphEdge[]>;
+  getEdgesByKind(kind: EdgeKind): Promise<GraphEdge[]>;
+  traverseBFS(start: string, maxDepth: number): Promise<GraphEdge[]>;
+  clear(repo?: string): Promise<void>;
+  close(): Promise<void>;
+}
+
+export interface GraphStoreOptions {
+  readonly dbPath: string;
+}
+
+/**
+ * In-memory graph store for POC and testing.
+ * Replace with SQLite adapter for persistent POC, Neo4j for scale.
+ */
+export class InMemoryGraphStore implements GraphStore {
+  private edges: GraphEdge[] = [];
+
+  async addEdges(edges: readonly GraphEdge[]): Promise<void> {
+    this.edges.push(...edges);
+  }
+
+  async getEdgesFrom(source: string): Promise<GraphEdge[]> {
+    return this.edges.filter((e) => e.source === source);
+  }
+
+  async getEdgesTo(target: string): Promise<GraphEdge[]> {
+    return this.edges.filter((e) => e.target === target);
+  }
+
+  async getEdgesByKind(kind: EdgeKind): Promise<GraphEdge[]> {
+    return this.edges.filter((e) => e.kind === kind);
+  }
+
+  async traverseBFS(start: string, maxDepth: number): Promise<GraphEdge[]> {
+    const visited = new Set<string>();
+    const result: GraphEdge[] = [];
+    const queue: Array<{ node: string; depth: number }> = [
+      { node: start, depth: 0 },
+    ];
+
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      if (visited.has(current.node) || current.depth > maxDepth) continue;
+      visited.add(current.node);
+
+      const outEdges = this.edges.filter((e) => e.source === current.node);
+      for (const edge of outEdges) {
+        result.push(edge);
+        if (!visited.has(edge.target)) {
+          queue.push({ node: edge.target, depth: current.depth + 1 });
+        }
+      }
+    }
+
+    return result;
+  }
+
+  async clear(repo?: string): Promise<void> {
+    if (repo) {
+      this.edges = this.edges.filter(
+        (e) => e.metadata?.["repo"] !== repo,
+      );
+    } else {
+      this.edges = [];
+    }
+  }
+
+  async close(): Promise<void> {
+    this.edges = [];
+  }
+}

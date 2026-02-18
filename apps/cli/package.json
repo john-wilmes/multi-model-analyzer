@@ -1,0 +1,31 @@
+{
+  "name": "@mma/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "type-check": "tsc --build --noEmit"
+  },
+  "dependencies": {
+    "@mma/core": "*",
+    "@mma/ingestion": "*",
+    "@mma/parsing": "*",
+    "@mma/structural": "*",
+    "@mma/heuristics": "*",
+    "@mma/summarization": "*",
+    "@mma/storage": "*",
+    "@mma/model-config": "*",
+    "@mma/model-fault": "*",
+    "@mma/model-functional": "*",
+    "@mma/diagnostics": "*",
+    "@mma/query": "*"
+  }
+}
