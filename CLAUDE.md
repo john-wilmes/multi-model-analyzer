@@ -16,7 +16,7 @@ Monorepo with npm workspaces, 13 packages:
 | `packages/structural` | Dependency graphs, call graphs, control flow graphs |
 | `packages/heuristics` | Service inference, pattern detection, feature flags |
 | `packages/summarization` | 4-tier summary generation |
-| `packages/storage` | In-memory graph, search (BM25), KV stores |
+| `packages/storage` | Graph, search (FTS5/BM25), KV stores (SQLite + in-memory) |
 | `packages/models/*` | Config (feature model), fault (fault trees), functional (service catalog) |
 | `packages/diagnostics` | SARIF report generation |
 | `packages/query` | Natural language query routing |
@@ -50,11 +50,13 @@ The `parseFiles()` orchestrator runs tree-sitter first, then optionally augments
 - Build must pass (`npx tsc --build`) before committing
 - Do not commit generated files: `dist/`, `*.tsbuildinfo`, `packages/parsing/wasm/`
 - Do not commit `mma.config.json` (contains local paths)
-- Single-developer project: commit directly to main
+- Single-developer project: use feature branches + PRs to main
+- All PRs are reviewed by CodeRabbit (GitHub app). Wait for the review and address findings before merging.
+- CodeRabbit MCP server is available for local review queries (coderabbitai in ~/.claude/settings.json)
 
 ## File Conventions
 
 - All packages follow `src/` -> `dist/` layout with composite TypeScript projects
 - Barrel exports via `src/index.ts` in each package
-- POC uses in-memory stores; swap to persistent backends (SQLite, MeiliSearch, LevelDB) later
+- SQLite (better-sqlite3) for persistent storage; in-memory backends for unit tests
 - Analysis output targets SARIF v2.1.0 format
