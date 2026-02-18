@@ -1,0 +1,11 @@
+{
+  "mirrorDir": "./data/mirrors",
+  "repos": [
+    {
+      "name": "example-service",
+      "url": "https://github.com/org/example-service.git",
+      "branch": "main",
+      "localPath": "./data/mirrors/example-service.git"
+    }
+  ]
+}

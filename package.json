@@ -27,7 +27,8 @@
     "lint": "eslint 'packages/*/src/**/*.ts' 'apps/*/src/**/*.ts'",
     "test": "vitest run",
     "test:watch": "vitest",
-    "clean": "tsc --build --clean"
+    "clean": "tsc --build --clean",
+    "setup": "bash scripts/setup.sh"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
