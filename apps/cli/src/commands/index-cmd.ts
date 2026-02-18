@@ -163,7 +163,10 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
     const depGraph = depGraphByRepo.get(repo.name);
     const trees = treesByRepo.get(repo.name);
     const parsedFiles = parsedFilesByRepo.get(repo.name);
-    if (!classified || !depGraph) continue;
+    if (!classified || !depGraph) {
+      log(`  ${repo.name}: skipping heuristics (no classified files or dependency graph)`);
+      continue;
+    }
 
     try {
       // 5a: Service inference
@@ -185,7 +188,7 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
             scripts: (parsed.scripts as Record<string, string>) ?? {},
           });
         } catch {
-          // Skip unreadable package.json files
+          log(`    warning: could not read ${pjFile.path}`);
         }
       }
 
@@ -231,7 +234,7 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
         imports: importsByFile,
       });
       patternsByRepo.set(repo.name, patterns);
-      log(`  ${repo.name}: ${patterns.length} patterns detected`);
+      log(`  ${repo.name}: ${patterns.length} patterns detected (from ${symbolsByFile.size} files with symbols)`);
 
       // 5c: Feature flag scanning
       if (trees && trees.size > 0) {
@@ -243,6 +246,8 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
         const logIndex = extractLogStatements(trees, repo.name);
         logIndexByRepo.set(repo.name, logIndex);
         log(`  ${repo.name}: ${logIndex.templates.length} log templates extracted`);
+      } else {
+        log(`  ${repo.name}: skipping flag scan and log extraction (no tree-sitter trees)`);
       }
 
       // 5e: Naming analysis
@@ -250,6 +255,8 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
         const namingResult = analyzeNaming(symbolsByFile, repo.name);
         namingByRepo.set(repo.name, namingResult);
         log(`  ${repo.name}: ${namingResult.methods.length} method purposes inferred`);
+      } else {
+        log(`  ${repo.name}: skipping naming analysis (no symbols)`);
       }
     } catch (error) {
       console.error(`  Failed to run heuristics for ${repo.name}:`, error);
@@ -263,12 +270,16 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
   for (const repo of repos) {
     const parsedFiles = parsedFilesByRepo.get(repo.name);
     const namingResult = namingByRepo.get(repo.name);
-    if (!parsedFiles) continue;
+    if (!parsedFiles) {
+      log(`  ${repo.name}: skipping summarization (no parsed files)`);
+      continue;
+    }
 
     try {
       const summaryMap = new Map<string, Summary>();
 
       // Tier 1: template-based summaries from AST
+      let tier1ReadErrors = 0;
       for (const pf of parsedFiles) {
         try {
           const absPath = join(repo.localPath, pf.path);
@@ -278,8 +289,11 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
             summaryMap.set(s.entityId, s);
           }
         } catch {
-          // Skip files that can't be read (e.g., long paths on Windows)
+          tier1ReadErrors++;
         }
+      }
+      if (tier1ReadErrors > 0) {
+        log(`    warning: ${tier1ReadErrors} files could not be read for tier-1 summarization`);
       }
 
       const tier1Count = summaryMap.size;
@@ -324,6 +338,9 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
     const summaryMap = summariesByRepo.get(repo.name);
 
     // 7a: Feature/Config model
+    if (!flagInventory || !depGraph || flagInventory.flags.length === 0) {
+      log(`  ${repo.name} [config]: skipped (${!flagInventory ? "no flag inventory" : !depGraph ? "no dep graph" : "0 flags found"})`);
+    }
     if (flagInventory && depGraph && flagInventory.flags.length > 0) {
       try {
         let featureModel = buildFeatureModel(flagInventory, depGraph);
@@ -352,6 +369,9 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
     }
 
     // 7b: Fault model
+    if (!logIndex || logIndex.templates.length === 0 || !trees) {
+      log(`  ${repo.name} [fault]: skipped (${!logIndex ? "no log index" : logIndex.templates.length === 0 ? "0 log templates" : "no trees"})`);
+    }
     if (logIndex && logIndex.templates.length > 0 && trees) {
       try {
         const logRoots = identifyLogRoots(logIndex);
@@ -385,11 +405,20 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
         // Limit tracing for POC performance; full-scale tracing requires call graph
         const MAX_TRACED_ROOTS = 50;
         const tracedRoots = logRoots.slice(0, MAX_TRACED_ROOTS);
+        let emptyTraces = 0;
         for (const root of tracedRoots) {
           const trace = traceBackwardFromLog(root, cfgs, emptyCallGraph);
           if (trace.steps.length > 0) {
             faultTrees.push(buildFaultTree(trace, repo.name));
+          } else {
+            emptyTraces++;
           }
+        }
+        if (logRoots.length > MAX_TRACED_ROOTS) {
+          log(`    warning: ${logRoots.length - MAX_TRACED_ROOTS} log roots not traced (POC limit=${MAX_TRACED_ROOTS})`);
+        }
+        if (emptyTraces > 0) {
+          log(`    ${emptyTraces}/${tracedRoots.length} traces returned no steps (no matching CFG or log node)`);
         }
 
         const gapResults = analyzeGaps(cfgs, repo.name);
@@ -403,6 +432,9 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
     }
 
     // 7c: Functional model (service catalog)
+    if (!services || services.length === 0) {
+      log(`  ${repo.name} [functional]: skipped (${!services ? "no services" : "0 services inferred"})`);
+    }
     if (services && services.length > 0) {
       try {
         const svcSummaries = summaryMap ?? new Map<string, Summary>();

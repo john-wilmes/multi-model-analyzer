@@ -163,7 +163,10 @@ function drainParse(
       });
 
       if (clusters.length > options.maxChildren) {
-        break; // Safety limit for POC
+        console.warn(
+          `[logs] Drain cluster limit reached (${options.maxChildren}); ${logMessages.length - i - 1} log messages not clustered`,
+        );
+        break;
       }
     }
   }
