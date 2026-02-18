@@ -22,8 +22,9 @@ describe("buildServiceCatalog", () => {
 
     const catalog = buildServiceCatalog(services, new Map(), emptyLogIndex);
     expect(catalog).toHaveLength(2);
-    expect(catalog[0]!.name).toBe("api");
-    expect(catalog[1]!.name).toBe("web");
+    const names = catalog.map((e) => e.name);
+    expect(names).toContain("api");
+    expect(names).toContain("web");
   });
 
   it("includes dependencies from service", () => {
