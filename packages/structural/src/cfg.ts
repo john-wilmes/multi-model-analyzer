@@ -8,14 +8,23 @@
 import type { CfgEdge, CfgNodeKind, ControlFlowGraph, ControlFlowNode, LogicalLocation } from "@mma/core";
 import type { TreeSitterNode } from "@mma/parsing";
 
-let nextId = 0;
-
-function newNodeId(): string {
-  return `cfg_${nextId++}`;
+export interface CfgIdCounter {
+  value: number;
 }
 
+export function createCfgIdCounter(): CfgIdCounter {
+  return { value: 0 };
+}
+
+/** @deprecated Use createCfgIdCounter() + pass counter to buildControlFlowGraph */
 export function resetNodeIdCounter(): void {
-  nextId = 0;
+  globalCounter.value = 0;
+}
+
+const globalCounter: CfgIdCounter = { value: 0 };
+
+function newNodeId(counter: CfgIdCounter): string {
+  return `cfg_${counter.value++}`;
 }
 
 export function buildControlFlowGraph(
@@ -23,12 +32,14 @@ export function buildControlFlowGraph(
   functionId: string,
   repo: string,
   module: string,
+  counter?: CfgIdCounter,
 ): ControlFlowGraph {
+  const c = counter ?? globalCounter;
   const nodes: ControlFlowNode[] = [];
   const edges: CfgEdge[] = [];
 
-  const entryId = newNodeId();
-  const exitId = newNodeId();
+  const entryId = newNodeId(c);
+  const exitId = newNodeId(c);
 
   const location: LogicalLocation = { repo, module, fullyQualifiedName: functionId };
 
@@ -38,7 +49,7 @@ export function buildControlFlowGraph(
   // Find the function body (statement_block) rather than iterating the
   // function node's top-level children (identifier, params, etc.)
   const body = functionNode.namedChildren.find(
-    (c) => c.type === "statement_block",
+    (ch) => ch.type === "statement_block",
   );
 
   const lastNodeIds = buildCfgFromBlock(
@@ -48,6 +59,7 @@ export function buildControlFlowGraph(
     nodes,
     edges,
     location,
+    c,
   );
 
   for (const lastId of lastNodeIds) {
@@ -66,6 +78,7 @@ function buildCfgFromBlock(
   nodes: ControlFlowNode[],
   edges: CfgEdge[],
   location: LogicalLocation,
+  counter: CfgIdCounter,
 ): string[] {
   let currentPredecessors = predecessorIds;
 
@@ -77,6 +90,7 @@ function buildCfgFromBlock(
       nodes,
       edges,
       location,
+      counter,
     );
     currentPredecessors = result;
   }
@@ -91,9 +105,10 @@ function buildCfgFromStatement(
   nodes: ControlFlowNode[],
   edges: CfgEdge[],
   location: LogicalLocation,
+  counter: CfgIdCounter,
 ): string[] {
   const kind = statementKind(node.type);
-  const nodeId = newNodeId();
+  const nodeId = newNodeId(counter);
 
   nodes.push({
     id: nodeId,
@@ -108,23 +123,23 @@ function buildCfgFromStatement(
 
   switch (node.type) {
     case "if_statement":
-      return buildIfCfg(node, nodeId, exitId, nodes, edges, location);
+      return buildIfCfg(node, nodeId, exitId, nodes, edges, location, counter);
 
     case "try_statement":
-      return buildTryCfg(node, nodeId, exitId, nodes, edges, location);
+      return buildTryCfg(node, nodeId, exitId, nodes, edges, location, counter);
 
     case "for_statement":
     case "for_in_statement":
     case "while_statement":
     case "do_statement":
-      return buildLoopCfg(node, nodeId, exitId, nodes, edges, location);
+      return buildLoopCfg(node, nodeId, exitId, nodes, edges, location, counter);
 
     case "return_statement":
       edges.push({ from: nodeId, to: exitId });
       return [];
 
     case "throw_statement": {
-      const throwNodeId = newNodeId();
+      const throwNodeId = newNodeId(counter);
       nodes.push({
         id: throwNodeId,
         kind: "throw",
@@ -147,13 +162,14 @@ function buildIfCfg(
   nodes: ControlFlowNode[],
   edges: CfgEdge[],
   location: LogicalLocation,
+  counter: CfgIdCounter,
 ): string[] {
   const result: string[] = [];
   const consequence = node.namedChildren.find(
-    (c) => c.type === "statement_block",
+    (ch) => ch.type === "statement_block",
   );
   const alternative = node.namedChildren.find(
-    (c) => c.type === "else_clause",
+    (ch) => ch.type === "else_clause",
   );
 
   if (consequence) {
@@ -164,13 +180,14 @@ function buildIfCfg(
       nodes,
       edges,
       location,
+      counter,
     );
     result.push(...thenExits);
   }
 
   if (alternative) {
     const elseBlock = alternative.namedChildren.find(
-      (c) => c.type === "statement_block",
+      (ch) => ch.type === "statement_block",
     );
     if (elseBlock) {
       const elseExits = buildCfgFromBlock(
@@ -180,6 +197,7 @@ function buildIfCfg(
         nodes,
         edges,
         location,
+        counter,
       );
       result.push(...elseExits);
     }
@@ -197,12 +215,13 @@ function buildTryCfg(
   nodes: ControlFlowNode[],
   edges: CfgEdge[],
   location: LogicalLocation,
+  counter: CfgIdCounter,
 ): string[] {
   const result: string[] = [];
 
-  const tryBlock = node.namedChildren.find((c) => c.type === "statement_block");
-  const catchClause = node.namedChildren.find((c) => c.type === "catch_clause");
-  const finallyClause = node.namedChildren.find((c) => c.type === "finally_clause");
+  const tryBlock = node.namedChildren.find((ch) => ch.type === "statement_block");
+  const catchClause = node.namedChildren.find((ch) => ch.type === "catch_clause");
+  const finallyClause = node.namedChildren.find((ch) => ch.type === "finally_clause");
 
   if (tryBlock) {
     const tryExits = buildCfgFromBlock(
@@ -212,17 +231,18 @@ function buildTryCfg(
       nodes,
       edges,
       location,
+      counter,
     );
     result.push(...tryExits);
   }
 
   if (catchClause) {
-    const catchId = newNodeId();
+    const catchId = newNodeId(counter);
     nodes.push({ id: catchId, kind: "catch", label: "catch", location });
     edges.push({ from: tryNodeId, to: catchId, condition: "exception" });
 
     const catchBlock = catchClause.namedChildren.find(
-      (c) => c.type === "statement_block",
+      (ch) => ch.type === "statement_block",
     );
     if (catchBlock) {
       const catchExits = buildCfgFromBlock(
@@ -232,6 +252,7 @@ function buildTryCfg(
         nodes,
         edges,
         location,
+        counter,
       );
       result.push(...catchExits);
     }
@@ -239,7 +260,7 @@ function buildTryCfg(
 
   if (finallyClause) {
     const finallyBlock = finallyClause.namedChildren.find(
-      (c) => c.type === "statement_block",
+      (ch) => ch.type === "statement_block",
     );
     if (finallyBlock) {
       const finallyExits = buildCfgFromBlock(
@@ -249,6 +270,7 @@ function buildTryCfg(
         nodes,
         edges,
         location,
+        counter,
       );
       return finallyExits;
     }
@@ -264,8 +286,9 @@ function buildLoopCfg(
   nodes: ControlFlowNode[],
   edges: CfgEdge[],
   location: LogicalLocation,
+  counter: CfgIdCounter,
 ): string[] {
-  const body = node.namedChildren.find((c) => c.type === "statement_block");
+  const body = node.namedChildren.find((ch) => ch.type === "statement_block");
   if (body) {
     const bodyExits = buildCfgFromBlock(
       body,
@@ -274,6 +297,7 @@ function buildLoopCfg(
       nodes,
       edges,
       location,
+      counter,
     );
     // Loop back edge
     for (const bodyExit of bodyExits) {

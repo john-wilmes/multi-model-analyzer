@@ -25,7 +25,7 @@ import type {
 import { detectChanges, classifyFiles } from "@mma/ingestion";
 import { parseFiles } from "@mma/parsing";
 import type { TreeSitterTree } from "@mma/parsing";
-import { extractDependencyGraph, buildControlFlowGraph, resetNodeIdCounter } from "@mma/structural";
+import { extractDependencyGraph, buildControlFlowGraph, createCfgIdCounter } from "@mma/structural";
 import type { TreeSitterNode } from "@mma/parsing";
 import { buildFeatureModel, extractConstraintsFromCode, validateFeatureModel } from "@mma/model-config";
 import { identifyLogRoots, traceBackwardFromLog, buildFaultTree, analyzeGaps } from "@mma/model-fault";
@@ -364,7 +364,7 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
           }
         }
 
-        resetNodeIdCounter();
+        const cfgCounter = createCfgIdCounter();
         const cfgs = new Map<string, ControlFlowGraph>();
         for (const filePath of logFiles) {
           const tree = trees.get(filePath);
@@ -373,7 +373,7 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
           const fnNodes = findFunctionNodes(tree.rootNode);
           for (const fnNode of fnNodes) {
             const functionId = `${filePath}#${fnNode.name}`;
-            const cfg = buildControlFlowGraph(fnNode.node, functionId, repo.name, filePath);
+            const cfg = buildControlFlowGraph(fnNode.node, functionId, repo.name, filePath, cfgCounter);
             cfgs.set(functionId, cfg);
           }
         }
