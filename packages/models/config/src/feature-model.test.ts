@@ -79,6 +79,8 @@ describe("buildFeatureModel", () => {
     // Co-location in both src/a.ts and src/b.ts should deduplicate
     const implies = model.constraints.filter((c) => c.kind === "implies");
     expect(implies).toHaveLength(1);
+    expect(implies[0]!.flags).toHaveLength(2);
+    expect(implies[0]!.flags).toEqual(["A", "B"]);
   });
 
   it("preserves both directions for bidirectional requires constraints", () => {

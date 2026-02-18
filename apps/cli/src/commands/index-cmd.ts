@@ -113,6 +113,12 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
       log(`  ${repo.name}: ${result.stats.fileCount} files, ${result.stats.symbolCount} symbols, ${result.stats.errorCount} errors`);
       log(`    tree-sitter: ${result.stats.treeSitterTimeMs}ms, ts-morph: ${result.stats.tsMorphTimeMs}ms`);
 
+      if (result.parsedFiles.length === 0) {
+        log(`    warning: 0 parsed files produced -- downstream phases will have no data`);
+      } else if (result.stats.symbolCount === 0) {
+        log(`    warning: 0 symbols extracted from ${result.parsedFiles.length} files`);
+      }
+
       treesByRepo.set(repo.name, result.treeSitterTrees);
       parsedFilesByRepo.set(repo.name, result.parsedFiles);
     } catch (error) {
@@ -136,6 +142,9 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
       await options.graphStore.addEdges(graph.edges);
 
       log(`  ${repo.name}: ${graph.edges.length} import edges (${elapsed}ms)`);
+      if (graph.edges.length === 0) {
+        log(`    warning: 0 import edges from ${trees.size} trees -- pattern and flag detection may be limited`);
+      }
       if (graph.circularDependencies.length > 0) {
         log(`    ${graph.circularDependencies.length} circular dependencies found`);
         for (const cycle of graph.circularDependencies.slice(0, 5)) {

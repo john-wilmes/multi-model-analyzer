@@ -16,11 +16,6 @@ export function createCfgIdCounter(): CfgIdCounter {
   return { value: 0 };
 }
 
-/** @deprecated Use createCfgIdCounter() + pass counter to buildControlFlowGraph */
-export function resetNodeIdCounter(): void {
-  globalCounter.value = 0;
-}
-
 const globalCounter: CfgIdCounter = { value: 0 };
 
 function newNodeId(counter: CfgIdCounter): string {
@@ -146,6 +141,7 @@ function buildCfgFromStatement(
         kind: "throw",
         label: "throw",
         location,
+        line: node.startPosition.row + 1,
       });
       edges.push({ from: nodeId, to: throwNodeId });
       return [];
@@ -239,7 +235,7 @@ function buildTryCfg(
 
   if (catchClause) {
     const catchId = newNodeId(counter);
-    nodes.push({ id: catchId, kind: "catch", label: "catch", location });
+    nodes.push({ id: catchId, kind: "catch", label: "catch", location, line: catchClause.startPosition.row + 1 });
     edges.push({ from: tryNodeId, to: catchId, condition: "exception" });
 
     const catchBlock = catchClause.namedChildren.find(

@@ -16,7 +16,6 @@ export type { DependencyGraphOptions } from "./dependencies.js";
 export {
   buildControlFlowGraph,
   traceBackward,
-  resetNodeIdCounter,
   createCfgIdCounter,
 } from "./cfg.js";
 export type { CfgIdCounter } from "./cfg.js";
