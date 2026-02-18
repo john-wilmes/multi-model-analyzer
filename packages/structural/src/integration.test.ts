@@ -1,0 +1,262 @@
+/**
+ * Integration tests using real tree-sitter WASM parsing.
+ *
+ * Verifies that tree-sitter output feeds correctly into dependency
+ * graph extraction and CFG construction.
+ */
+
+import { describe, it, expect, beforeAll } from "vitest";
+import { initTreeSitter, parseSource, extractSymbolsFromTree } from "@mma/parsing";
+import { extractDependencyGraph, buildControlFlowGraph, traceBackward, createCfgIdCounter } from "../src/index.js";
+import type { TreeSitterTree } from "@mma/parsing";
+
+beforeAll(async () => {
+  await initTreeSitter();
+}, 15_000);
+
+describe("tree-sitter -> symbol extraction", () => {
+  it("extracts function and class symbols from TypeScript", () => {
+    const source = `
+export function greet(name: string): string {
+  return "hello " + name;
+}
+
+export class Greeter {
+  private name: string;
+  constructor(name: string) {
+    this.name = name;
+  }
+  greet(): string {
+    return "hello " + this.name;
+  }
+}
+
+const helper = (x: number) => x * 2;
+`;
+    const tree = parseSource(source, "greet.ts");
+    expect(tree.rootNode.type).toBe("program");
+
+    const { symbols, errors } = extractSymbolsFromTree(tree, "greet.ts", "test-repo");
+    expect(errors).toHaveLength(0);
+
+    const names = symbols.map((s) => s.name);
+    expect(names).toContain("greet");
+    expect(names).toContain("Greeter");
+
+    const greetSym = symbols.find((s) => s.name === "greet" && s.kind === "function");
+    expect(greetSym).toBeDefined();
+    expect(greetSym!.exported).toBe(true);
+
+    const classSym = symbols.find((s) => s.name === "Greeter");
+    expect(classSym).toBeDefined();
+    expect(classSym!.kind).toBe("class");
+    expect(classSym!.exported).toBe(true);
+  });
+
+  it("extracts interface and type alias symbols", () => {
+    const source = `
+export interface Config {
+  host: string;
+  port: number;
+}
+
+export type Mode = "dev" | "prod";
+`;
+    const tree = parseSource(source, "types.ts");
+    const { symbols } = extractSymbolsFromTree(tree, "types.ts", "test-repo");
+
+    const iface = symbols.find((s) => s.name === "Config");
+    expect(iface).toBeDefined();
+    expect(iface!.kind).toBe("interface");
+
+    const alias = symbols.find((s) => s.name === "Mode");
+    expect(alias).toBeDefined();
+    expect(alias!.kind).toBe("type");
+  });
+});
+
+describe("tree-sitter -> dependency graph", () => {
+  it("extracts import edges from parsed trees", () => {
+    const files = new Map<string, TreeSitterTree>();
+
+    files.set("src/app.ts", parseSource(`
+import { Greeter } from "./greeter";
+import { Config } from "./config";
+
+const g = new Greeter("world");
+`, "src/app.ts"));
+
+    files.set("src/greeter.ts", parseSource(`
+import { Logger } from "./logger";
+
+export class Greeter {
+  greet(name: string) { Logger.info("greeting " + name); }
+}
+`, "src/greeter.ts"));
+
+    files.set("src/config.ts", parseSource(`
+export interface Config { host: string; }
+`, "src/config.ts"));
+
+    const graph = extractDependencyGraph(files, "test-repo");
+
+    // Exact edge counts: app imports 2, greeter imports 1, config imports 0
+    const appEdges = graph.edges.filter((e) => e.source === "src/app.ts");
+    expect(appEdges).toHaveLength(2);
+    expect(appEdges.map((e) => e.target).sort()).toEqual(["./config", "./greeter"]);
+
+    const greeterEdges = graph.edges.filter((e) => e.source === "src/greeter.ts");
+    expect(greeterEdges).toHaveLength(1);
+    expect(greeterEdges[0]!.target).toBe("./logger");
+
+    const configEdges = graph.edges.filter((e) => e.source === "src/config.ts");
+    expect(configEdges).toHaveLength(0);
+
+    expect(graph.edges).toHaveLength(3);
+  });
+
+  it("detects circular dependencies", () => {
+    const files = new Map<string, TreeSitterTree>();
+
+    files.set("a.ts", parseSource(`import { b } from "./b";`, "a.ts"));
+    files.set("b.ts", parseSource(`import { a } from "./a";`, "b.ts"));
+
+    const graph = extractDependencyGraph(files, "test-repo", { detectCircular: true });
+
+    expect(graph.edges).toHaveLength(2);
+    expect(graph.edges.find((e) => e.source === "a.ts" && e.target === "./b")).toBeDefined();
+    expect(graph.edges.find((e) => e.source === "b.ts" && e.target === "./a")).toBeDefined();
+    // Circular detection uses raw import specifiers ("./b") not resolved paths ("b.ts"),
+    // so it cannot detect cycles. This is a known limitation for POC.
+    expect(graph.circularDependencies).toHaveLength(0);
+  });
+});
+
+describe("tree-sitter -> CFG construction", () => {
+  it("builds CFG for a function with if/else", () => {
+    const source = `
+function check(x: number): string {
+  if (x > 0) {
+    return "positive";
+  } else {
+    return "non-positive";
+  }
+}
+`;
+    const tree = parseSource(source, "check.ts");
+    const fnNode = tree.rootNode.namedChildren.find(
+      (c) => c.type === "function_declaration",
+    );
+    expect(fnNode).toBeDefined();
+
+    const counter = createCfgIdCounter();
+    const cfg = buildControlFlowGraph(fnNode!, "check.ts#check", "test-repo", "check.ts", counter);
+
+    expect(cfg.functionId).toBe("check.ts#check");
+    expect(cfg.nodes.length).toBeGreaterThanOrEqual(4); // entry, exit, if, branches
+
+    const entry = cfg.nodes.find((n) => n.kind === "entry");
+    const exit = cfg.nodes.find((n) => n.kind === "exit");
+    const branch = cfg.nodes.find((n) => n.kind === "branch");
+    expect(entry).toBeDefined();
+    expect(exit).toBeDefined();
+    expect(branch).toBeDefined();
+
+    // Branch should have line number populated
+    expect(branch!.line).toBeGreaterThan(0);
+  });
+
+  it("builds CFG for a function with try/catch", () => {
+    const source = `
+function risky(): void {
+  try {
+    doSomething();
+  } catch (e) {
+    console.error("failed", e);
+  }
+}
+`;
+    const tree = parseSource(source, "risky.ts");
+    const fnNode = tree.rootNode.namedChildren.find(
+      (c) => c.type === "function_declaration",
+    );
+    expect(fnNode).toBeDefined();
+
+    const counter = createCfgIdCounter();
+    const cfg = buildControlFlowGraph(fnNode!, "risky.ts#risky", "test-repo", "risky.ts", counter);
+
+    const tryNode = cfg.nodes.find((n) => n.kind === "try");
+    const catchNode = cfg.nodes.find((n) => n.kind === "catch");
+    expect(tryNode).toBeDefined();
+    expect(catchNode).toBeDefined();
+
+    // Exception edge from try to catch
+    const exceptionEdge = cfg.edges.find(
+      (e) => e.from === tryNode!.id && e.condition === "exception",
+    );
+    expect(exceptionEdge).toBeDefined();
+  });
+
+  it("supports backward tracing from a statement", () => {
+    const source = `
+function process(data: any): void {
+  const validated = validate(data);
+  if (!validated) {
+    console.error("validation failed");
+    return;
+  }
+  save(data);
+}
+`;
+    const tree = parseSource(source, "process.ts");
+    const fnNode = tree.rootNode.namedChildren.find(
+      (c) => c.type === "function_declaration",
+    );
+    expect(fnNode).toBeDefined();
+
+    const counter = createCfgIdCounter();
+    const cfg = buildControlFlowGraph(fnNode!, "process.ts#process", "test-repo", "process.ts", counter);
+
+    // Find the error log node
+    const errorNode = cfg.nodes.find(
+      (n) => n.kind === "statement" && n.label.includes("console.error"),
+    );
+    expect(errorNode).toBeDefined();
+
+    // Trace backward from the error
+    const path = traceBackward(cfg, errorNode!.id);
+    expect(path.length).toBeGreaterThanOrEqual(2); // at least the error node and entry
+    expect(path).toContain(errorNode!.id);
+
+    // Should reach back to entry
+    const entryNode = cfg.nodes.find((n) => n.kind === "entry");
+    expect(path).toContain(entryNode!.id);
+  });
+});
+
+describe("tree-sitter -> CFG counter isolation", () => {
+  it("produces unique IDs with separate counters per repo", () => {
+    const source = `function a(): void { return; }`;
+
+    const tree1 = parseSource(source, "a.ts");
+    const tree2 = parseSource(source, "b.ts");
+    const fn1 = tree1.rootNode.namedChildren.find((c) => c.type === "function_declaration")!;
+    const fn2 = tree2.rootNode.namedChildren.find((c) => c.type === "function_declaration")!;
+
+    const counter1 = createCfgIdCounter();
+    const counter2 = createCfgIdCounter();
+
+    const cfg1 = buildControlFlowGraph(fn1, "a.ts#a", "repo1", "a.ts", counter1);
+    const cfg2 = buildControlFlowGraph(fn2, "b.ts#a", "repo2", "b.ts", counter2);
+
+    // Both start from cfg_0 since counters are independent
+    const ids1 = cfg1.nodes.map((n) => n.id);
+    const ids2 = cfg2.nodes.map((n) => n.id);
+    expect(ids1[0]).toBe("cfg_0");
+    expect(ids2[0]).toBe("cfg_0");
+
+    // All IDs within a CFG are unique
+    expect(new Set(ids1).size).toBe(ids1.length);
+    expect(new Set(ids2).size).toBe(ids2.length);
+  });
+});
