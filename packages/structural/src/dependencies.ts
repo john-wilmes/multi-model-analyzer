@@ -25,14 +25,16 @@ export function extractDependencyGraph(
 ): DependencyGraph {
   const opts = { ...DEFAULT_OPTIONS, ...options };
   const edges: GraphEdge[] = [];
+  const knownPaths = new Set(files.keys());
 
   for (const [filePath, tree] of files) {
     const imports = extractImports(tree.rootNode);
     for (const imp of imports) {
       if (opts.ignorePatterns.some((p) => imp.includes(p))) continue;
+      const resolved = resolveImportSpecifier(imp, filePath, knownPaths);
       edges.push({
         source: filePath,
-        target: imp,
+        target: resolved,
         kind: "imports",
       });
     }
@@ -85,6 +87,46 @@ function findRequireCall(node: TreeSitterNode): string | null {
     if (found) return found;
   }
   return null;
+}
+
+/**
+ * Resolve a relative import specifier to a file path in the known file set.
+ * Falls back to the raw specifier if no match is found (e.g. external packages).
+ */
+export function resolveImportSpecifier(
+  specifier: string,
+  importerPath: string,
+  knownPaths: ReadonlySet<string>,
+): string {
+  // Non-relative imports (packages) -- return as-is
+  if (!specifier.startsWith(".")) return specifier;
+
+  const dir = importerPath.includes("/")
+    ? importerPath.slice(0, importerPath.lastIndexOf("/"))
+    : "";
+
+  // Normalize: join dir + specifier, resolve . and ..
+  const parts = (dir ? dir + "/" + specifier : specifier).split("/");
+  const resolved: string[] = [];
+  for (const part of parts) {
+    if (part === "." || part === "") continue;
+    if (part === "..") {
+      resolved.pop();
+    } else {
+      resolved.push(part);
+    }
+  }
+  const base = resolved.join("/");
+
+  // Try extensions in order
+  const extensions = ["", ".ts", ".tsx", ".js", ".jsx", "/index.ts", "/index.js"];
+  for (const ext of extensions) {
+    const candidate = base + ext;
+    if (knownPaths.has(candidate)) return candidate;
+  }
+
+  // No match found -- return raw specifier
+  return specifier;
 }
 
 function findCircularDependencies(edges: readonly GraphEdge[]): string[][] {

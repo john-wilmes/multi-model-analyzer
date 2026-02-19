@@ -116,8 +116,9 @@ export async function parseFiles(
         const sf = sourceFiles[i]!;
         progress?.({ phase: "ts-morph", current: i + 1, total: sourceFiles.length, filePath: sf.getFilePath() });
 
+        const sfPath = sf.getFilePath().replace(/\\/g, "/");
         const relPath = tsFiles.find(
-          (f) => sf.getFilePath().endsWith(f.path),
+          (f) => sfPath.endsWith("/" + f.path) || sfPath === f.path,
         )?.path;
         if (!relPath) continue;
 

@@ -103,10 +103,12 @@ export interface Config { host: string; }
     // Exact edge counts: app imports 2, greeter imports 1, config imports 0
     const appEdges = graph.edges.filter((e) => e.source === "src/app.ts");
     expect(appEdges).toHaveLength(2);
-    expect(appEdges.map((e) => e.target).sort()).toEqual(["./config", "./greeter"]);
+    // Import specifiers are resolved to file paths when matches exist
+    expect(appEdges.map((e) => e.target).sort()).toEqual(["src/config.ts", "src/greeter.ts"]);
 
     const greeterEdges = graph.edges.filter((e) => e.source === "src/greeter.ts");
     expect(greeterEdges).toHaveLength(1);
+    // "./logger" has no matching file, falls back to raw specifier
     expect(greeterEdges[0]!.target).toBe("./logger");
 
     const configEdges = graph.edges.filter((e) => e.source === "src/config.ts");
@@ -124,11 +126,11 @@ export interface Config { host: string; }
     const graph = extractDependencyGraph(files, "test-repo", { detectCircular: true });
 
     expect(graph.edges).toHaveLength(2);
-    expect(graph.edges.find((e) => e.source === "a.ts" && e.target === "./b")).toBeDefined();
-    expect(graph.edges.find((e) => e.source === "b.ts" && e.target === "./a")).toBeDefined();
-    // Circular detection uses raw import specifiers ("./b") not resolved paths ("b.ts"),
-    // so it cannot detect cycles. This is a known limitation for POC.
-    expect(graph.circularDependencies).toHaveLength(0);
+    // Import specifiers are now resolved to file paths
+    expect(graph.edges.find((e) => e.source === "a.ts" && e.target === "b.ts")).toBeDefined();
+    expect(graph.edges.find((e) => e.source === "b.ts" && e.target === "a.ts")).toBeDefined();
+    // With resolved paths, circular dependencies are detected
+    expect(graph.circularDependencies.length).toBeGreaterThan(0);
   });
 });
 

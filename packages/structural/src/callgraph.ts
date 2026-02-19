@@ -43,19 +43,17 @@ export function extractCallGraph(
   };
 }
 
+/**
+ * Extract call edges from a single source file.
+ *
+ * @stub Full implementation requires ts-morph as a runtime dependency.
+ * Will use findReferences and getCallExpressions to resolve function
+ * calls to their declarations.
+ */
 function extractCallEdgesFromFile(
   _sourceFile: TsMorphSourceFile,
   _options: CallGraphOptions,
 ): GraphEdge[] {
-  // Implementation will use ts-morph's findReferences and getCallExpressions
-  // to resolve function calls to their declarations.
-  //
-  // For each function in the file:
-  //   1. Get all call expressions within the function body
-  //   2. For each call expression, resolve the identifier to its declaration
-  //   3. Create an edge from the containing function to the called function
-  //
-  // This is a stub -- full implementation requires ts-morph as a runtime dep.
   return [];
 }
 
