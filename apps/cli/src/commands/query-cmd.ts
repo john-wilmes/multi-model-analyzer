@@ -72,18 +72,38 @@ export async function queryCommand(
           console.log("Error: stored SARIF data is corrupted. Re-run 'index' to regenerate.");
           break;
         }
+        const stopWords = new Set([
+          "a", "an", "the", "is", "are", "was", "were", "be", "been",
+          "do", "does", "did", "have", "has", "had", "will", "would",
+          "can", "could", "should", "may", "might", "shall",
+          "what", "which", "who", "whom", "where", "when", "why", "how",
+          "that", "this", "these", "those", "it", "its",
+          "in", "on", "at", "to", "for", "of", "with", "by", "from",
+          "and", "or", "not", "no", "but", "if", "then", "so",
+          "about", "any", "all", "some", "there", "my", "me",
+        ]);
+        const keywords = query.toLowerCase()
+          .split(/\s+/)
+          .filter((w) => w.length > 1 && !stopWords.has(w));
+        const entities = decision.extractedEntities;
+
         const matching = sarif.runs.flatMap((r) =>
-          r.results.filter(
-            (res) =>
-              res.message.text.toLowerCase().includes(query.toLowerCase()) ||
-              decision.extractedEntities.some((e) =>
-                res.message.text.includes(e),
-              ),
-          ),
+          r.results.filter((res) => {
+            const text = `${res.ruleId} ${res.message.text}`.toLowerCase();
+            // Match if any entity appears in the message
+            if (entities.some((e) => text.includes(e.toLowerCase()))) return true;
+            // Match if at least half of the keywords appear
+            if (keywords.length === 0) return false;
+            const hits = keywords.filter((kw) => text.includes(kw)).length;
+            return hits >= Math.max(1, Math.ceil(keywords.length / 2));
+          }),
         );
         console.log(`${matching.length} matching diagnostics:`);
-        for (const result of matching) {
+        for (const result of matching.slice(0, 50)) {
           console.log(`  [${result.level}] ${result.ruleId}: ${result.message.text}`);
+        }
+        if (matching.length > 50) {
+          console.log(`  ... and ${matching.length - 50} more`);
         }
       } else {
         console.log("No analysis results available. Run 'index' first.");
