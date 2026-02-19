@@ -100,11 +100,12 @@ export async function queryCommand(
           .filter((w) => w.length > 1 && !stopWords.has(w));
         const entities = decision.extractedEntities;
 
-        // Category-level filters: map natural language terms to SARIF properties
-        const broadTerms = /^(?:diagnostics?|issues?|findings?|results?|problems?|circular)$/;
-        const isBroadQuery = keywords.some((kw) => broadTerms.test(kw));
-        const categoryLevelFilter = isBroadQuery ? null : resolveCategoryFilter(keywords);
-        const categoryRuleFilter = isBroadQuery ? null : resolveCategoryRuleFilter(keywords);
+        // Category-level filters take priority over broad terms
+        const categoryLevelFilter = resolveCategoryFilter(keywords);
+        const categoryRuleFilter = resolveCategoryRuleFilter(keywords);
+        const broadTerms = /^(?:diagnostics?|issues?|findings?|results?|problems?)$/;
+        const isBroadQuery = !categoryLevelFilter && !categoryRuleFilter
+          && keywords.some((kw) => broadTerms.test(kw));
 
         const matching = sarif.runs.flatMap((r) =>
           r.results.filter((res) => {

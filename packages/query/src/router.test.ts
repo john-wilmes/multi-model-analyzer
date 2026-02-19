@@ -49,6 +49,7 @@ describe("routeQuery", () => {
     const result = routeQuery("dependencies of UserService");
     expect(result.repo).toBeUndefined();
     expect(result.strippedQuery).toBe("dependencies of UserService");
+    expect(result.route).toBe("structural");
   });
 
   it("handles repo prefix with search route", () => {
@@ -67,10 +68,19 @@ describe("routeQuery", () => {
 
   it("routes diagnostic/warning/gap patterns to analytical", () => {
     expect(routeQuery("show diagnostics").route).toBe("analytical");
-    expect(routeQuery("circular dependencies").route).toBe("analytical");
     expect(routeQuery("gaps in coverage").route).toBe("analytical");
     expect(routeQuery("missing tests").route).toBe("analytical");
     expect(routeQuery("show warnings").route).toBe("analytical");
     expect(routeQuery("open issues").route).toBe("analytical");
+  });
+
+  it("routes 'circular dependencies' to structural (dependencies trigger)", () => {
+    expect(routeQuery("circular dependencies").route).toBe("structural");
+  });
+
+  it("extracts camelCase identifiers", () => {
+    const result = routeQuery("what does renderToHTMLOrFlight call");
+    expect(result.extractedEntities).toContain("renderToHTMLOrFlight");
+    expect(result.route).toBe("structural");
   });
 });

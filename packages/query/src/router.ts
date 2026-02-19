@@ -44,7 +44,7 @@ export function routeQuery(query: string): RouteDecision {
   const normalized = strippedQuery.toLowerCase().trim();
 
   // Structural patterns
-  if (/\b(calls?|depends?|imports?|extends?|implements?|references?|definition|callers?|callees?|uses|used|modules?|files?)\b/.test(normalized)) {
+  if (/\b(calls?|depend(?:s|ency|encies)?|imports?|extends?|implements?|references?|definition|callers?|callees?|uses|used|modules?|files?)\b/.test(normalized)) {
     return { route: "structural", confidence: 0.9, extractedEntities: entities, repo, strippedQuery };
   }
 
@@ -75,6 +75,12 @@ function extractEntities(query: string): string[] {
   const pascalCase = query.match(/\b[A-Z][a-zA-Z]+\b/g);
   if (pascalCase) {
     entities.push(...pascalCase);
+  }
+
+  // Extract camelCase identifiers (must contain internal uppercase)
+  const camelCase = query.match(/\b[a-z]+[A-Z][a-zA-Z]*\b/g);
+  if (camelCase) {
+    entities.push(...camelCase);
   }
 
   // Extract dotted paths

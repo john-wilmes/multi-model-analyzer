@@ -202,6 +202,7 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
       const elapsed = Math.round(performance.now() - start);
 
       depGraphByRepo.set(repo.name, graph);
+      await options.graphStore.clear(repo.name);
       await options.graphStore.addEdges(graph.edges);
 
       log(`  ${repo.name}: ${graph.edges.length} import edges (${elapsed}ms)`);
@@ -365,8 +366,125 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
     }
   }
 
-  // Phase 6: Summarization (tier-1 + tier-2)
-  log("Phase 6: Generating summaries...");
+  // Phase 6a: Config and fault models (tree-dependent, run before summarization
+  // so tree-sitter ASTs can be released to free memory for large repos)
+  log("Phase 6a: Building config and fault models...");
+
+  for (const repo of repos) {
+    const trees = treesByRepo.get(repo.name);
+    const depGraph = depGraphByRepo.get(repo.name);
+    const flagInventory = flagsByRepo.get(repo.name);
+    const logIndex = logIndexByRepo.get(repo.name);
+
+    // Config model
+    if (!flagInventory || !depGraph || flagInventory.flags.length === 0) {
+      log(`  ${repo.name} [config]: skipped (${!flagInventory ? "no flag inventory" : !depGraph ? "no dep graph" : "0 flags found"})`);
+    }
+    if (flagInventory && depGraph && flagInventory.flags.length > 0) {
+      try {
+        let featureModel = buildFeatureModel(flagInventory, depGraph);
+
+        if (trees && trees.size > 0) {
+          const codeConstraints = extractConstraintsFromCode(trees, featureModel.flags);
+          if (codeConstraints.length > 0) {
+            featureModel = {
+              flags: featureModel.flags,
+              constraints: [
+                ...featureModel.constraints,
+                ...codeConstraints.map((c) => c.constraint),
+              ],
+            };
+          }
+        }
+
+        const { results: configResults, validation } = await validateFeatureModel(featureModel, repo.name);
+        await kvStore.set(`sarif:config:${repo.name}`, JSON.stringify(configResults));
+
+        log(`  ${repo.name} [config]: ${featureModel.flags.length} flags, ${featureModel.constraints.length} constraints, ${configResults.length} findings`);
+        log(`    dead=${validation.deadFlags.length} always-on=${validation.alwaysOnFlags.length} untested=${validation.untestedInteractions.length}`);
+      } catch (error) {
+        console.error(`  Failed to build feature model for ${repo.name}:`, error);
+      }
+    }
+
+    // Fault model
+    if (!logIndex || logIndex.templates.length === 0 || !trees) {
+      log(`  ${repo.name} [fault]: skipped (${!logIndex ? "no log index" : logIndex.templates.length === 0 ? "0 log templates" : "no trees"})`);
+    }
+    if (logIndex && logIndex.templates.length > 0 && trees) {
+      try {
+        const logRoots = identifyLogRoots(logIndex);
+
+        // Build CFGs only for files that contain log templates
+        const logFiles = new Set<string>();
+        for (const tmpl of logIndex.templates) {
+          for (const loc of tmpl.locations) {
+            logFiles.add(loc.module);
+          }
+        }
+
+        const cfgCounter = createCfgIdCounter();
+        const cfgs = new Map<string, ControlFlowGraph>();
+        for (const filePath of logFiles) {
+          const tree = trees.get(filePath);
+          if (!tree) {
+            log(`    warning: no tree-sitter tree for log file ${filePath} (skipping CFG build)`);
+            continue;
+          }
+
+          const fnNodes = findFunctionNodes(tree.rootNode);
+          for (const fnNode of fnNodes) {
+            const functionId = `${filePath}#${fnNode.name}`;
+            const cfg = buildControlFlowGraph(fnNode.node, functionId, repo.name, filePath, cfgCounter);
+            cfgs.set(functionId, cfg);
+          }
+        }
+
+        // Use real call edges from graph store if available
+        const repoCallEdges = await options.graphStore.getEdgesByKind("calls", repo.name);
+        const callGraph: CallGraph = {
+          repo: repo.name,
+          edges: repoCallEdges,
+          nodeCount: new Set(repoCallEdges.flatMap(e => [e.source, e.target])).size,
+        };
+
+        const faultTrees = [];
+        // Limit tracing for POC performance; full-scale tracing requires call graph
+        const MAX_TRACED_ROOTS = 50;
+        const tracedRoots = logRoots.slice(0, MAX_TRACED_ROOTS);
+        let emptyTraces = 0;
+        for (const root of tracedRoots) {
+          const trace = traceBackwardFromLog(root, cfgs, callGraph);
+          if (trace.steps.length > 0) {
+            faultTrees.push(buildFaultTree(trace, repo.name));
+          } else {
+            emptyTraces++;
+          }
+        }
+        if (logRoots.length > MAX_TRACED_ROOTS) {
+          log(`    warning: ${logRoots.length - MAX_TRACED_ROOTS} log roots not traced (POC limit=${MAX_TRACED_ROOTS})`);
+        }
+        if (emptyTraces > 0) {
+          log(`    ${emptyTraces}/${tracedRoots.length} traces returned no steps (no matching CFG or log node)`);
+        }
+
+        const gapResults = analyzeGaps(cfgs, repo.name);
+        await kvStore.set(`sarif:fault:${repo.name}`, JSON.stringify(gapResults));
+        await kvStore.set(`faultTrees:${repo.name}`, JSON.stringify(faultTrees));
+
+        log(`  ${repo.name} [fault]: ${logRoots.length} log roots, ${cfgs.size} CFGs, ${faultTrees.length} fault trees, ${gapResults.length} gap findings`);
+      } catch (error) {
+        console.error(`  Failed to build fault model for ${repo.name}:`, error);
+      }
+    }
+
+    // Release tree-sitter ASTs for this repo (no longer needed after config+fault models)
+    treesByRepo.delete(repo.name);
+  }
+  log(`  Released tree-sitter ASTs (${repos.length} repos)`);
+
+  // Phase 6b: Summarization (tier-1 + tier-2)
+  log("Phase 6b: Generating summaries...");
   const summariesByRepo = new Map<string, Map<string, Summary>>();
 
   for (const repo of repos) {
@@ -462,137 +580,29 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
     }
   }
 
-  // Phase 7: Model generation
-  log("Phase 7: Generating models...");
+  // Phase 6c: Functional model (needs summaries from 6b, no trees needed)
+  log("Phase 6c: Building functional models...");
 
   for (const repo of repos) {
-    const trees = treesByRepo.get(repo.name);
-    const depGraph = depGraphByRepo.get(repo.name);
-    const flagInventory = flagsByRepo.get(repo.name);
-    const logIndex = logIndexByRepo.get(repo.name);
     const services = servicesByRepo.get(repo.name);
     const summaryMap = summariesByRepo.get(repo.name);
+    const logIndex = logIndexByRepo.get(repo.name);
 
-    // 7a: Feature/Config model
-    if (!flagInventory || !depGraph || flagInventory.flags.length === 0) {
-      log(`  ${repo.name} [config]: skipped (${!flagInventory ? "no flag inventory" : !depGraph ? "no dep graph" : "0 flags found"})`);
-    }
-    if (flagInventory && depGraph && flagInventory.flags.length > 0) {
-      try {
-        let featureModel = buildFeatureModel(flagInventory, depGraph);
-
-        if (trees && trees.size > 0) {
-          const codeConstraints = extractConstraintsFromCode(trees, featureModel.flags);
-          if (codeConstraints.length > 0) {
-            featureModel = {
-              flags: featureModel.flags,
-              constraints: [
-                ...featureModel.constraints,
-                ...codeConstraints.map((c) => c.constraint),
-              ],
-            };
-          }
-        }
-
-        const { results: configResults, validation } = await validateFeatureModel(featureModel, repo.name);
-        await kvStore.set(`sarif:config:${repo.name}`, JSON.stringify(configResults));
-
-        log(`  ${repo.name} [config]: ${featureModel.flags.length} flags, ${featureModel.constraints.length} constraints, ${configResults.length} findings`);
-        log(`    dead=${validation.deadFlags.length} always-on=${validation.alwaysOnFlags.length} untested=${validation.untestedInteractions.length}`);
-      } catch (error) {
-        console.error(`  Failed to build feature model for ${repo.name}:`, error);
-      }
-    }
-
-    // 7b: Fault model
-    if (!logIndex || logIndex.templates.length === 0 || !trees) {
-      log(`  ${repo.name} [fault]: skipped (${!logIndex ? "no log index" : logIndex.templates.length === 0 ? "0 log templates" : "no trees"})`);
-    }
-    if (logIndex && logIndex.templates.length > 0 && trees) {
-      try {
-        const logRoots = identifyLogRoots(logIndex);
-
-        // Build CFGs only for files that contain log templates
-        const logFiles = new Set<string>();
-        for (const tmpl of logIndex.templates) {
-          for (const loc of tmpl.locations) {
-            logFiles.add(loc.module);
-          }
-        }
-
-        const cfgCounter = createCfgIdCounter();
-        const cfgs = new Map<string, ControlFlowGraph>();
-        for (const filePath of logFiles) {
-          const tree = trees.get(filePath);
-          if (!tree) {
-            log(`    warning: no tree-sitter tree for log file ${filePath} (skipping CFG build)`);
-            continue;
-          }
-
-          const fnNodes = findFunctionNodes(tree.rootNode);
-          for (const fnNode of fnNodes) {
-            const functionId = `${filePath}#${fnNode.name}`;
-            const cfg = buildControlFlowGraph(fnNode.node, functionId, repo.name, filePath, cfgCounter);
-            cfgs.set(functionId, cfg);
-          }
-        }
-
-        // Use real call edges from graph store if available
-        const allCallEdges = await options.graphStore.getEdgesByKind("calls");
-        const repoCallEdges = allCallEdges.filter(e => e.metadata?.["repo"] === repo.name);
-        const callGraph: CallGraph = {
-          repo: repo.name,
-          edges: repoCallEdges,
-          nodeCount: new Set(repoCallEdges.flatMap(e => [e.source, e.target])).size,
-        };
-
-        const faultTrees = [];
-        // Limit tracing for POC performance; full-scale tracing requires call graph
-        const MAX_TRACED_ROOTS = 50;
-        const tracedRoots = logRoots.slice(0, MAX_TRACED_ROOTS);
-        let emptyTraces = 0;
-        for (const root of tracedRoots) {
-          const trace = traceBackwardFromLog(root, cfgs, callGraph);
-          if (trace.steps.length > 0) {
-            faultTrees.push(buildFaultTree(trace, repo.name));
-          } else {
-            emptyTraces++;
-          }
-        }
-        if (logRoots.length > MAX_TRACED_ROOTS) {
-          log(`    warning: ${logRoots.length - MAX_TRACED_ROOTS} log roots not traced (POC limit=${MAX_TRACED_ROOTS})`);
-        }
-        if (emptyTraces > 0) {
-          log(`    ${emptyTraces}/${tracedRoots.length} traces returned no steps (no matching CFG or log node)`);
-        }
-
-        const gapResults = analyzeGaps(cfgs, repo.name);
-        await kvStore.set(`sarif:fault:${repo.name}`, JSON.stringify(gapResults));
-        await kvStore.set(`faultTrees:${repo.name}`, JSON.stringify(faultTrees));
-
-        log(`  ${repo.name} [fault]: ${logRoots.length} log roots, ${cfgs.size} CFGs, ${faultTrees.length} fault trees, ${gapResults.length} gap findings`);
-      } catch (error) {
-        console.error(`  Failed to build fault model for ${repo.name}:`, error);
-      }
-    }
-
-    // 7c: Functional model (service catalog)
     if (!services || services.length === 0) {
       log(`  ${repo.name} [functional]: skipped (${!services ? "no services" : "0 services inferred"})`);
+      continue;
     }
-    if (services && services.length > 0) {
-      try {
-        const svcSummaries = summaryMap ?? new Map<string, Summary>();
-        const svcLogIndex = logIndex ?? { repo: repo.name, templates: [] };
+    try {
+      const svcSummaries = summaryMap ?? new Map<string, Summary>();
+      const svcLogIndex = logIndex ?? { repo: repo.name, templates: [] };
 
-        const catalog = buildServiceCatalog(services, svcSummaries, svcLogIndex);
-        const docs = generateDocumentation(catalog, svcSummaries);
-        await kvStore.set(`docs:functional:${repo.name}`, docs);
+      const catalog = buildServiceCatalog(services, svcSummaries, svcLogIndex);
+      const docs = generateDocumentation(catalog, svcSummaries);
+      await kvStore.set(`docs:functional:${repo.name}`, docs);
 
-        log(`  ${repo.name} [functional]: ${catalog.length} catalog entries, ${docs.length} chars of documentation`);
-      } catch (error) {
-        console.error(`  Failed to build service catalog for ${repo.name}:`, error);
-      }
+      log(`  ${repo.name} [functional]: ${catalog.length} catalog entries, ${docs.length} chars of documentation`);
+    } catch (error) {
+      console.error(`  Failed to build service catalog for ${repo.name}:`, error);
     }
   }
 
