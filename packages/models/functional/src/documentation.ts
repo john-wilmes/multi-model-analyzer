@@ -91,8 +91,9 @@ export function findDocumentationGaps(
 
   for (const entry of catalog) {
     // Check for services without tier 4 summaries
+    const namePattern = new RegExp(`\\b${escapeRegExp(entry.name)}\\b`);
     const hasTier4 = [...summaries.values()].some(
-      (s) => s.tier === 4 && s.entityId.includes(entry.name),
+      (s) => s.tier === 4 && namePattern.test(s.entityId),
     );
 
     if (!hasTier4) {
@@ -134,4 +135,8 @@ export function findDocumentationGaps(
   }
 
   return results;
+}
+
+function escapeRegExp(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

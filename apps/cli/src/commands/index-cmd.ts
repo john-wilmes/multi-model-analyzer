@@ -463,9 +463,48 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
     }
   }
 
-  // Save commit hashes
+  // Aggregate all per-repo SARIF into a combined latest result
+  const allSarifResults: import("@mma/core").SarifResult[] = [];
+  for (const repo of repos) {
+    for (const key of ["config", "fault"] as const) {
+      const json = await kvStore.get(`sarif:${key}:${repo.name}`);
+      if (json) {
+        try {
+          const results = JSON.parse(json) as import("@mma/core").SarifResult[];
+          allSarifResults.push(...results);
+        } catch {
+          log(`    warning: could not parse sarif:${key}:${repo.name}`);
+        }
+      }
+    }
+  }
+  if (allSarifResults.length > 0) {
+    const sarifLog: import("@mma/core").SarifLog = {
+      $schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
+      version: "2.1.0",
+      runs: [{
+        tool: { driver: { name: "multi-model-analyzer", version: "0.1.0", rules: [] } },
+        results: allSarifResults,
+      }],
+    };
+    await kvStore.set("sarif:latest", JSON.stringify(sarifLog));
+    log(`  Aggregated ${allSarifResults.length} SARIF results into sarif:latest`);
+  }
+
+  // Save commit hashes only for repos that completed successfully
+  const successfulRepos = new Set<string>();
+  for (const repo of repos) {
+    // A repo succeeded if it has parsed files or at least classified files
+    if (parsedFilesByRepo.has(repo.name) || classifiedByRepo.has(repo.name)) {
+      successfulRepos.add(repo.name);
+    }
+  }
   for (const changeSet of changeSets) {
-    await kvStore.set(`commit:${changeSet.repo}`, changeSet.commitHash);
+    if (successfulRepos.has(changeSet.repo)) {
+      await kvStore.set(`commit:${changeSet.repo}`, changeSet.commitHash);
+    } else {
+      log(`  Skipping commit hash for ${changeSet.repo} (processing incomplete)`);
+    }
   }
 
   log("Indexing complete.");

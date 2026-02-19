@@ -59,7 +59,13 @@ export async function queryCommand(
       // Look up pre-computed SARIF results
       const sarifJson = await options.kvStore.get("sarif:latest");
       if (sarifJson) {
-        const sarif = JSON.parse(sarifJson) as import("@mma/core").SarifLog;
+        let sarif: import("@mma/core").SarifLog;
+        try {
+          sarif = JSON.parse(sarifJson) as import("@mma/core").SarifLog;
+        } catch {
+          console.log("Error: stored SARIF data is corrupted. Re-run 'index' to regenerate.");
+          break;
+        }
         const matching = sarif.runs.flatMap((r) =>
           r.results.filter(
             (res) =>
