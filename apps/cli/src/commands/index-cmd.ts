@@ -39,7 +39,13 @@ import {
 } from "@mma/heuristics";
 import type { PackageJsonInfo } from "@mma/heuristics";
 import type { KVStore, GraphStore, SearchStore } from "@mma/storage";
-import { tier1Summarize, tier2Summarize } from "@mma/summarization";
+import {
+  tier1Summarize,
+  tier2Summarize,
+  tier4BatchSummarize,
+  SONNET_DEFAULTS,
+} from "@mma/summarization";
+import type { ServiceSummaryInput } from "@mma/summarization";
 
 export interface IndexOptions {
   readonly repos: readonly RepoConfig[];
@@ -49,6 +55,7 @@ export interface IndexOptions {
   readonly searchStore: SearchStore;
   readonly verbose: boolean;
   readonly enableTsMorph?: boolean;
+  readonly anthropicApiKey?: string;
 }
 
 export async function indexCommand(options: IndexOptions): Promise<void> {
@@ -344,6 +351,35 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
         }
       }
 
+      // Tier 4: Sonnet for service-level summaries
+      let tier4Count = 0;
+      if (options.anthropicApiKey) {
+        const services = servicesByRepo.get(repo.name);
+        if (services && services.length > 0) {
+          const inputs: ServiceSummaryInput[] = services.map((svc) => ({
+            entityId: `service:${svc.name}`,
+            serviceName: svc.name,
+            methodSummaries: [...summaryMap.values()]
+              .filter((s) => s.entityId.startsWith(svc.rootPath))
+              .slice(0, 20)
+              .map((s) => s.description),
+            dependencies: [...svc.dependencies],
+            entryPoints: [...svc.entryPoints],
+          }));
+          log(`    Tier 4 (Sonnet): summarizing ${inputs.length} services`);
+          const tier4Results = await tier4BatchSummarize(inputs, {
+            ...SONNET_DEFAULTS,
+            apiKey: options.anthropicApiKey,
+          });
+          for (const s of tier4Results) {
+            if (s.confidence > 0) {
+              summaryMap.set(s.entityId, s);
+              tier4Count++;
+            }
+          }
+        }
+      }
+
       summariesByRepo.set(repo.name, summaryMap);
 
       // Index summaries in search store for query support
@@ -354,7 +390,12 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
       }));
       await options.searchStore.index(searchDocs);
 
-      log(`  ${repo.name}: ${tier1Count} tier-1, ${tier2Total} tier-2 (${tier2Upgraded} upgraded from tier-1), ${summaryMap.size} total`);
+      const tierBreakdown = [
+        `${tier1Count} tier-1`,
+        `${tier2Total} tier-2 (${tier2Upgraded} upgraded)`,
+        tier4Count > 0 ? `${tier4Count} tier-4` : null,
+      ].filter(Boolean).join(", ");
+      log(`  ${repo.name}: ${tierBreakdown}, ${summaryMap.size} total`);
     } catch (error) {
       console.error(`  Failed to generate summaries for ${repo.name}:`, error);
     }

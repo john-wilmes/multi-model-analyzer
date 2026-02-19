@@ -40,7 +40,7 @@ export function scanForFlags(
     // Scan for SDK-based flags
     const imports = findImports(tree.rootNode);
     const usesSDK = imports.some((imp) =>
-      sdkImports.some((sdk) => imp.includes(sdk)),
+      sdkImports.some((sdk) => imp === sdk || imp.startsWith(sdk + "/")),
     );
 
     if (usesSDK) {

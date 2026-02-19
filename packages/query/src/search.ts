@@ -6,7 +6,8 @@ import type { SearchStore, SearchResult } from "@mma/storage";
 
 export interface SearchQueryResult {
   readonly results: readonly SearchResult[];
-  readonly totalHits: number;
+  /** Number of results returned (capped by limit). */
+  readonly returnedCount: number;
   readonly description: string;
 }
 
@@ -19,7 +20,7 @@ export async function executeSearchQuery(
 
   return {
     results,
-    totalHits: results.length,
+    returnedCount: results.length,
     description: `${results.length} results for "${query}"`,
   };
 }

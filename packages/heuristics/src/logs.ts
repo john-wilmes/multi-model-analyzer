@@ -105,14 +105,11 @@ function findLogCalls(
 }
 
 function inferSeverity(callText: string): LogSeverity | null {
+  // Generic patterns cover both console.X and logger.X forms
   if (/\.(error|fatal)\s*$/.test(callText)) return "error";
   if (/\.(warn|warning)\s*$/.test(callText)) return "warn";
   if (/\.(info|log)\s*$/.test(callText)) return "info";
   if (/\.(debug|trace|verbose)\s*$/.test(callText)) return "debug";
-  if (/^console\.(error)$/.test(callText)) return "error";
-  if (/^console\.(warn)$/.test(callText)) return "warn";
-  if (/^console\.(log|info)$/.test(callText)) return "info";
-  if (/^console\.(debug)$/.test(callText)) return "debug";
   return null;
 }
 
