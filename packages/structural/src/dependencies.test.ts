@@ -85,3 +85,55 @@ describe("resolveImportSpecifier", () => {
     expect(resolveImportSpecifier("./missing", "src/app.ts", known)).toBe("./missing");
   });
 });
+
+describe("resolveImportSpecifier with packageRoots", () => {
+  const known = new Set([
+    "packages/utils/src/index.ts",
+    "packages/utils/src/helpers.ts",
+    "packages/core/src/index.ts",
+    "packages/core/src/types.ts",
+    "src/app.ts",
+  ]);
+
+  const packageRoots = new Map([
+    ["@myorg/utils", "packages/utils"],
+    ["@myorg/core", "packages/core"],
+  ]);
+
+  it("resolves scoped package to index file", () => {
+    expect(
+      resolveImportSpecifier("@myorg/utils", "src/app.ts", known, packageRoots),
+    ).toBe("packages/utils/src/index.ts");
+  });
+
+  it("resolves scoped package with subpath", () => {
+    expect(
+      resolveImportSpecifier("@myorg/utils/helpers", "src/app.ts", known, packageRoots),
+    ).toBe("packages/utils/src/helpers.ts");
+  });
+
+  it("resolves different scoped package", () => {
+    expect(
+      resolveImportSpecifier("@myorg/core/types", "src/app.ts", known, packageRoots),
+    ).toBe("packages/core/src/types.ts");
+  });
+
+  it("falls back to raw specifier for unknown packages", () => {
+    expect(
+      resolveImportSpecifier("@myorg/unknown", "src/app.ts", known, packageRoots),
+    ).toBe("@myorg/unknown");
+  });
+
+  it("falls back to raw specifier when packageRoots is not provided", () => {
+    expect(
+      resolveImportSpecifier("@myorg/utils", "src/app.ts", known),
+    ).toBe("@myorg/utils");
+  });
+
+  it("resolves plain (non-scoped) package with subpath", () => {
+    const roots = new Map([["mylib", "packages/utils"]]);
+    expect(
+      resolveImportSpecifier("mylib/helpers", "src/app.ts", known, roots),
+    ).toBe("packages/utils/src/helpers.ts");
+  });
+});

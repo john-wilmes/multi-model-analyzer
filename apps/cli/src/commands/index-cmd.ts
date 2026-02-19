@@ -158,6 +158,33 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
     }
   }
 
+  // Build cross-repo packageRoots map: package name -> repo-local file path prefix
+  // Maps e.g. "@twenty/utils" -> "packages/utils" so non-relative imports can resolve
+  const packageRoots = new Map<string, string>();
+  for (const repo of repos) {
+    const classified = classifiedByRepo.get(repo.name);
+    if (!classified) continue;
+    const packageJsonFiles = classified.filter(
+      (f) => f.kind === "json" && f.path.endsWith("package.json"),
+    );
+    for (const pjFile of packageJsonFiles) {
+      try {
+        const absPath = join(repo.localPath, pjFile.path);
+        const raw = await readFile(absPath, "utf-8");
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        const name = parsed.name as string | undefined;
+        if (name) {
+          packageRoots.set(name, dirname(pjFile.path));
+        }
+      } catch {
+        // Skip unreadable package.json files
+      }
+    }
+  }
+  if (packageRoots.size > 0) {
+    log(`  Built packageRoots map: ${packageRoots.size} packages across all repos`);
+  }
+
   // Phase 4: Dependency graph extraction
   log("Phase 4: Extracting dependency graphs...");
   const depGraphByRepo = new Map<string, DependencyGraph>();
@@ -167,7 +194,7 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
 
     try {
       const start = performance.now();
-      const graph = extractDependencyGraph(trees, repo.name, { detectCircular: true });
+      const graph = extractDependencyGraph(trees, repo.name, { detectCircular: true }, packageRoots);
       const elapsed = Math.round(performance.now() - start);
 
       depGraphByRepo.set(repo.name, graph);

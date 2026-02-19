@@ -24,29 +24,42 @@ export interface RouteDecision {
   readonly route: QueryRoute;
   readonly confidence: number;
   readonly extractedEntities: readonly string[];
+  readonly repo?: string;
+  readonly strippedQuery: string;
 }
 
 export function routeQuery(query: string): RouteDecision {
-  const entities = extractEntities(query.trim());
-  const normalized = query.toLowerCase().trim();
+  const trimmed = query.trim();
+
+  // Extract optional "repo:NAME" prefix
+  let repo: string | undefined;
+  let strippedQuery = trimmed;
+  const repoMatch = trimmed.match(/^repo:(\S+)\s+(.*)/s);
+  if (repoMatch) {
+    repo = repoMatch[1]!;
+    strippedQuery = repoMatch[2]!;
+  }
+
+  const entities = extractEntities(strippedQuery);
+  const normalized = strippedQuery.toLowerCase().trim();
 
   // Structural patterns
   if (/\b(call[s]?|depend[s]?|import[s]?|extend[s]?|implement[s]?|reference[s]?|definition)\b/.test(normalized)) {
-    return { route: "structural", confidence: 0.9, extractedEntities: entities };
+    return { route: "structural", confidence: 0.9, extractedEntities: entities, repo, strippedQuery };
   }
 
   // Analytical patterns
   if (/\b(risk[s]?|fault[s]?|error[s]?|failure[s]?|dead|unused|orphan|violation[s]?|flag[s]?|config)\b/.test(normalized)) {
-    return { route: "analytical", confidence: 0.85, extractedEntities: entities };
+    return { route: "analytical", confidence: 0.85, extractedEntities: entities, repo, strippedQuery };
   }
 
   // Synthesis patterns (complex questions)
   if (/\b(why|how|explain|summarize|describe|compare|architecture|design)\b/.test(normalized)) {
-    return { route: "synthesis", confidence: 0.7, extractedEntities: entities };
+    return { route: "synthesis", confidence: 0.7, extractedEntities: entities, repo, strippedQuery };
   }
 
   // Default to search
-  return { route: "search", confidence: 0.5, extractedEntities: entities };
+  return { route: "search", confidence: 0.5, extractedEntities: entities, repo, strippedQuery };
 }
 
 function extractEntities(query: string): string[] {

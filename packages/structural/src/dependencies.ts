@@ -22,6 +22,7 @@ export function extractDependencyGraph(
   files: ReadonlyMap<string, TreeSitterTree>,
   repo: string,
   options: Partial<DependencyGraphOptions> = {},
+  packageRoots?: ReadonlyMap<string, string>,
 ): DependencyGraph {
   const opts = { ...DEFAULT_OPTIONS, ...options };
   const edges: GraphEdge[] = [];
@@ -31,11 +32,12 @@ export function extractDependencyGraph(
     const imports = extractImports(tree.rootNode);
     for (const imp of imports) {
       if (opts.ignorePatterns.some((p) => imp.includes(p))) continue;
-      const resolved = resolveImportSpecifier(imp, filePath, knownPaths);
+      const resolved = resolveImportSpecifier(imp, filePath, knownPaths, packageRoots);
       edges.push({
         source: filePath,
         target: resolved,
         kind: "imports",
+        metadata: { repo },
       });
     }
   }
@@ -90,16 +92,26 @@ function findRequireCall(node: TreeSitterNode): string | null {
 }
 
 /**
- * Resolve a relative import specifier to a file path in the known file set.
- * Falls back to the raw specifier if no match is found (e.g. external packages).
+ * Resolve an import specifier to a file path in the known file set.
+ *
+ * For relative imports (./foo, ../bar), resolves against the importer's directory.
+ * For non-relative imports (@org/pkg, pkg/sub), checks packageRoots to resolve
+ * cross-repo references. Falls back to the raw specifier if no match is found.
  */
 export function resolveImportSpecifier(
   specifier: string,
   importerPath: string,
   knownPaths: ReadonlySet<string>,
+  packageRoots?: ReadonlyMap<string, string>,
 ): string {
-  // Non-relative imports (packages) -- return as-is
-  if (!specifier.startsWith(".")) return specifier;
+  // Non-relative imports: try packageRoots first, then return as-is
+  if (!specifier.startsWith(".")) {
+    if (packageRoots) {
+      const resolved = resolvePackageImport(specifier, knownPaths, packageRoots);
+      if (resolved) return resolved;
+    }
+    return specifier;
+  }
 
   const dir = importerPath.includes("/")
     ? importerPath.slice(0, importerPath.lastIndexOf("/"))
@@ -118,15 +130,58 @@ export function resolveImportSpecifier(
   }
   const base = resolved.join("/");
 
-  // Try extensions in order
-  const extensions = ["", ".ts", ".tsx", ".js", ".jsx", "/index.ts", "/index.js"];
-  for (const ext of extensions) {
+  return probeExtensions(base, knownPaths) ?? specifier;
+}
+
+const EXTENSIONS = ["", ".ts", ".tsx", ".js", ".jsx", "/index.ts", "/index.js"];
+
+function probeExtensions(base: string, knownPaths: ReadonlySet<string>): string | undefined {
+  for (const ext of EXTENSIONS) {
     const candidate = base + ext;
     if (knownPaths.has(candidate)) return candidate;
   }
+  return undefined;
+}
 
-  // No match found -- return raw specifier
-  return specifier;
+/**
+ * Resolve a non-relative import against known package roots.
+ * Handles exact package matches ("@org/pkg") and subpath imports ("@org/pkg/sub").
+ */
+function resolvePackageImport(
+  specifier: string,
+  knownPaths: ReadonlySet<string>,
+  packageRoots: ReadonlyMap<string, string>,
+): string | undefined {
+  // Try exact match first
+  const root = packageRoots.get(specifier);
+  if (root) {
+    const resolved = probeExtensions(root + "/src/index", knownPaths);
+    if (resolved) return resolved;
+  }
+
+  // Try stripping subpath: "@org/pkg/sub/path" -> "@org/pkg" + "sub/path"
+  // Handle scoped packages (@org/pkg) and plain packages (pkg)
+  let pkgName: string;
+  let subpath: string;
+  if (specifier.startsWith("@")) {
+    // Scoped: find the third slash for subpath
+    const secondSlash = specifier.indexOf("/", specifier.indexOf("/") + 1);
+    if (secondSlash === -1) return undefined; // Already tried exact match above
+    pkgName = specifier.slice(0, secondSlash);
+    subpath = specifier.slice(secondSlash + 1);
+  } else {
+    const firstSlash = specifier.indexOf("/");
+    if (firstSlash === -1) return undefined; // Already tried exact match above
+    pkgName = specifier.slice(0, firstSlash);
+    subpath = specifier.slice(firstSlash + 1);
+  }
+
+  const pkgRoot = packageRoots.get(pkgName);
+  if (!pkgRoot) return undefined;
+
+  // Try resolving subpath under the package root's src/ directory
+  const base = pkgRoot + "/src/" + subpath;
+  return probeExtensions(base, knownPaths) ?? undefined;
 }
 
 function findCircularDependencies(edges: readonly GraphEdge[]): string[][] {

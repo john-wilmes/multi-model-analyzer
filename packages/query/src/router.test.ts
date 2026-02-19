@@ -36,4 +36,25 @@ describe("routeQuery", () => {
   it("defaults to search", () => {
     expect(routeQuery("hello world").route).toBe("search");
   });
+
+  it("extracts repo:NAME prefix", () => {
+    const result = routeQuery("repo:twenty what depends on UserService");
+    expect(result.repo).toBe("twenty");
+    expect(result.strippedQuery).toBe("what depends on UserService");
+    expect(result.route).toBe("structural");
+    expect(result.extractedEntities).toContain("UserService");
+  });
+
+  it("returns undefined repo when no prefix", () => {
+    const result = routeQuery("dependencies of UserService");
+    expect(result.repo).toBeUndefined();
+    expect(result.strippedQuery).toBe("dependencies of UserService");
+  });
+
+  it("handles repo prefix with search route", () => {
+    const result = routeQuery("repo:myrepo hello world");
+    expect(result.repo).toBe("myrepo");
+    expect(result.route).toBe("search");
+    expect(result.strippedQuery).toBe("hello world");
+  });
 });
