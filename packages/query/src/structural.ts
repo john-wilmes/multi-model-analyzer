@@ -24,7 +24,7 @@ export async function executeCallersQuery(
 
   // BM25 fallback: resolve short name to FQN
   if (edges.length === 0 && searchStore) {
-    const resolved = await resolveEntityViaBM25(target, searchStore);
+    const resolved = await resolveEntityViaBM25(target, searchStore, repo);
     if (resolved) {
       edges = await graphStore.getEdgesTo(resolved, repo);
       if (edges.length > 0) {
@@ -64,7 +64,7 @@ export async function executeCalleesQuery(
 
   // BM25 fallback: resolve short name to FQN
   if (edges.length === 0 && searchStore) {
-    const resolved = await resolveEntityViaBM25(source, searchStore);
+    const resolved = await resolveEntityViaBM25(source, searchStore, repo);
     if (resolved) {
       edges = await graphStore.getEdgesFrom(resolved, repo);
       if (edges.length > 0) {
@@ -107,7 +107,7 @@ export async function executeDependencyQuery(
 
   // BM25 fallback: resolve short name to FQN
   if (edges.length === 0 && searchStore) {
-    const resolved = await resolveEntityViaBM25(module, searchStore);
+    const resolved = await resolveEntityViaBM25(module, searchStore, opts.repo);
     if (resolved) {
       edges = await graphStore.traverseBFS(resolved, opts);
       if (edges.length > 0) {
@@ -149,8 +149,13 @@ export async function executeDependencyQuery(
 async function resolveEntityViaBM25(
   entity: string,
   searchStore: SearchStore,
+  repo?: string,
 ): Promise<string | null> {
-  const results = await searchStore.search(entity, 1);
+  const results = await searchStore.search(entity, repo ? 10 : 1);
   if (results.length === 0) return null;
+  if (repo) {
+    const match = results.find((r) => r.metadata?.["repo"] === repo);
+    return match?.id ?? null;
+  }
   return results[0]!.id;
 }
