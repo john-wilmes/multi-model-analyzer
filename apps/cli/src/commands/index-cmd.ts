@@ -81,6 +81,31 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
     }
   }
 
+  // Phase 0: Cleanup stale data for deleted files
+  for (const changeSet of changeSets) {
+    if (changeSet.deletedFiles.length > 0) {
+      log(`Phase 0: Cleaning up ${changeSet.deletedFiles.length} deleted files from ${changeSet.repo}...`);
+      const deletedIds: string[] = [];
+      for (const filePath of changeSet.deletedFiles) {
+        deletedIds.push(filePath);
+      }
+
+      // Remove from search index
+      await options.searchStore.delete(deletedIds);
+
+      // Remove stale graph edges sourced from deleted files
+      // (Graph edges are re-added during Phase 4, so clearing per-repo is simpler)
+      await options.graphStore.clear(changeSet.repo);
+
+      // Remove KV entries associated with deleted files
+      for (const filePath of changeSet.deletedFiles) {
+        await kvStore.deleteByPrefix(`${changeSet.repo}:${filePath}`);
+      }
+
+      log(`  Removed stale data for ${changeSet.deletedFiles.length} files`);
+    }
+  }
+
   // Phase 2: Classify files
   log("Phase 2: Classifying files...");
   const classifiedByRepo = new Map<string, ReturnType<typeof classifyFiles>>();
