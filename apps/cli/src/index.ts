@@ -39,8 +39,8 @@ async function main(): Promise<void> {
   }
 
   const command = positionals[0];
-  const configPath = resolve(values.config as string);
-  const verbose = values.verbose as boolean;
+  const configPath = resolve(values.config);
+  const verbose = values.verbose;
 
   let config: CliConfig;
   try {

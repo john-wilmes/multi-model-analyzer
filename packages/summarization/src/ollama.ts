@@ -40,7 +40,7 @@ export async function summarizeWithOllama(
       description: response.trim(),
       confidence: 0.8,
     };
-  } catch (error) {
+  } catch {
     return {
       entityId,
       tier: 3,

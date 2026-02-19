@@ -46,7 +46,7 @@ export async function generateScipIndex(
       ["scip-typescript", "index", "--output", outputPath],
       { cwd: repoPath, timeout: 300_000 },
     );
-  } catch (error) {
+  } catch {
     // scip-typescript may not be available in POC
     // Return empty result rather than failing
     return {

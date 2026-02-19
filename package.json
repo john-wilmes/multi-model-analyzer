@@ -24,7 +24,7 @@
   "scripts": {
     "build": "tsc --build",
     "type-check": "tsc --build --noEmit",
-    "lint": "eslint 'packages/*/src/**/*.ts' 'apps/*/src/**/*.ts'",
+    "lint": "eslint packages/**/src/**/*.ts apps/*/src/**/*.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "clean": "tsc --build --clean",

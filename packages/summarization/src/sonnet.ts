@@ -45,7 +45,7 @@ export async function summarizeWithSonnet(
       description: response.trim(),
       confidence: 0.95,
     };
-  } catch (error) {
+  } catch {
     return {
       entityId: input.entityId,
       tier: 4,
