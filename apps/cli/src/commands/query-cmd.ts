@@ -50,7 +50,13 @@ export async function queryCommand(
       const result = await executeSearchQuery(query, searchStore);
       console.log(result.description);
       for (const hit of result.results) {
-        console.log(`  [${hit.score.toFixed(2)}] ${hit.id}: ${hit.content.slice(0, 100)}`);
+        const meta = hit.metadata ?? {};
+        const metaStr = Object.entries(meta)
+          .map(([k, v]) => `${k}=${v}`)
+          .join(" ");
+        const suffix = metaStr ? ` (${metaStr})` : "";
+        console.log(`  [${hit.score.toFixed(2)}] ${hit.id}${suffix}`);
+        console.log(`    ${hit.content.slice(0, 120)}`);
       }
       break;
     }

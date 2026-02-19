@@ -58,9 +58,14 @@ export interface ServiceBoundary {
 export class HeuristicArchitectureProvider
   implements HypothesisProvider<ArchitectureHypothesis>
 {
-  private confidence = 0;
+  private readonly confidence: number;
 
-  constructor(private readonly architecture: InferredArchitecture) {}
+  constructor(private readonly architecture: InferredArchitecture) {
+    const svcs = architecture.services;
+    this.confidence = svcs.length > 0
+      ? svcs.reduce((sum, s) => sum + s.confidence, 0) / svcs.length
+      : 0;
+  }
 
   async getHypothesis(): Promise<ArchitectureHypothesis> {
     const services: ExpectedService[] = this.architecture.services.map((s) => ({
@@ -68,15 +73,6 @@ export class HeuristicArchitectureProvider
       rootPath: s.rootPath,
       expectedDependencies: [...s.dependencies],
     }));
-
-    this.confidence = services.length > 0
-      ? services.reduce((sum, _s, _i, arr) => {
-          const inferred = this.architecture.services.find(
-            (is) => is.name === _s.name,
-          );
-          return sum + (inferred?.confidence ?? 0) / arr.length;
-        }, 0)
-      : 0;
 
     return {
       services,

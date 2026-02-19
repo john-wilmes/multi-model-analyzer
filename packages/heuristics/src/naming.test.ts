@@ -57,17 +57,27 @@ describe("analyzeNaming", () => {
     const files = new Map([["src/check.ts", [sym("isValid")]]]);
     const result = analyzeNaming(files, "repo");
     expect(result.methods).toHaveLength(1);
-    // "is" is in ACTION_VERBS so it matches the verb-object branch first
-    expect(result.methods[0]!.verb).toBe("is");
+    // Predicate pattern takes priority over generic ACTION_VERBS
+    expect(result.methods[0]!.verb).toBe("check");
     expect(result.methods[0]!.object).toBe("valid");
+    expect(result.methods[0]!.purpose).toContain("Checks whether");
   });
 
   it("identifies event handler pattern (handleClick)", () => {
     const files = new Map([["src/ui.ts", [sym("handleClick")]]]);
     const result = analyzeNaming(files, "repo");
     expect(result.methods).toHaveLength(1);
+    // Event handler pattern takes priority over generic ACTION_VERBS
     expect(result.methods[0]!.verb).toBe("handle");
-    expect(result.methods[0]!.object).toContain("click");
+    expect(result.methods[0]!.object).toBe("click event");
+  });
+
+  it("identifies event handler pattern (onSubmit)", () => {
+    const files = new Map([["src/form.ts", [sym("onSubmit")]]]);
+    const result = analyzeNaming(files, "repo");
+    expect(result.methods).toHaveLength(1);
+    expect(result.methods[0]!.verb).toBe("handle");
+    expect(result.methods[0]!.object).toBe("submit event");
   });
 
   it("skips non-function symbols", () => {

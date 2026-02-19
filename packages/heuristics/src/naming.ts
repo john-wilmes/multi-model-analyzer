@@ -78,18 +78,8 @@ function inferPurpose(words: string[]): PurposeResult | null {
 
   const firstWord = words[0]!.toLowerCase();
 
-  // Standard verb-object pattern: getUser, createOrder
-  if (ACTION_VERBS.has(firstWord)) {
-    const object = words.slice(1).join(" ").toLowerCase();
-    return {
-      verb: firstWord,
-      object: object || "unknown",
-      description: `${capitalize(firstWord)}s ${object || "something"}`,
-      confidence: object ? 0.85 : 0.5,
-    };
-  }
-
   // Predicate pattern: isValid, hasPermission, canEdit
+  // Checked before ACTION_VERBS since these produce more specific results
   if (firstWord === "is" || firstWord === "has" || firstWord === "can" || firstWord === "should") {
     const predicate = words.slice(1).join(" ").toLowerCase();
     return {
@@ -108,6 +98,17 @@ function inferPurpose(words: string[]): PurposeResult | null {
       object: `${event} event`,
       description: `Handles ${event} event`,
       confidence: 0.75,
+    };
+  }
+
+  // Standard verb-object pattern: getUser, createOrder
+  if (ACTION_VERBS.has(firstWord)) {
+    const object = words.slice(1).join(" ").toLowerCase();
+    return {
+      verb: firstWord,
+      object: object || "unknown",
+      description: `${capitalize(firstWord)}s ${object || "something"}`,
+      confidence: object ? 0.85 : 0.5,
     };
   }
 
