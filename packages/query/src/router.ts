@@ -27,8 +27,8 @@ export interface RouteDecision {
 }
 
 export function routeQuery(query: string): RouteDecision {
+  const entities = extractEntities(query.trim());
   const normalized = query.toLowerCase().trim();
-  const entities = extractEntities(normalized);
 
   // Structural patterns
   if (/\b(call[s]?|depend[s]?|import[s]?|extend[s]?|implement[s]?|reference[s]?|definition)\b/.test(normalized)) {

@@ -80,6 +80,11 @@ function computeAggregateStatistics(
   const allRules = new Set<string>();
 
   for (const run of runs) {
+    // Always collect rule IDs from results for accurate rulesTriggered count
+    for (const result of run.results) {
+      allRules.add(result.ruleId);
+    }
+
     const stats = run.properties?.statistics;
     if (stats) {
       totalResults += stats.totalResults;
@@ -90,7 +95,6 @@ function computeAggregateStatistics(
       // Compute from results
       for (const result of run.results) {
         totalResults++;
-        allRules.add(result.ruleId);
         switch (result.level) {
           case "error":
             errorCount++;

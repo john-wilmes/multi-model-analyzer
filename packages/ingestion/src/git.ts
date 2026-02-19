@@ -66,30 +66,7 @@ export async function diffFiles(
     { cwd: repoPath, maxBuffer: 50 * 1024 * 1024 },
   );
 
-  const added: string[] = [];
-  const modified: string[] = [];
-  const deleted: string[] = [];
-
-  for (const line of stdout.trim().split("\n")) {
-    if (!line) continue;
-    const status = line[0];
-    const filePath = line.slice(2);
-    switch (status) {
-      case "A":
-        added.push(filePath);
-        break;
-      case "M":
-        modified.push(filePath);
-        break;
-      case "D":
-        deleted.push(filePath);
-        break;
-      default:
-        modified.push(filePath);
-    }
-  }
-
-  return { added, modified, deleted };
+  return parseNameStatus(stdout);
 }
 
 export async function getFileContent(
@@ -103,6 +80,46 @@ export async function getFileContent(
     { cwd: repoPath },
   );
   return stdout;
+}
+
+export function parseNameStatus(
+  stdout: string,
+): { added: string[]; modified: string[]; deleted: string[] } {
+  const added: string[] = [];
+  const modified: string[] = [];
+  const deleted: string[] = [];
+
+  for (const line of stdout.trim().split("\n")) {
+    if (!line) continue;
+    const parts = line.split("\t");
+    const statusCode = parts[0]!;
+    // R100 or C100 have a score suffix; strip to get the base letter
+    const status = statusCode[0];
+    switch (status) {
+      case "A":
+        added.push(parts[1]!);
+        break;
+      case "M":
+        modified.push(parts[1]!);
+        break;
+      case "D":
+        deleted.push(parts[1]!);
+        break;
+      case "R":
+        // Rename: old path deleted, new path added
+        deleted.push(parts[1]!);
+        added.push(parts[2]!);
+        break;
+      case "C":
+        // Copy: new path added (old path unchanged)
+        added.push(parts[2]!);
+        break;
+      default:
+        modified.push(parts[1]!);
+    }
+  }
+
+  return { added, modified, deleted };
 }
 
 async function exists(path: string): Promise<boolean> {

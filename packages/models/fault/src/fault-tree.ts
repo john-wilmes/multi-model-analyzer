@@ -75,6 +75,14 @@ function buildChildNodes(steps: readonly TraceStep[]): FaultTreeNode[] {
     return [];
   }
 
+  const entryNodes: FaultTreeNode[] = entries.map((e) => ({
+    id: `entry-${e.nodeId}`,
+    label: `Entry: ${e.description}`,
+    kind: "undeveloped" as const,
+    location: e.location,
+    children: [] as FaultTreeNode[],
+  }));
+
   // If multiple conditions, they form an OR gate (any path can trigger the error)
   if (conditions.length > 1) {
     return [
@@ -90,6 +98,7 @@ function buildChildNodes(steps: readonly TraceStep[]): FaultTreeNode[] {
           children: [],
         })),
       },
+      ...entryNodes,
     ];
   }
 
@@ -102,13 +111,7 @@ function buildChildNodes(steps: readonly TraceStep[]): FaultTreeNode[] {
       location: c.location,
       children: [] as FaultTreeNode[],
     })),
-    ...entries.map((e) => ({
-      id: `entry-${e.nodeId}`,
-      label: `Entry: ${e.description}`,
-      kind: "undeveloped" as const,
-      location: e.location,
-      children: [] as FaultTreeNode[],
-    })),
+    ...entryNodes,
   ];
 }
 
@@ -126,12 +129,9 @@ export function analyzeGaps(
         .filter((e) => e.from === catchNode.id)
         .map((e) => cfg.nodes.find((n) => n.id === e.to));
 
+      const loggingPattern = /\b(log(ger)?|error|warn(ing)?|console)\s*[.(]/i;
       const hasLogging = successors.some(
-        (n) =>
-          n &&
-          (n.label.includes("log") ||
-            n.label.includes("error") ||
-            n.label.includes("console")),
+        (n) => n && loggingPattern.test(n.label),
       );
 
       const hasRethrow = successors.some(

@@ -134,18 +134,9 @@ function buildCfgFromStatement(
       edges.push({ from: nodeId, to: exitId });
       return [];
 
-    case "throw_statement": {
-      const throwNodeId = newNodeId(counter);
-      nodes.push({
-        id: throwNodeId,
-        kind: "throw",
-        label: "throw",
-        location,
-        line: node.startPosition.row + 1,
-      });
-      edges.push({ from: nodeId, to: throwNodeId });
+    case "throw_statement":
+      // nodeId already has kind "throw" from statementKind(); no extra node needed
       return [];
-    }
 
     default:
       return [nodeId];
@@ -162,33 +153,15 @@ function buildIfCfg(
   counter: CfgIdCounter,
 ): string[] {
   const result: string[] = [];
-  const consequence = node.namedChildren.find(
-    (ch) => ch.type === "statement_block",
-  );
+  const consequence = node.childForFieldName("consequence");
   const alternative = node.namedChildren.find(
     (ch) => ch.type === "else_clause",
   );
 
   if (consequence) {
-    const thenExits = buildCfgFromBlock(
-      consequence,
-      [branchNodeId],
-      exitId,
-      nodes,
-      edges,
-      location,
-      counter,
-    );
-    result.push(...thenExits);
-  }
-
-  if (alternative) {
-    const elseBlock = alternative.namedChildren.find(
-      (ch) => ch.type === "statement_block",
-    );
-    if (elseBlock) {
-      const elseExits = buildCfgFromBlock(
-        elseBlock,
+    if (consequence.type === "statement_block") {
+      const thenExits = buildCfgFromBlock(
+        consequence,
         [branchNodeId],
         exitId,
         nodes,
@@ -196,7 +169,52 @@ function buildIfCfg(
         location,
         counter,
       );
-      result.push(...elseExits);
+      result.push(...thenExits);
+    } else {
+      // Single-statement body (no braces)
+      const thenExits = buildCfgFromStatement(
+        consequence,
+        [branchNodeId],
+        exitId,
+        nodes,
+        edges,
+        location,
+        counter,
+      );
+      result.push(...thenExits);
+    }
+  }
+
+  if (alternative) {
+    const elseBody = alternative.childForFieldName("body")
+      ?? alternative.namedChildren.find(
+        (ch) => ch.type === "statement_block" || ch.type === "if_statement",
+      );
+    if (elseBody) {
+      if (elseBody.type === "statement_block") {
+        const elseExits = buildCfgFromBlock(
+          elseBody,
+          [branchNodeId],
+          exitId,
+          nodes,
+          edges,
+          location,
+          counter,
+        );
+        result.push(...elseExits);
+      } else {
+        // Single statement or else-if chain
+        const elseExits = buildCfgFromStatement(
+          elseBody,
+          [branchNodeId],
+          exitId,
+          nodes,
+          edges,
+          location,
+          counter,
+        );
+        result.push(...elseExits);
+      }
     }
   } else {
     result.push(branchNodeId);
@@ -285,17 +303,33 @@ function buildLoopCfg(
   location: LogicalLocation,
   counter: CfgIdCounter,
 ): string[] {
-  const body = node.namedChildren.find((ch) => ch.type === "statement_block");
+  const body = node.childForFieldName("body")
+    ?? node.namedChildren.find((ch) => ch.type === "statement_block");
+
   if (body) {
-    const bodyExits = buildCfgFromBlock(
-      body,
-      [loopNodeId],
-      exitId,
-      nodes,
-      edges,
-      location,
-      counter,
-    );
+    let bodyExits: string[];
+    if (body.type === "statement_block") {
+      bodyExits = buildCfgFromBlock(
+        body,
+        [loopNodeId],
+        exitId,
+        nodes,
+        edges,
+        location,
+        counter,
+      );
+    } else {
+      // Single-statement loop body (no braces)
+      bodyExits = buildCfgFromStatement(
+        body,
+        [loopNodeId],
+        exitId,
+        nodes,
+        edges,
+        location,
+        counter,
+      );
+    }
     // Loop back edge
     for (const bodyExit of bodyExits) {
       edges.push({ from: bodyExit, to: loopNodeId });
