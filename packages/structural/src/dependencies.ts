@@ -133,7 +133,17 @@ export function resolveImportSpecifier(
   return probeExtensions(base, knownPaths) ?? specifier;
 }
 
-const EXTENSIONS = ["", ".ts", ".tsx", ".js", ".jsx", "/index.ts", "/index.js"];
+const EXTENSIONS = [
+  "",
+  ".ts",
+  ".tsx",
+  ".js",
+  ".jsx",
+  "/index.ts",
+  "/index.tsx",
+  "/index.js",
+  "/index.jsx",
+];
 
 function probeExtensions(base: string, knownPaths: ReadonlySet<string>): string | undefined {
   for (const ext of EXTENSIONS) {

@@ -174,6 +174,9 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
         const parsed = JSON.parse(raw) as Record<string, unknown>;
         const name = parsed.name as string | undefined;
         if (name) {
+          if (packageRoots.has(name)) {
+            log(`    warning: duplicate package name "${name}" (overwriting ${packageRoots.get(name)} with ${dirname(pjFile.path)})`);
+          }
           packageRoots.set(name, dirname(pjFile.path));
         }
       } catch {

@@ -34,10 +34,10 @@ export function routeQuery(query: string): RouteDecision {
   // Extract optional "repo:NAME" prefix
   let repo: string | undefined;
   let strippedQuery = trimmed;
-  const repoMatch = trimmed.match(/^repo:(\S+)\s+(.*)/s);
+  const repoMatch = trimmed.match(/^repo:(\S+)(?:\s+(.*))?$/s);
   if (repoMatch) {
     repo = repoMatch[1]!;
-    strippedQuery = repoMatch[2]!;
+    strippedQuery = repoMatch[2] ?? "";
   }
 
   const entities = extractEntities(strippedQuery);

@@ -50,29 +50,21 @@ export async function queryCommand(
 
     case "search": {
       const result = await executeSearchQuery(decision.strippedQuery, searchStore);
-      if (repoFilter) {
-        const filtered = result.results.filter((hit) => hit.metadata?.["repo"] === repoFilter);
-        console.log(`${filtered.length} results (filtered to repo: ${repoFilter}):`);
-        for (const hit of filtered) {
-          const meta = hit.metadata ?? {};
-          const metaStr = Object.entries(meta)
-            .map(([k, v]) => `${k}=${v}`)
-            .join(" ");
-          const suffix = metaStr ? ` (${metaStr})` : "";
-          console.log(`  [${hit.score.toFixed(2)}] ${hit.id}${suffix}`);
-          console.log(`    ${hit.content.slice(0, 120)}`);
-        }
-      } else {
-        console.log(result.description);
-        for (const hit of result.results) {
-          const meta = hit.metadata ?? {};
-          const metaStr = Object.entries(meta)
-            .map(([k, v]) => `${k}=${v}`)
-            .join(" ");
-          const suffix = metaStr ? ` (${metaStr})` : "";
-          console.log(`  [${hit.score.toFixed(2)}] ${hit.id}${suffix}`);
-          console.log(`    ${hit.content.slice(0, 120)}`);
-        }
+      const hits = repoFilter
+        ? result.results.filter((hit) => hit.metadata?.["repo"] === repoFilter)
+        : result.results;
+      const header = repoFilter
+        ? `${hits.length} results (filtered to repo: ${repoFilter}):`
+        : result.description;
+      console.log(header);
+      for (const hit of hits) {
+        const meta = hit.metadata ?? {};
+        const metaStr = Object.entries(meta)
+          .map(([k, v]) => `${k}=${v}`)
+          .join(" ");
+        const suffix = metaStr ? ` (${metaStr})` : "";
+        console.log(`  [${hit.score.toFixed(2)}] ${hit.id}${suffix}`);
+        console.log(`    ${hit.content.slice(0, 120)}`);
       }
       break;
     }
