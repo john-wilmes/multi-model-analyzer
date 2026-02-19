@@ -397,7 +397,10 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
         const cfgs = new Map<string, ControlFlowGraph>();
         for (const filePath of logFiles) {
           const tree = trees.get(filePath);
-          if (!tree) continue;
+          if (!tree) {
+            log(`    warning: no tree-sitter tree for log file ${filePath} (skipping CFG build)`);
+            continue;
+          }
 
           const fnNodes = findFunctionNodes(tree.rootNode);
           for (const fnNode of fnNodes) {
@@ -479,6 +482,7 @@ function findFunctionNodes(rootNode: TreeSitterNode): FunctionNodeInfo[] {
   function walk(node: TreeSitterNode): void {
     if (
       node.type === "function_declaration" ||
+      node.type === "function_expression" ||
       node.type === "method_definition"
     ) {
       const nameNode = node.namedChildren.find(

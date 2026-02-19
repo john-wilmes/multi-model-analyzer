@@ -41,7 +41,8 @@ export function traceBackwardFromLog(
   // fullyQualifiedName is "filePath:lineNumber" -- extract the file path
   // and search for a CFG whose key starts with that path.
   const fqn = root.location.fullyQualifiedName;
-  const filePath = fqn?.split(":")[0];
+  const colonIdx = fqn?.lastIndexOf(":");
+  const filePath = colonIdx != null && colonIdx > 0 ? fqn!.slice(0, colonIdx) : undefined;
   if (!filePath) {
     return { root, steps: [], crossServiceCalls: [] };
   }
