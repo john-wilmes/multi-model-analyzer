@@ -14,6 +14,9 @@
     "build": "tsc --build",
     "type-check": "tsc --build --noEmit"
   },
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "dependencies": {
     "@mma/core": "*",
     "@mma/parsing": "*",

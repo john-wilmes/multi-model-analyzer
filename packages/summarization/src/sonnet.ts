@@ -87,6 +87,7 @@ async function callSonnet(
       max_tokens: options.maxTokens,
       messages: [{ role: "user", content: prompt }],
     }),
+    signal: AbortSignal.timeout(30_000),
   });
 
   if (!response.ok) {
@@ -106,6 +107,9 @@ export async function tier4BatchSummarize(
   options: SonnetOptions,
 ): Promise<Summary[]> {
   const results: Summary[] = [];
+  if (options.batchSize <= 0) {
+    throw new Error(`batchSize must be positive, got ${options.batchSize}`);
+  }
 
   // Process in batches to respect rate limits
   for (let i = 0; i < inputs.length; i += options.batchSize) {
