@@ -22,10 +22,10 @@ export async function executeCallersQuery(
 ): Promise<StructuralQueryResult> {
   let edges = await graphStore.getEdgesTo(target, repo);
 
-  // BM25 fallback: resolve short name to FQN
+  // BM25 fallback: resolve short name to FQN (and file path)
   if (edges.length === 0 && searchStore) {
-    const resolved = await resolveEntityViaBM25(target, searchStore, repo);
-    if (resolved) {
+    const candidates = await resolveEntityViaBM25(target, searchStore, repo);
+    for (const resolved of candidates) {
       edges = await graphStore.getEdgesTo(resolved, repo);
       if (edges.length > 0) {
         const callers = edges.map((e) => e.source);
@@ -62,10 +62,10 @@ export async function executeCalleesQuery(
 ): Promise<StructuralQueryResult> {
   let edges = await graphStore.getEdgesFrom(source, repo);
 
-  // BM25 fallback: resolve short name to FQN
+  // BM25 fallback: resolve short name to FQN (and file path)
   if (edges.length === 0 && searchStore) {
-    const resolved = await resolveEntityViaBM25(source, searchStore, repo);
-    if (resolved) {
+    const candidates = await resolveEntityViaBM25(source, searchStore, repo);
+    for (const resolved of candidates) {
       edges = await graphStore.getEdgesFrom(resolved, repo);
       if (edges.length > 0) {
         const callees = edges.map((e) => e.target);
@@ -105,10 +105,10 @@ export async function executeDependencyQuery(
     : options;
   let edges = await graphStore.traverseBFS(module, opts);
 
-  // BM25 fallback: resolve short name to FQN
+  // BM25 fallback: resolve short name to FQN (and file path)
   if (edges.length === 0 && searchStore) {
-    const resolved = await resolveEntityViaBM25(module, searchStore, opts.repo);
-    if (resolved) {
+    const candidates = await resolveEntityViaBM25(module, searchStore, opts.repo);
+    for (const resolved of candidates) {
       edges = await graphStore.traverseBFS(resolved, opts);
       if (edges.length > 0) {
         const nodes = new Set<string>();
@@ -150,12 +150,19 @@ async function resolveEntityViaBM25(
   entity: string,
   searchStore: SearchStore,
   repo?: string,
-): Promise<string | null> {
+): Promise<string[]> {
   const results = await searchStore.search(entity, repo ? 10 : 1);
-  if (results.length === 0) return null;
-  if (repo) {
-    const match = results.find((r) => r.metadata?.["repo"] === repo);
-    return match?.id ?? null;
+  if (results.length === 0) return [];
+  const hit = repo
+    ? results.find((r) => r.metadata?.["repo"] === repo)
+    : results[0];
+  if (!hit) return [];
+  // Return both the full FQN (filePath#Symbol) and just the file path,
+  // since import edges target file paths while search uses symbol FQNs.
+  const candidates = [hit.id];
+  const hashIdx = hit.id.indexOf("#");
+  if (hashIdx > 0) {
+    candidates.push(hit.id.slice(0, hashIdx));
   }
-  return results[0]!.id;
+  return candidates;
 }
