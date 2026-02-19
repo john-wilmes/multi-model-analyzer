@@ -57,4 +57,20 @@ describe("routeQuery", () => {
     expect(result.route).toBe("search");
     expect(result.strippedQuery).toBe("hello world");
   });
+
+  it("routes caller/callee/uses patterns to structural", () => {
+    expect(routeQuery("callers of UserService").route).toBe("structural");
+    expect(routeQuery("who uses AuthService").route).toBe("structural");
+    expect(routeQuery("callees of main").route).toBe("structural");
+    expect(routeQuery("show modules").route).toBe("structural");
+  });
+
+  it("routes diagnostic/warning/gap patterns to analytical", () => {
+    expect(routeQuery("show diagnostics").route).toBe("analytical");
+    expect(routeQuery("circular dependencies").route).toBe("analytical");
+    expect(routeQuery("gaps in coverage").route).toBe("analytical");
+    expect(routeQuery("missing tests").route).toBe("analytical");
+    expect(routeQuery("show warnings").route).toBe("analytical");
+    expect(routeQuery("open issues").route).toBe("analytical");
+  });
 });

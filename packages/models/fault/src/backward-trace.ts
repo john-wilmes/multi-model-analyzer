@@ -124,13 +124,9 @@ function findLogNode(
   }
 
   // Strategy 3: match by severity keywords (least precise)
+  const SEV_RE = /\.(?:error|warn|warning|log|info|debug|fatal)\s*\(/i;
   for (const node of cfg.nodes) {
-    if (
-      node.kind === "statement" &&
-      (node.label.includes("error") ||
-        node.label.includes("warn") ||
-        node.label.includes("log"))
-    ) {
+    if (node.kind === "statement" && SEV_RE.test(node.label)) {
       return node.id;
     }
   }

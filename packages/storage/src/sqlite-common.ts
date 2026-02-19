@@ -51,7 +51,8 @@ export function initSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_edges_source ON edges (source);
     CREATE INDEX IF NOT EXISTS idx_edges_target ON edges (target);
     CREATE INDEX IF NOT EXISTS idx_edges_kind ON edges (kind);
-    CREATE INDEX IF NOT EXISTS idx_edges_repo ON edges (json_extract(metadata, '$.repo'));
+    CREATE INDEX IF NOT EXISTS idx_edges_source_repo ON edges (source, json_extract(metadata, '$.repo'));
+    CREATE INDEX IF NOT EXISTS idx_edges_target_repo ON edges (target, json_extract(metadata, '$.repo'));
 
     -- KVStore
     CREATE TABLE IF NOT EXISTS kv (

@@ -1,10 +1,11 @@
 export {
   extractCallGraph,
+  extractCallEdgesFromTreeSitter,
   findCallers,
   findCallees,
   getTransitiveDependencies,
 } from "./callgraph.js";
-export type { CallGraphOptions } from "./callgraph.js";
+export type { CallGraphOptions, TsNode } from "./callgraph.js";
 
 export {
   extractDependencyGraph,
