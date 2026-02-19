@@ -308,5 +308,38 @@ for (const makeFactory of factories) {
       const results = await store.search("anything");
       expect(results).toHaveLength(0);
     });
+
+    it("re-indexes same doc ID without stale tokens", async () => {
+      await store.index([
+        { id: "doc1", content: "alpha beta gamma", metadata: { repo: "r1" } },
+      ]);
+      // Re-index with different content
+      await store.index([
+        { id: "doc1", content: "delta epsilon zeta", metadata: { repo: "r1" } },
+      ]);
+
+      // Old tokens should not match
+      const oldResults = await store.search("alpha");
+      expect(oldResults).toHaveLength(0);
+
+      // New tokens should match
+      const newResults = await store.search("delta");
+      expect(newResults).toHaveLength(1);
+      expect(newResults[0]!.id).toBe("doc1");
+    });
+
+    it("clears documents by repo", async () => {
+      await store.index([
+        { id: "r1-1", content: "hello world", metadata: { repo: "repo-a" } },
+        { id: "r1-2", content: "hello earth", metadata: { repo: "repo-a" } },
+        { id: "r2-1", content: "hello mars", metadata: { repo: "repo-b" } },
+      ]);
+
+      await store.clear("repo-a");
+
+      const results = await store.search("hello");
+      expect(results).toHaveLength(1);
+      expect(results[0]!.id).toBe("r2-1");
+    });
   });
 }

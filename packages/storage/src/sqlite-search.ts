@@ -18,6 +18,7 @@ export class SqliteSearchStore implements SearchStore {
   private readonly stmtSearch: Database.Statement;
   private readonly stmtClearDocs: Database.Statement;
   private readonly stmtClearFts: Database.Statement;
+  private readonly stmtFindByRepo: Database.Statement;
 
   private readonly insertManyTx: Database.Transaction<
     (docs: readonly SearchDocument[]) => void
@@ -47,9 +48,14 @@ export class SqliteSearchStore implements SearchStore {
     `);
     this.stmtClearDocs = db.prepare("DELETE FROM search_docs");
     this.stmtClearFts = db.prepare("DELETE FROM search_fts");
+    this.stmtFindByRepo = db.prepare(
+      "SELECT id FROM search_docs WHERE json_extract(metadata, '$.repo') = ?",
+    );
 
     this.insertManyTx = db.transaction((docs: readonly SearchDocument[]) => {
       for (const doc of docs) {
+        // Delete old FTS entry first to avoid stale tokens
+        this.stmtDeleteFts.run(doc.id);
         const meta = JSON.stringify(doc.metadata);
         this.stmtInsertDoc.run(doc.id, doc.content, meta);
         this.stmtInsertFts.run(doc.id, doc.content);
@@ -93,7 +99,14 @@ export class SqliteSearchStore implements SearchStore {
     this.deleteManyTx(ids);
   }
 
-  async clear(): Promise<void> {
+  async clear(repo?: string): Promise<void> {
+    if (repo) {
+      const rows = this.stmtFindByRepo.all(repo) as Array<{ id: string }>;
+      if (rows.length > 0) {
+        await this.delete(rows.map((r) => r.id));
+      }
+      return;
+    }
     this.stmtClearFts.run();
     this.stmtClearDocs.run();
   }
