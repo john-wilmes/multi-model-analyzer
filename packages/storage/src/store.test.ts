@@ -162,6 +162,72 @@ for (const makeFactory of factories) {
       const edges = await store.getEdgesFrom("a");
       expect(edges).toHaveLength(0);
     });
+
+    it("traverseBFS with repo filter returns only matching edges", async () => {
+      await store.addEdges([
+        { source: "a", target: "b", kind: "imports", metadata: { repo: "r1" } },
+        { source: "a", target: "c", kind: "imports", metadata: { repo: "r2" } },
+        { source: "b", target: "d", kind: "imports", metadata: { repo: "r1" } },
+        { source: "c", target: "e", kind: "imports", metadata: { repo: "r2" } },
+      ]);
+
+      const r1Edges = await store.traverseBFS("a", { maxDepth: 3, repo: "r1" });
+      const r1Targets = r1Edges.map((e) => e.target);
+      expect(r1Targets).toContain("b");
+      expect(r1Targets).toContain("d");
+      expect(r1Targets).not.toContain("c");
+      expect(r1Targets).not.toContain("e");
+    });
+
+    it("traverseBFS without repo filter returns all edges", async () => {
+      await store.addEdges([
+        { source: "a", target: "b", kind: "imports", metadata: { repo: "r1" } },
+        { source: "a", target: "c", kind: "imports", metadata: { repo: "r2" } },
+      ]);
+
+      const allEdges = await store.traverseBFS("a", { maxDepth: 1 });
+      expect(allEdges).toHaveLength(2);
+    });
+
+    it("getEdgesFrom with repo filter", async () => {
+      await store.addEdges([
+        { source: "a", target: "b", kind: "calls", metadata: { repo: "r1" } },
+        { source: "a", target: "c", kind: "calls", metadata: { repo: "r2" } },
+      ]);
+
+      const r1Edges = await store.getEdgesFrom("a", "r1");
+      expect(r1Edges).toHaveLength(1);
+      expect(r1Edges[0]!.target).toBe("b");
+    });
+
+    it("getEdgesTo with repo filter", async () => {
+      await store.addEdges([
+        { source: "x", target: "z", kind: "calls", metadata: { repo: "r1" } },
+        { source: "y", target: "z", kind: "calls", metadata: { repo: "r2" } },
+      ]);
+
+      const r2Edges = await store.getEdgesTo("z", "r2");
+      expect(r2Edges).toHaveLength(1);
+      expect(r2Edges[0]!.source).toBe("y");
+    });
+
+    it("clear(repo) only removes edges for that repo", async () => {
+      await store.addEdges([
+        { source: "a", target: "b", kind: "imports", metadata: { repo: "r1" } },
+        { source: "c", target: "d", kind: "imports", metadata: { repo: "r1" } },
+        { source: "e", target: "f", kind: "imports", metadata: { repo: "r2" } },
+      ]);
+
+      await store.clear("r1");
+
+      const r1From = await store.getEdgesFrom("a");
+      const r1From2 = await store.getEdgesFrom("c");
+      const r2From = await store.getEdgesFrom("e");
+
+      expect(r1From).toHaveLength(0);
+      expect(r1From2).toHaveLength(0);
+      expect(r2From).toHaveLength(1);
+    });
   });
 
   describe(`KVStore (${factory.name})`, () => {

@@ -1,4 +1,4 @@
-export type { GraphStore, GraphStoreOptions } from "./graph.js";
+export type { GraphStore, GraphStoreOptions, TraversalOptions } from "./graph.js";
 export { InMemoryGraphStore } from "./graph.js";
 
 export type { SearchDocument, SearchResult, SearchStore } from "./search.js";

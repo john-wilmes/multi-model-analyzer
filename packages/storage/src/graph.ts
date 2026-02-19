@@ -9,12 +9,17 @@
 
 import type { GraphEdge, EdgeKind } from "@mma/core";
 
+export interface TraversalOptions {
+  readonly maxDepth: number;
+  readonly repo?: string;
+}
+
 export interface GraphStore {
   addEdges(edges: readonly GraphEdge[]): Promise<void>;
-  getEdgesFrom(source: string): Promise<GraphEdge[]>;
-  getEdgesTo(target: string): Promise<GraphEdge[]>;
+  getEdgesFrom(source: string, repo?: string): Promise<GraphEdge[]>;
+  getEdgesTo(target: string, repo?: string): Promise<GraphEdge[]>;
   getEdgesByKind(kind: EdgeKind): Promise<GraphEdge[]>;
-  traverseBFS(start: string, maxDepth: number): Promise<GraphEdge[]>;
+  traverseBFS(start: string, options: number | TraversalOptions): Promise<GraphEdge[]>;
   clear(repo?: string): Promise<void>;
   close(): Promise<void>;
 }
@@ -34,19 +39,26 @@ export class InMemoryGraphStore implements GraphStore {
     this.edges.push(...edges);
   }
 
-  async getEdgesFrom(source: string): Promise<GraphEdge[]> {
-    return this.edges.filter((e) => e.source === source);
+  async getEdgesFrom(source: string, repo?: string): Promise<GraphEdge[]> {
+    return this.edges.filter((e) =>
+      e.source === source && (!repo || e.metadata?.["repo"] === repo),
+    );
   }
 
-  async getEdgesTo(target: string): Promise<GraphEdge[]> {
-    return this.edges.filter((e) => e.target === target);
+  async getEdgesTo(target: string, repo?: string): Promise<GraphEdge[]> {
+    return this.edges.filter((e) =>
+      e.target === target && (!repo || e.metadata?.["repo"] === repo),
+    );
   }
 
   async getEdgesByKind(kind: EdgeKind): Promise<GraphEdge[]> {
     return this.edges.filter((e) => e.kind === kind);
   }
 
-  async traverseBFS(start: string, maxDepth: number): Promise<GraphEdge[]> {
+  async traverseBFS(start: string, options: number | TraversalOptions): Promise<GraphEdge[]> {
+    const { maxDepth, repo } = typeof options === "number"
+      ? { maxDepth: options, repo: undefined }
+      : options;
     const visited = new Set<string>();
     const result: GraphEdge[] = [];
     const queue: Array<{ node: string; depth: number }> = [
@@ -58,7 +70,9 @@ export class InMemoryGraphStore implements GraphStore {
       if (visited.has(current.node) || current.depth > maxDepth) continue;
       visited.add(current.node);
 
-      const outEdges = this.edges.filter((e) => e.source === current.node);
+      const outEdges = this.edges.filter((e) =>
+        e.source === current.node && (!repo || e.metadata?.["repo"] === repo),
+      );
       for (const edge of outEdges) {
         result.push(edge);
         if (!visited.has(edge.target)) {

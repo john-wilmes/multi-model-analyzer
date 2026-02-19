@@ -7,12 +7,14 @@
 
 import type Database from "better-sqlite3";
 import type { GraphEdge, EdgeKind } from "@mma/core";
-import type { GraphStore } from "./graph.js";
+import type { GraphStore, TraversalOptions } from "./graph.js";
 
 export class SqliteGraphStore implements GraphStore {
   private readonly stmtInsert: Database.Statement;
   private readonly stmtBySource: Database.Statement;
+  private readonly stmtBySourceAndRepo: Database.Statement;
   private readonly stmtByTarget: Database.Statement;
+  private readonly stmtByTargetAndRepo: Database.Statement;
   private readonly stmtByKind: Database.Statement;
   private readonly stmtClearAll: Database.Statement;
   private readonly stmtClearRepo: Database.Statement;
@@ -27,8 +29,14 @@ export class SqliteGraphStore implements GraphStore {
     this.stmtBySource = db.prepare(
       "SELECT source, target, kind, metadata FROM edges WHERE source = ?",
     );
+    this.stmtBySourceAndRepo = db.prepare(
+      "SELECT source, target, kind, metadata FROM edges WHERE source = ? AND json_extract(metadata, '$.repo') = ?",
+    );
     this.stmtByTarget = db.prepare(
       "SELECT source, target, kind, metadata FROM edges WHERE target = ?",
+    );
+    this.stmtByTargetAndRepo = db.prepare(
+      "SELECT source, target, kind, metadata FROM edges WHERE target = ? AND json_extract(metadata, '$.repo') = ?",
     );
     this.stmtByKind = db.prepare(
       "SELECT source, target, kind, metadata FROM edges WHERE kind = ?",
@@ -51,13 +59,17 @@ export class SqliteGraphStore implements GraphStore {
     this.insertMany(edges);
   }
 
-  async getEdgesFrom(source: string): Promise<GraphEdge[]> {
-    const rows = this.stmtBySource.all(source) as RawEdgeRow[];
+  async getEdgesFrom(source: string, repo?: string): Promise<GraphEdge[]> {
+    const rows = repo
+      ? this.stmtBySourceAndRepo.all(source, repo) as RawEdgeRow[]
+      : this.stmtBySource.all(source) as RawEdgeRow[];
     return rows.map(toGraphEdge);
   }
 
-  async getEdgesTo(target: string): Promise<GraphEdge[]> {
-    const rows = this.stmtByTarget.all(target) as RawEdgeRow[];
+  async getEdgesTo(target: string, repo?: string): Promise<GraphEdge[]> {
+    const rows = repo
+      ? this.stmtByTargetAndRepo.all(target, repo) as RawEdgeRow[]
+      : this.stmtByTarget.all(target) as RawEdgeRow[];
     return rows.map(toGraphEdge);
   }
 
@@ -66,7 +78,10 @@ export class SqliteGraphStore implements GraphStore {
     return rows.map(toGraphEdge);
   }
 
-  async traverseBFS(start: string, maxDepth: number): Promise<GraphEdge[]> {
+  async traverseBFS(start: string, options: number | TraversalOptions): Promise<GraphEdge[]> {
+    const { maxDepth, repo } = typeof options === "number"
+      ? { maxDepth: options, repo: undefined }
+      : options;
     const visited = new Set<string>();
     const result: GraphEdge[] = [];
     const queue: Array<{ node: string; depth: number }> = [
@@ -78,7 +93,9 @@ export class SqliteGraphStore implements GraphStore {
       if (visited.has(current.node) || current.depth > maxDepth) continue;
       visited.add(current.node);
 
-      const rows = this.stmtBySource.all(current.node) as RawEdgeRow[];
+      const rows = repo
+        ? this.stmtBySourceAndRepo.all(current.node, repo) as RawEdgeRow[]
+        : this.stmtBySource.all(current.node) as RawEdgeRow[];
       for (const row of rows) {
         const edge = toGraphEdge(row);
         result.push(edge);
