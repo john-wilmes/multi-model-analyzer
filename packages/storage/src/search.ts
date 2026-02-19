@@ -24,7 +24,7 @@ export interface SearchStore {
   index(documents: readonly SearchDocument[]): Promise<void>;
   search(query: string, limit?: number): Promise<SearchResult[]>;
   delete(ids: readonly string[]): Promise<void>;
-  clear(): Promise<void>;
+  clear(repo?: string): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -44,6 +44,15 @@ export class InMemorySearchStore implements SearchStore {
 
   async index(documents: readonly SearchDocument[]): Promise<void> {
     for (const doc of documents) {
+      // Remove old inverted index entries before re-indexing
+      const existing = this.documents.get(doc.id);
+      if (existing) {
+        const oldTokens = tokenize(existing.content);
+        for (const token of oldTokens) {
+          this.invertedIndex.get(token)?.delete(doc.id);
+        }
+      }
+
       this.documents.set(doc.id, doc);
       const tokens = tokenize(doc.content);
       this.docLengths.set(doc.id, tokens.length);
@@ -106,7 +115,17 @@ export class InMemorySearchStore implements SearchStore {
     this.updateAvgDocLength();
   }
 
-  async clear(): Promise<void> {
+  async clear(repo?: string): Promise<void> {
+    if (repo) {
+      const idsToRemove: string[] = [];
+      for (const [id, doc] of this.documents) {
+        if (doc.metadata.repo === repo) {
+          idsToRemove.push(id);
+        }
+      }
+      await this.delete(idsToRemove);
+      return;
+    }
     this.documents.clear();
     this.invertedIndex.clear();
     this.docLengths.clear();
