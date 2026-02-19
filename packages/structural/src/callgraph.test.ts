@@ -48,7 +48,7 @@ class MyClass {
     );
 
     expect(edges).toHaveLength(1);
-    expect(edges[0]!.source).toBe("test.ts#foo");
+    expect(edges[0]!.source).toBe("test.ts#MyClass.foo");
     expect(edges[0]!.target).toBe("test.ts#MyClass.bar");
   });
 

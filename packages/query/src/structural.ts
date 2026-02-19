@@ -42,7 +42,7 @@ export async function executeCallersQuery(
     return {
       edges: [],
       nodes: [],
-      description: `No matches found for "${target}". Try a fully qualified name like file.ts#ClassName.${repo ? ` (repo: ${repo})` : ""}`,
+      description: `No matches found for "${target}". Try a fully qualified name like file.ts#ClassName${repo ? ` (repo: ${repo})` : ""}.`,
     };
   }
 
@@ -82,7 +82,7 @@ export async function executeCalleesQuery(
     return {
       edges: [],
       nodes: [],
-      description: `No matches found for "${source}". Try a fully qualified name like file.ts#ClassName.${repo ? ` (repo: ${repo})` : ""}`,
+      description: `No matches found for "${source}". Try a fully qualified name like file.ts#ClassName${repo ? ` (repo: ${repo})` : ""}.`,
     };
   }
 
@@ -129,7 +129,7 @@ export async function executeDependencyQuery(
     return {
       edges: [],
       nodes: [],
-      description: `No matches found for "${module}". Try a fully qualified name like file.ts#ClassName.${opts.repo ? ` (repo: ${opts.repo})` : ""}`,
+      description: `No matches found for "${module}". Try a fully qualified name like file.ts#ClassName${opts.repo ? ` (repo: ${opts.repo})` : ""}.`,
     };
   }
 

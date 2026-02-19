@@ -172,7 +172,9 @@ function collectCallEdges(
   className: string | undefined,
   edges: GraphEdge[],
 ): void {
-  const source = `${filePath}#${callerName}`;
+  const source = className
+    ? `${filePath}#${className}.${callerName}`
+    : `${filePath}#${callerName}`;
 
   function walk(node: TsNode): void {
     if (node.type === "call_expression") {
