@@ -228,6 +228,27 @@ for (const makeFactory of factories) {
       await store.clear();
       expect(await store.keys()).toHaveLength(0);
     });
+
+    it("deletes by prefix", async () => {
+      await store.set("repo:a:file1", "1");
+      await store.set("repo:a:file2", "2");
+      await store.set("repo:b:file1", "3");
+      await store.set("other:x", "4");
+
+      const count = await store.deleteByPrefix("repo:a:");
+      expect(count).toBe(2);
+      expect(await store.get("repo:a:file1")).toBeUndefined();
+      expect(await store.get("repo:a:file2")).toBeUndefined();
+      expect(await store.get("repo:b:file1")).toBe("3");
+      expect(await store.get("other:x")).toBe("4");
+    });
+
+    it("deleteByPrefix returns 0 for no matches", async () => {
+      await store.set("a", "1");
+      const count = await store.deleteByPrefix("zzz:");
+      expect(count).toBe(0);
+      expect(await store.get("a")).toBe("1");
+    });
   });
 
   describe(`SearchStore (${factory.name})`, () => {

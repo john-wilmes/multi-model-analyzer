@@ -11,6 +11,7 @@ export interface KVStore {
   get(key: string): Promise<string | undefined>;
   set(key: string, value: string): Promise<void>;
   delete(key: string): Promise<void>;
+  deleteByPrefix(prefix: string): Promise<number>;
   has(key: string): Promise<boolean>;
   keys(prefix?: string): Promise<string[]>;
   clear(): Promise<void>;
@@ -34,6 +35,17 @@ export class InMemoryKVStore implements KVStore {
 
   async delete(key: string): Promise<void> {
     this.store.delete(key);
+  }
+
+  async deleteByPrefix(prefix: string): Promise<number> {
+    let count = 0;
+    for (const key of [...this.store.keys()]) {
+      if (key.startsWith(prefix)) {
+        this.store.delete(key);
+        count++;
+      }
+    }
+    return count;
   }
 
   async has(key: string): Promise<boolean> {

@@ -16,6 +16,7 @@ export class SqliteKVStore implements KVStore {
   private readonly stmtKeysAll: Database.Statement;
   private readonly stmtKeysPrefix: Database.Statement;
   private readonly stmtClear: Database.Statement;
+  private readonly stmtDeleteByPrefix: Database.Statement;
 
   constructor(db: Database.Database) {
     this.stmtGet = db.prepare("SELECT value FROM kv WHERE key = ?");
@@ -29,6 +30,9 @@ export class SqliteKVStore implements KVStore {
       "SELECT key FROM kv WHERE key >= ? AND key < ? ORDER BY key",
     );
     this.stmtClear = db.prepare("DELETE FROM kv");
+    this.stmtDeleteByPrefix = db.prepare(
+      "DELETE FROM kv WHERE key >= ? AND key < ?",
+    );
   }
 
   async get(key: string): Promise<string | undefined> {
@@ -46,6 +50,12 @@ export class SqliteKVStore implements KVStore {
 
   async has(key: string): Promise<boolean> {
     return this.stmtHas.get(key) !== undefined;
+  }
+
+  async deleteByPrefix(prefix: string): Promise<number> {
+    const upper = prefix.slice(0, -1) + String.fromCharCode(prefix.charCodeAt(prefix.length - 1) + 1);
+    const result = this.stmtDeleteByPrefix.run(prefix, upper);
+    return result.changes;
   }
 
   async keys(prefix?: string): Promise<string[]> {
