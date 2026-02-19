@@ -37,6 +37,18 @@ describe("structural queries", () => {
       expect(result.description).toContain("resolved from");
     });
 
+    it("resolves via file path when FQN has no edges but file does", async () => {
+      // Simulate import edges targeting file paths (not FQN with #symbol)
+      await graphStore.addEdges([
+        { source: "src/app.ts", target: "src/user.service.ts", kind: "imports", metadata: { repo: "myrepo" } },
+      ]);
+      // Search still returns the FQN with #symbol
+      const result = await executeCallersQuery("UserService", graphStore, undefined, searchStore);
+      // Should find edges via the file path fallback (src/user.service.ts)
+      expect(result.edges.length).toBeGreaterThanOrEqual(1);
+      expect(result.description).toContain("resolved from");
+    });
+
     it("returns helpful hint when no match in graph or search", async () => {
       const result = await executeCallersQuery("NonExistent", graphStore, undefined, searchStore);
       expect(result.edges).toHaveLength(0);

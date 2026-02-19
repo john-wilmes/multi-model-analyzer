@@ -7,7 +7,7 @@
 
 import { routeQuery } from "@mma/query";
 import { executeSearchQuery } from "@mma/query";
-import { executeCallersQuery, executeDependencyQuery } from "@mma/query";
+import { executeCallersQuery, executeCalleesQuery, executeDependencyQuery } from "@mma/query";
 import type { GraphStore, SearchStore, KVStore } from "@mma/storage";
 
 export interface QueryOptions {
@@ -35,9 +35,14 @@ export async function queryCommand(
     case "structural": {
       if (decision.extractedEntities.length > 0) {
         const entity = decision.extractedEntities[0]!;
-        const result = decision.strippedQuery.toLowerCase().includes("depend")
+        const q = decision.strippedQuery.toLowerCase();
+        const isCallees = /\bcallees?\b/.test(q) || /\bwhat does .+ call\b/.test(q);
+        const isDeps = q.includes("depend");
+        const result = isDeps
           ? await executeDependencyQuery(entity, graphStore, repoFilter ? { maxDepth: 3, repo: repoFilter } : 3, searchStore)
-          : await executeCallersQuery(entity, graphStore, repoFilter, searchStore);
+          : isCallees
+            ? await executeCalleesQuery(entity, graphStore, repoFilter, searchStore)
+            : await executeCallersQuery(entity, graphStore, repoFilter, searchStore);
         console.log(result.description);
         for (const edge of result.edges) {
           console.log(`  ${edge.source} -> ${edge.target} [${edge.kind}]`);
@@ -88,21 +93,35 @@ export async function queryCommand(
           "that", "this", "these", "those", "it", "its",
           "in", "on", "at", "to", "for", "of", "with", "by", "from",
           "and", "or", "not", "no", "but", "if", "then", "so",
-          "about", "any", "all", "some", "there", "my", "me",
+          "about", "any", "all", "some", "there", "my", "me", "show",
         ]);
         const keywords = decision.strippedQuery.toLowerCase()
           .split(/\s+/)
           .filter((w) => w.length > 1 && !stopWords.has(w));
         const entities = decision.extractedEntities;
 
+        // Category-level filters: map natural language terms to SARIF properties
+        const broadTerms = /^(?:diagnostics?|issues?|findings?|results?|problems?|circular)$/;
+        const isBroadQuery = keywords.some((kw) => broadTerms.test(kw));
+        const categoryLevelFilter = isBroadQuery ? null : resolveCategoryFilter(keywords);
+        const categoryRuleFilter = isBroadQuery ? null : resolveCategoryRuleFilter(keywords);
+
         const matching = sarif.runs.flatMap((r) =>
           r.results.filter((res) => {
-            // Repo filter: check ruleId prefix or location FQN for repo name
+            // Repo filter: check location properties for repo name
             if (repoFilter) {
-              const ruleText = res.ruleId ?? "";
-              const fqn = res.locations?.[0]?.logicalLocations?.[0]?.fullyQualifiedName ?? "";
-              if (!ruleText.includes(repoFilter) && !fqn.includes(repoFilter)) return false;
+              const locRepo = res.locations?.[0]?.logicalLocations?.[0]?.properties?.["repo"];
+              if (locRepo !== repoFilter) return false;
             }
+            // Broad terms (diagnostics/issues/findings) -> return all results
+            if (isBroadQuery) return true;
+            // Category-level filter (e.g., "warnings" -> level="warning")
+            if (categoryLevelFilter && res.level !== categoryLevelFilter) return false;
+            // Category-rule filter (e.g., "faults" -> ruleId starts with "fault/")
+            if (categoryRuleFilter && !res.ruleId?.startsWith(categoryRuleFilter)) return false;
+            // If we have a category filter, include all matching results
+            if (categoryLevelFilter || categoryRuleFilter) return true;
+
             const text = `${res.ruleId} ${res.message.text}`.toLowerCase();
             // Match if any entity appears in the message
             if (entities.some((e) => text.includes(e.toLowerCase()))) return true;
@@ -130,4 +149,23 @@ export async function queryCommand(
       break;
     }
   }
+}
+
+/** Map natural language terms to SARIF result levels. */
+function resolveCategoryFilter(keywords: string[]): string | null {
+  for (const kw of keywords) {
+    if (/^warnings?$/.test(kw)) return "warning";
+    if (/^errors?$/.test(kw)) return "error";
+    if (/^notes?$/.test(kw)) return "note";
+  }
+  return null;
+}
+
+/** Map natural language terms to SARIF ruleId prefixes. */
+function resolveCategoryRuleFilter(keywords: string[]): string | null {
+  for (const kw of keywords) {
+    if (/^(?:faults?|unhandled|gaps?|missing)$/.test(kw)) return "fault/";
+    if (/^(?:configs?|flags?|interactions?|untested)$/.test(kw)) return "config/";
+  }
+  return null;
 }
