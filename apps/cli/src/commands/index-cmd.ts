@@ -11,6 +11,7 @@ import type {
   RepoConfig,
   ChangeSet,
   DependencyGraph,
+  GraphEdge,
   ParsedFile,
   InferredService,
   DetectedPattern,
@@ -25,7 +26,7 @@ import type {
 import { detectChanges, classifyFiles } from "@mma/ingestion";
 import { parseFiles } from "@mma/parsing";
 import type { TreeSitterTree } from "@mma/parsing";
-import { extractDependencyGraph, buildControlFlowGraph, createCfgIdCounter } from "@mma/structural";
+import { extractDependencyGraph, buildControlFlowGraph, createCfgIdCounter, extractCallEdgesFromTreeSitter } from "@mma/structural";
 import type { TreeSitterNode } from "@mma/parsing";
 import { buildFeatureModel, extractConstraintsFromCode, validateFeatureModel } from "@mma/model-config";
 import { identifyLogRoots, traceBackwardFromLog, buildFaultTree, analyzeGaps } from "@mma/model-fault";
@@ -218,6 +219,36 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
       }
     } catch (error) {
       console.error(`  Failed to extract dependency graph for ${repo.name}:`, error);
+    }
+  }
+
+  // Phase 4b: Call graph extraction from tree-sitter
+  log("Phase 4b: Extracting call graphs...");
+  for (const repo of repos) {
+    const trees = treesByRepo.get(repo.name);
+    if (!trees || trees.size === 0) continue;
+
+    try {
+      const start = performance.now();
+      const callEdges: GraphEdge[] = [];
+
+      for (const [filePath, tree] of trees) {
+        const edges = extractCallEdgesFromTreeSitter(
+          tree.rootNode as import("@mma/structural").TsNode,
+          filePath,
+          repo.name,
+        );
+        callEdges.push(...edges);
+      }
+
+      if (callEdges.length > 0) {
+        await options.graphStore.addEdges(callEdges);
+      }
+
+      const elapsed = Math.round(performance.now() - start);
+      log(`  ${repo.name}: ${callEdges.length} call edges (${elapsed}ms)`);
+    } catch (error) {
+      console.error(`  Failed to extract call graph for ${repo.name}:`, error);
     }
   }
 
@@ -506,8 +537,14 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
           }
         }
 
-        // Empty call graph for POC (intra-function tracing still works)
-        const emptyCallGraph: CallGraph = { repo: repo.name, edges: [], nodeCount: 0 };
+        // Use real call edges from graph store if available
+        const allCallEdges = await options.graphStore.getEdgesByKind("calls");
+        const repoCallEdges = allCallEdges.filter(e => e.metadata?.["repo"] === repo.name);
+        const callGraph: CallGraph = {
+          repo: repo.name,
+          edges: repoCallEdges,
+          nodeCount: new Set(repoCallEdges.flatMap(e => [e.source, e.target])).size,
+        };
 
         const faultTrees = [];
         // Limit tracing for POC performance; full-scale tracing requires call graph
@@ -515,7 +552,7 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
         const tracedRoots = logRoots.slice(0, MAX_TRACED_ROOTS);
         let emptyTraces = 0;
         for (const root of tracedRoots) {
-          const trace = traceBackwardFromLog(root, cfgs, emptyCallGraph);
+          const trace = traceBackwardFromLog(root, cfgs, callGraph);
           if (trace.steps.length > 0) {
             faultTrees.push(buildFaultTree(trace, repo.name));
           } else {

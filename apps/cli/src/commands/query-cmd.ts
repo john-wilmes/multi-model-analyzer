@@ -36,8 +36,8 @@ export async function queryCommand(
       if (decision.extractedEntities.length > 0) {
         const entity = decision.extractedEntities[0]!;
         const result = decision.strippedQuery.toLowerCase().includes("depend")
-          ? await executeDependencyQuery(entity, graphStore, repoFilter ? { maxDepth: 3, repo: repoFilter } : 3)
-          : await executeCallersQuery(entity, graphStore, repoFilter);
+          ? await executeDependencyQuery(entity, graphStore, repoFilter ? { maxDepth: 3, repo: repoFilter } : 3, searchStore)
+          : await executeCallersQuery(entity, graphStore, repoFilter, searchStore);
         console.log(result.description);
         for (const edge of result.edges) {
           console.log(`  ${edge.source} -> ${edge.target} [${edge.kind}]`);

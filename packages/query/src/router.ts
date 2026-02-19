@@ -44,12 +44,12 @@ export function routeQuery(query: string): RouteDecision {
   const normalized = strippedQuery.toLowerCase().trim();
 
   // Structural patterns
-  if (/\b(call[s]?|depend[s]?|import[s]?|extend[s]?|implement[s]?|reference[s]?|definition)\b/.test(normalized)) {
+  if (/\b(calls?|depends?|imports?|extends?|implements?|references?|definition|callers?|callees?|uses|used|modules?|files?)\b/.test(normalized)) {
     return { route: "structural", confidence: 0.9, extractedEntities: entities, repo, strippedQuery };
   }
 
   // Analytical patterns
-  if (/\b(risk[s]?|fault[s]?|error[s]?|failure[s]?|dead|unused|orphan|violation[s]?|flag[s]?|config)\b/.test(normalized)) {
+  if (/\b(risks?|faults?|errors?|failures?|dead|unused|orphan|violations?|flags?|config|diagnostics?|warnings?|issues?|gaps?|missing|circular)\b/.test(normalized)) {
     return { route: "analytical", confidence: 0.85, extractedEntities: entities, repo, strippedQuery };
   }
 

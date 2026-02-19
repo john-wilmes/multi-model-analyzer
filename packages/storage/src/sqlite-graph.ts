@@ -18,6 +18,8 @@ export class SqliteGraphStore implements GraphStore {
   private readonly stmtByKind: Database.Statement;
   private readonly stmtClearAll: Database.Statement;
   private readonly stmtClearRepo: Database.Statement;
+  private readonly stmtBfsNoRepo: Database.Statement;
+  private readonly stmtBfsWithRepo: Database.Statement;
   private readonly insertMany: Database.Transaction<
     (edges: readonly GraphEdge[]) => void
   >;
@@ -45,6 +47,42 @@ export class SqliteGraphStore implements GraphStore {
     this.stmtClearRepo = db.prepare(
       "DELETE FROM edges WHERE json_extract(metadata, '$.repo') = ?",
     );
+
+    // Recursive CTE for BFS traversal without repo filter
+    // Params: (start, maxDepth, maxDepth)
+    this.stmtBfsNoRepo = db.prepare(`
+      WITH RECURSIVE bfs(node, depth) AS (
+        VALUES (?, 0)
+        UNION
+        SELECT e.target, bfs.depth + 1
+        FROM edges e
+        JOIN bfs ON e.source = bfs.node
+        WHERE bfs.depth < ?
+      )
+      SELECT DISTINCT e.source, e.target, e.kind, e.metadata
+      FROM edges e
+      JOIN bfs ON e.source = bfs.node
+      WHERE bfs.depth <= ?
+    `);
+
+    // Recursive CTE for BFS traversal with repo filter
+    // Params: (start, maxDepth, repoName, maxDepth, repoName)
+    this.stmtBfsWithRepo = db.prepare(`
+      WITH RECURSIVE bfs(node, depth) AS (
+        VALUES (?, 0)
+        UNION
+        SELECT e.target, bfs.depth + 1
+        FROM edges e
+        JOIN bfs ON e.source = bfs.node
+        WHERE bfs.depth < ?
+          AND json_extract(e.metadata, '$.repo') = ?
+      )
+      SELECT DISTINCT e.source, e.target, e.kind, e.metadata
+      FROM edges e
+      JOIN bfs ON e.source = bfs.node
+      WHERE bfs.depth <= ?
+        AND json_extract(e.metadata, '$.repo') = ?
+    `);
 
     this.insertMany = db.transaction((edges: readonly GraphEdge[]) => {
       for (const edge of edges) {
@@ -82,26 +120,20 @@ export class SqliteGraphStore implements GraphStore {
     const { maxDepth, repo } = typeof options === "number"
       ? { maxDepth: options, repo: undefined }
       : options;
-    const visited = new Set<string>();
+
+    const rows = repo
+      ? this.stmtBfsWithRepo.all(start, maxDepth, repo, maxDepth, repo) as RawEdgeRow[]
+      : this.stmtBfsNoRepo.all(start, maxDepth, maxDepth) as RawEdgeRow[];
+
+    // Deduplicate edges by (source, target, kind) since the CTE UNION deduplicates
+    // nodes by (node, depth) but the same edge can appear from different depth paths
+    const seen = new Set<string>();
     const result: GraphEdge[] = [];
-    const queue: Array<{ node: string; depth: number }> = [
-      { node: start, depth: 0 },
-    ];
-
-    while (queue.length > 0) {
-      const current = queue.shift()!;
-      if (visited.has(current.node) || current.depth > maxDepth) continue;
-      visited.add(current.node);
-
-      const rows = repo
-        ? this.stmtBySourceAndRepo.all(current.node, repo) as RawEdgeRow[]
-        : this.stmtBySource.all(current.node) as RawEdgeRow[];
-      for (const row of rows) {
-        const edge = toGraphEdge(row);
-        result.push(edge);
-        if (!visited.has(edge.target)) {
-          queue.push({ node: edge.target, depth: current.depth + 1 });
-        }
+    for (const row of rows) {
+      const key = `${row.source}\0${row.target}\0${row.kind}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        result.push(toGraphEdge(row));
       }
     }
 
