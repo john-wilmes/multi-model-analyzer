@@ -234,6 +234,76 @@ function process(data: any): void {
   });
 });
 
+describe("tree-sitter -> CFG throw statement", () => {
+  it("produces exactly one throw node (no duplicate)", () => {
+    const source = `
+function bail(): never {
+  throw new Error("fatal");
+}
+`;
+    const tree = parseSource(source, "bail.ts");
+    const fnNode = tree.rootNode.namedChildren.find(
+      (c) => c.type === "function_declaration",
+    )!;
+
+    const counter = createCfgIdCounter();
+    const cfg = buildControlFlowGraph(fnNode, "bail.ts#bail", "test-repo", "bail.ts", counter);
+
+    const throwNodes = cfg.nodes.filter((n) => n.kind === "throw");
+    expect(throwNodes).toHaveLength(1);
+  });
+});
+
+describe("tree-sitter -> CFG single-statement bodies", () => {
+  it("handles if with single-statement body (no braces)", () => {
+    const source = `
+function check(x: number): string {
+  if (x > 0) return "positive";
+  return "non-positive";
+}
+`;
+    const tree = parseSource(source, "check2.ts");
+    const fnNode = tree.rootNode.namedChildren.find(
+      (c) => c.type === "function_declaration",
+    )!;
+
+    const counter = createCfgIdCounter();
+    const cfg = buildControlFlowGraph(fnNode, "check2.ts#check", "test-repo", "check2.ts", counter);
+
+    // Should have a return node inside the if branch
+    const returnNodes = cfg.nodes.filter((n) => n.kind === "return");
+    expect(returnNodes.length).toBeGreaterThanOrEqual(1);
+
+    // Branch should exist
+    const branchNodes = cfg.nodes.filter((n) => n.kind === "branch");
+    expect(branchNodes).toHaveLength(1);
+  });
+
+  it("handles while loop with single-statement body", () => {
+    const source = `
+function spin(n: number): void {
+  while (n > 0) n--;
+}
+`;
+    const tree = parseSource(source, "spin.ts");
+    const fnNode = tree.rootNode.namedChildren.find(
+      (c) => c.type === "function_declaration",
+    )!;
+
+    const counter = createCfgIdCounter();
+    const cfg = buildControlFlowGraph(fnNode, "spin.ts#spin", "test-repo", "spin.ts", counter);
+
+    // Should have the loop node and a statement node for the body
+    const loopNodes = cfg.nodes.filter((n) => n.kind === "loop");
+    expect(loopNodes).toHaveLength(1);
+
+    // The body statement should be connected to the loop node
+    const loopId = loopNodes[0]!.id;
+    const bodyEdges = cfg.edges.filter((e) => e.from === loopId && e.to !== loopId);
+    expect(bodyEdges.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
 describe("tree-sitter -> CFG counter isolation", () => {
   it("produces unique IDs with separate counters per repo", () => {
     const source = `function a(): void { return; }`;
