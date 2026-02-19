@@ -211,6 +211,25 @@ for (const makeFactory of factories) {
       expect(r2Edges[0]!.source).toBe("y");
     });
 
+    it("getEdgesByKind with repo filter", async () => {
+      await store.addEdges([
+        { source: "a", target: "b", kind: "calls", metadata: { repo: "r1" } },
+        { source: "c", target: "d", kind: "calls", metadata: { repo: "r2" } },
+        { source: "e", target: "f", kind: "imports", metadata: { repo: "r1" } },
+      ]);
+
+      const r1Calls = await store.getEdgesByKind("calls", "r1");
+      expect(r1Calls).toHaveLength(1);
+      expect(r1Calls[0]!.source).toBe("a");
+
+      const r2Calls = await store.getEdgesByKind("calls", "r2");
+      expect(r2Calls).toHaveLength(1);
+      expect(r2Calls[0]!.source).toBe("c");
+
+      const allCalls = await store.getEdgesByKind("calls");
+      expect(allCalls).toHaveLength(2);
+    });
+
     it("clear(repo) only removes edges for that repo", async () => {
       await store.addEdges([
         { source: "a", target: "b", kind: "imports", metadata: { repo: "r1" } },

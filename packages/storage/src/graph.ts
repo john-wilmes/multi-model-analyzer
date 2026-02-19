@@ -18,7 +18,7 @@ export interface GraphStore {
   addEdges(edges: readonly GraphEdge[]): Promise<void>;
   getEdgesFrom(source: string, repo?: string): Promise<GraphEdge[]>;
   getEdgesTo(target: string, repo?: string): Promise<GraphEdge[]>;
-  getEdgesByKind(kind: EdgeKind): Promise<GraphEdge[]>;
+  getEdgesByKind(kind: EdgeKind, repo?: string): Promise<GraphEdge[]>;
   traverseBFS(start: string, options: number | TraversalOptions): Promise<GraphEdge[]>;
   clear(repo?: string): Promise<void>;
   close(): Promise<void>;
@@ -51,8 +51,10 @@ export class InMemoryGraphStore implements GraphStore {
     );
   }
 
-  async getEdgesByKind(kind: EdgeKind): Promise<GraphEdge[]> {
-    return this.edges.filter((e) => e.kind === kind);
+  async getEdgesByKind(kind: EdgeKind, repo?: string): Promise<GraphEdge[]> {
+    return this.edges.filter((e) =>
+      e.kind === kind && (!repo || e.metadata?.["repo"] === repo),
+    );
   }
 
   async traverseBFS(start: string, options: number | TraversalOptions): Promise<GraphEdge[]> {

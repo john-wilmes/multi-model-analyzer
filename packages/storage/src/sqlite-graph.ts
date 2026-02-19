@@ -16,6 +16,7 @@ export class SqliteGraphStore implements GraphStore {
   private readonly stmtByTarget: Database.Statement;
   private readonly stmtByTargetAndRepo: Database.Statement;
   private readonly stmtByKind: Database.Statement;
+  private readonly stmtByKindAndRepo: Database.Statement;
   private readonly stmtClearAll: Database.Statement;
   private readonly stmtClearRepo: Database.Statement;
   private readonly stmtBfsNoRepo: Database.Statement;
@@ -42,6 +43,9 @@ export class SqliteGraphStore implements GraphStore {
     );
     this.stmtByKind = db.prepare(
       "SELECT source, target, kind, metadata FROM edges WHERE kind = ?",
+    );
+    this.stmtByKindAndRepo = db.prepare(
+      "SELECT source, target, kind, metadata FROM edges WHERE kind = ? AND json_extract(metadata, '$.repo') = ?",
     );
     this.stmtClearAll = db.prepare("DELETE FROM edges");
     this.stmtClearRepo = db.prepare(
@@ -113,8 +117,10 @@ export class SqliteGraphStore implements GraphStore {
     return rows.map(toGraphEdge);
   }
 
-  async getEdgesByKind(kind: EdgeKind): Promise<GraphEdge[]> {
-    const rows = this.stmtByKind.all(kind) as RawEdgeRow[];
+  async getEdgesByKind(kind: EdgeKind, repo?: string): Promise<GraphEdge[]> {
+    const rows = repo
+      ? this.stmtByKindAndRepo.all(kind, repo) as RawEdgeRow[]
+      : this.stmtByKind.all(kind) as RawEdgeRow[];
     return rows.map(toGraphEdge);
   }
 
