@@ -10,6 +10,7 @@ export {
   extractDependencyGraph,
   findDependentsOf,
   findDependenciesOf,
+  resolveImportSpecifier,
 } from "./dependencies.js";
 export type { DependencyGraphOptions } from "./dependencies.js";
 

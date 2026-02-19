@@ -10,6 +10,9 @@
       "types": "./dist/index.d.ts"
     }
   },
+  "bin": {
+    "mma": "./dist/index.js"
+  },
   "scripts": {
     "build": "tsc --build",
     "type-check": "tsc --build --noEmit"
