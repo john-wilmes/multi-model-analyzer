@@ -217,6 +217,7 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
         if (graph.circularDependencies.length > 5) {
           log(`      ... and ${graph.circularDependencies.length - 5} more`);
         }
+        await kvStore.set(`circularDeps:${repo.name}`, JSON.stringify(graph.circularDependencies));
       }
     } catch (error) {
       console.error(`  Failed to extract dependency graph for ${repo.name}:`, error);
@@ -500,7 +501,11 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
 
       // Tier 1: template-based summaries from AST
       let tier1ReadErrors = 0;
-      for (const pf of parsedFiles) {
+      for (let i = 0; i < parsedFiles.length; i++) {
+        const pf = parsedFiles[i]!;
+        if (i === 0 || (i + 1) % 1000 === 0 || i + 1 === parsedFiles.length) {
+          log(`    [tier-1] ${i + 1}/${parsedFiles.length}`);
+        }
         try {
           const absPath = join(repo.localPath, pf.path);
           const sourceText = await readFile(absPath, "utf-8");
