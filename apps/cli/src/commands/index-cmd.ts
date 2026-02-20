@@ -499,22 +499,31 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
     try {
       const summaryMap = new Map<string, Summary>();
 
-      // Tier 1: template-based summaries from AST
+      // Tier 1: template-based summaries from AST (batched parallel I/O)
       let tier1ReadErrors = 0;
-      for (let i = 0; i < parsedFiles.length; i++) {
-        const pf = parsedFiles[i]!;
-        if (i === 0 || (i + 1) % 1000 === 0 || i + 1 === parsedFiles.length) {
-          log(`    [tier-1] ${i + 1}/${parsedFiles.length}`);
-        }
-        try {
-          const absPath = join(repo.localPath, pf.path);
-          const sourceText = await readFile(absPath, "utf-8");
-          const tier1 = tier1Summarize(pf.symbols, pf.path, sourceText);
+      const BATCH_SIZE = 20;
+      for (let batchStart = 0; batchStart < parsedFiles.length; batchStart += BATCH_SIZE) {
+        const batch = parsedFiles.slice(batchStart, batchStart + BATCH_SIZE);
+        const results = await Promise.all(
+          batch.map(async (pf) => {
+            try {
+              const absPath = join(repo.localPath, pf.path);
+              const sourceText = await readFile(absPath, "utf-8");
+              return tier1Summarize(pf.symbols, pf.path, sourceText);
+            } catch {
+              tier1ReadErrors++;
+              return [];
+            }
+          }),
+        );
+        for (const tier1 of results) {
           for (const s of tier1) {
             summaryMap.set(s.entityId, s);
           }
-        } catch {
-          tier1ReadErrors++;
+        }
+        const processed = Math.min(batchStart + BATCH_SIZE, parsedFiles.length);
+        if (batchStart === 0 || processed % 1000 < BATCH_SIZE || processed === parsedFiles.length) {
+          log(`    [tier-1] ${processed}/${parsedFiles.length}`);
         }
       }
       if (tier1ReadErrors > 0) {
