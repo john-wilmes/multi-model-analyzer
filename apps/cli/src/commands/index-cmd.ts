@@ -469,12 +469,12 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
     // Release tree-sitter ASTs: explicitly free WASM heap memory via tree.delete(),
     // then drop JS references. Without tree.delete(), trees are only collected by
     // JS GC which doesn't know about WASM heap pressure.
-    if (trees) {
+    if (trees && trees.size > 0) {
       for (const tree of trees.values()) {
         tree.delete();
       }
+      log(`  [${repo.name}] Released tree-sitter ASTs`);
     }
-    log(`  [${repo.name}] Released tree-sitter ASTs`);
   }
 
   // Phase 6b: Summarization (tier-1 + tier-2)
@@ -644,8 +644,8 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
   // Save commit hashes only for repos that completed successfully
   const successfulRepos = new Set<string>();
   for (const repo of repos) {
-    // A repo succeeded if it has parsed files or at least classified files
-    if (parsedFilesByRepo.has(repo.name) || classifiedByRepo.has(repo.name)) {
+    // A repo succeeded if it has parsed files (Phase 3 completed)
+    if (parsedFilesByRepo.has(repo.name)) {
       successfulRepos.add(repo.name);
     }
   }
