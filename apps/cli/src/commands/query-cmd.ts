@@ -33,9 +33,38 @@ export async function queryCommand(
 
   switch (decision.route) {
     case "structural": {
+      const q = decision.strippedQuery.toLowerCase();
+      const isCircular = /\bcircular\b/.test(q);
+      if (isCircular) {
+        const keys = await options.kvStore.keys("circularDeps:");
+        let totalCycles = 0;
+        for (const key of keys) {
+          const repo = key.replace("circularDeps:", "");
+          if (repoFilter && repo !== repoFilter) continue;
+          const json = await options.kvStore.get(key);
+          if (!json) continue;
+          let cycles: string[][];
+          try {
+            cycles = JSON.parse(json) as string[][];
+          } catch {
+            console.log(`Warning: corrupted circular dependency data for ${repo}. Re-run 'index' to regenerate.`);
+            continue;
+          }
+          totalCycles += cycles.length;
+          console.log(`${cycles.length} circular dependencies (${repo}):`);
+          for (const cycle of cycles) {
+            console.log(`  ${cycle.join(" -> ")}`);
+          }
+        }
+        if (totalCycles === 0) {
+          console.log(repoFilter
+            ? `No circular dependencies found for repo: ${repoFilter}`
+            : "No circular dependencies found.");
+        }
+        break;
+      }
       if (decision.extractedEntities.length > 0) {
         const entity = decision.extractedEntities[0]!;
-        const q = decision.strippedQuery.toLowerCase();
         const isCallees = /\bcallees?\b/.test(q) || /\bwhat does .+ call\b/.test(q);
         const isDeps = q.includes("depend");
         const result = isDeps
