@@ -37,6 +37,7 @@ import {
   scanForFlags,
   extractLogStatements,
   analyzeNaming,
+  extractServiceTopology,
 } from "@mma/heuristics";
 import type { PackageJsonInfo } from "@mma/heuristics";
 import type { KVStore, GraphStore, SearchStore } from "@mma/storage";
@@ -354,6 +355,25 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
           log(`    ${namingResult.methods.length} method purposes inferred`);
         } else {
           log(`    skipping naming analysis (no symbols)`);
+        }
+
+        // 5f: Service topology detection
+        if (trees && trees.size > 0) {
+          const topologyEdges = extractServiceTopology({
+            repo: repo.name,
+            trees,
+            imports: importsByFile,
+          });
+          if (topologyEdges.length > 0) {
+            await options.graphStore.addEdges(topologyEdges);
+            log(`    ${topologyEdges.length} service-call edges detected`);
+            const producers = topologyEdges.filter(e => e.metadata?.role === "producer").length;
+            const consumers = topologyEdges.filter(e => e.metadata?.role === "consumer").length;
+            const httpCalls = topologyEdges.filter(e => e.metadata?.protocol === "http").length;
+            log(`      producers=${producers} consumers=${consumers} http=${httpCalls}`);
+          } else {
+            log(`    0 service-call edges detected`);
+          }
         }
       } catch (error) {
         console.error(`  Failed to run heuristics for ${repo.name}:`, error);

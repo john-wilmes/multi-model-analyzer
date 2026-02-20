@@ -94,7 +94,8 @@ export type EdgeKind =
   | "extends"
   | "implements"
   | "depends-on"
-  | "contains";
+  | "contains"
+  | "service-call";
 
 export interface CallGraph {
   readonly repo: string;

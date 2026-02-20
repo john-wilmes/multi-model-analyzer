@@ -8,6 +8,7 @@
 import { routeQuery } from "@mma/query";
 import { executeSearchQuery } from "@mma/query";
 import { executeCallersQuery, executeCalleesQuery, executeDependencyQuery } from "@mma/query";
+import { executeArchitectureQuery } from "@mma/query";
 import type { GraphStore, SearchStore, KVStore } from "@mma/storage";
 
 export interface QueryOptions {
@@ -170,6 +171,53 @@ export async function queryCommand(
         }
       } else {
         console.log("No analysis results available. Run 'index' first.");
+      }
+      break;
+    }
+
+    case "architecture": {
+      const archResult = await executeArchitectureQuery(
+        graphStore,
+        options.kvStore,
+        repoFilter,
+      );
+      console.log(archResult.description);
+      console.log("\nRepos:");
+      for (const repo of archResult.repos) {
+        console.log(
+          `  ${repo.name} [${repo.role}]: ${repo.importCount} imports (${repo.crossRepoImports} cross-repo), ${repo.callCount} calls, ${repo.serviceCallCount} service-call edges`,
+        );
+      }
+
+      if (archResult.crossRepoEdges.length > 0) {
+        console.log("\nCross-repo dependencies:");
+        for (const edge of archResult.crossRepoEdges.slice(0, 30)) {
+          console.log(`  ${edge.sourceRepo} -> ${edge.targetPackage} (${edge.count} imports)`);
+        }
+        if (archResult.crossRepoEdges.length > 30) {
+          console.log(`  ... and ${archResult.crossRepoEdges.length - 30} more`);
+        }
+      }
+
+      if (archResult.serviceTopology.length > 0) {
+        console.log("\nService topology:");
+        // Group by protocol/role for cleaner output
+        const byType = new Map<string, typeof archResult.serviceTopology[number][]>();
+        for (const link of archResult.serviceTopology) {
+          const key = `${link.protocol}/${link.role}`;
+          const arr = byType.get(key) ?? [];
+          arr.push(link);
+          byType.set(key, arr);
+        }
+        for (const [type, links] of byType) {
+          console.log(`  [${type}] (${links.length} edges):`);
+          for (const link of links.slice(0, 10)) {
+            console.log(`    ${link.sourceRepo}:${link.sourceFile} -> ${link.target} (${link.detail})`);
+          }
+          if (links.length > 10) {
+            console.log(`    ... and ${links.length - 10} more`);
+          }
+        }
       }
       break;
     }

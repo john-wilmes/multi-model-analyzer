@@ -11,7 +11,7 @@
 import type { SarifLog } from "@mma/core";
 import type { GraphStore, SearchStore, KVStore } from "@mma/storage";
 
-export type QueryRoute = "structural" | "search" | "analytical" | "synthesis";
+export type QueryRoute = "structural" | "search" | "analytical" | "synthesis" | "architecture";
 
 export interface RouterConfig {
   readonly graphStore: GraphStore;
@@ -53,8 +53,13 @@ export function routeQuery(query: string): RouteDecision {
     return { route: "analytical", confidence: 0.85, extractedEntities: entities, repo, strippedQuery };
   }
 
+  // Architecture patterns (cross-repo topology, service overview)
+  if (/\b(architecture|topology|service[\s-]?map|cross[\s-]?repo|overview)\b/.test(normalized)) {
+    return { route: "architecture", confidence: 0.9, extractedEntities: entities, repo, strippedQuery };
+  }
+
   // Synthesis patterns (complex questions)
-  if (/\b(why|how|explain|summarize|describe|compare|architecture|design)\b/.test(normalized)) {
+  if (/\b(why|how|explain|summarize|describe|compare|design)\b/.test(normalized)) {
     return { route: "synthesis", confidence: 0.7, extractedEntities: entities, repo, strippedQuery };
   }
 

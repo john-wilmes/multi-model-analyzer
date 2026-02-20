@@ -6,3 +6,6 @@ export type { StructuralQueryResult } from "./structural.js";
 
 export { executeSearchQuery } from "./search.js";
 export type { SearchQueryResult } from "./search.js";
+
+export { executeArchitectureQuery } from "./architecture.js";
+export type { ArchitectureQueryResult, RepoSummary, CrossRepoEdge, ServiceLink } from "./architecture.js";

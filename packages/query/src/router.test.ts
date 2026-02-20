@@ -28,9 +28,16 @@ describe("routeQuery", () => {
     expect(routeQuery("show dead code").route).toBe("analytical");
   });
 
+  it("routes architecture patterns correctly", () => {
+    expect(routeQuery("explain the architecture").route).toBe("architecture");
+    expect(routeQuery("show architecture").route).toBe("architecture");
+    expect(routeQuery("cross-repo topology").route).toBe("architecture");
+    expect(routeQuery("service overview").route).toBe("architecture");
+  });
+
   it("routes synthesis patterns correctly", () => {
-    expect(routeQuery("explain the architecture").route).toBe("synthesis");
     expect(routeQuery("why does this exist?").route).toBe("synthesis");
+    expect(routeQuery("explain the design").route).toBe("synthesis");
   });
 
   it("defaults to search", () => {
