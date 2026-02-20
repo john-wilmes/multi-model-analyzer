@@ -43,7 +43,13 @@ export async function queryCommand(
           if (repoFilter && repo !== repoFilter) continue;
           const json = await options.kvStore.get(key);
           if (!json) continue;
-          const cycles = JSON.parse(json) as string[][];
+          let cycles: string[][];
+          try {
+            cycles = JSON.parse(json) as string[][];
+          } catch {
+            console.log(`Warning: corrupted circular dependency data for ${repo}. Re-run 'index' to regenerate.`);
+            continue;
+          }
           totalCycles += cycles.length;
           console.log(`${cycles.length} circular dependencies (${repo}):`);
           for (const cycle of cycles) {
