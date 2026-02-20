@@ -123,44 +123,8 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
     log(`  ${changeSet.repo}: ${classified.length} files classified`);
   }
 
-  // Phase 3: Parsing
-  log("Phase 3: Parsing files...");
-  const treesByRepo = new Map<string, ReadonlyMap<string, TreeSitterTree>>();
-  const parsedFilesByRepo = new Map<string, ParsedFile[]>();
-  for (const repo of repos) {
-    const classified = classifiedByRepo.get(repo.name);
-    if (!classified || classified.length === 0) continue;
-
-    try {
-      const result = await parseFiles(classified, repo.name, repo.localPath, {
-        enableTsMorph: options.enableTsMorph,
-        onProgress: verbose
-          ? (info) => {
-              if (info.current === 1 || info.current % 100 === 0 || info.current === info.total) {
-                log(`  [${info.phase}] ${info.current}/${info.total}`);
-              }
-            }
-          : undefined,
-      });
-
-      log(`  ${repo.name}: ${result.stats.fileCount} files, ${result.stats.symbolCount} symbols, ${result.stats.errorCount} errors`);
-      log(`    tree-sitter: ${result.stats.treeSitterTimeMs}ms, ts-morph: ${result.stats.tsMorphTimeMs}ms`);
-
-      if (result.parsedFiles.length === 0) {
-        log(`    warning: 0 parsed files produced -- downstream phases will have no data`);
-      } else if (result.stats.symbolCount === 0) {
-        log(`    warning: 0 symbols extracted from ${result.parsedFiles.length} files`);
-      }
-
-      treesByRepo.set(repo.name, result.treeSitterTrees);
-      parsedFilesByRepo.set(repo.name, result.parsedFiles);
-    } catch (error) {
-      console.error(`  Failed to parse ${repo.name}:`, error);
-    }
-  }
-
-  // Build cross-repo packageRoots map: package name -> repo-local file path prefix
-  // Maps e.g. "@twenty/utils" -> "packages/utils" so non-relative imports can resolve
+  // Build cross-repo packageRoots map before Phase 3 so it's available for
+  // dependency extraction (Phase 4). Only reads classified package.json files.
   const packageRoots = new Map<string, string>();
   for (const repo of repos) {
     const classified = classifiedByRepo.get(repo.name);
@@ -189,73 +153,12 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
     log(`  Built packageRoots map: ${packageRoots.size} packages across all repos`);
   }
 
-  // Phase 4: Dependency graph extraction
-  log("Phase 4: Extracting dependency graphs...");
+  // Phases 3-6a: Per-repo processing (parse, structural, heuristics, models).
+  // Each repo is fully processed through all tree-dependent phases before moving
+  // to the next, so only one repo's trees occupy WASM memory at a time.
+  log("Phases 3-6a: Per-repo processing...");
+  const parsedFilesByRepo = new Map<string, ParsedFile[]>();
   const depGraphByRepo = new Map<string, DependencyGraph>();
-  for (const repo of repos) {
-    const trees = treesByRepo.get(repo.name);
-    if (!trees || trees.size === 0) continue;
-
-    try {
-      const start = performance.now();
-      const graph = extractDependencyGraph(trees, repo.name, { detectCircular: true }, packageRoots);
-      const elapsed = Math.round(performance.now() - start);
-
-      depGraphByRepo.set(repo.name, graph);
-      await options.graphStore.clear(repo.name);
-      await options.graphStore.addEdges(graph.edges);
-
-      log(`  ${repo.name}: ${graph.edges.length} import edges (${elapsed}ms)`);
-      if (graph.edges.length === 0) {
-        log(`    warning: 0 import edges from ${trees.size} trees -- pattern and flag detection may be limited`);
-      }
-      if (graph.circularDependencies.length > 0) {
-        log(`    ${graph.circularDependencies.length} circular dependencies found`);
-        for (const cycle of graph.circularDependencies.slice(0, 5)) {
-          log(`      ${cycle.join(" -> ")}`);
-        }
-        if (graph.circularDependencies.length > 5) {
-          log(`      ... and ${graph.circularDependencies.length - 5} more`);
-        }
-        await kvStore.set(`circularDeps:${repo.name}`, JSON.stringify(graph.circularDependencies));
-      }
-    } catch (error) {
-      console.error(`  Failed to extract dependency graph for ${repo.name}:`, error);
-    }
-  }
-
-  // Phase 4b: Call graph extraction from tree-sitter
-  log("Phase 4b: Extracting call graphs...");
-  for (const repo of repos) {
-    const trees = treesByRepo.get(repo.name);
-    if (!trees || trees.size === 0) continue;
-
-    try {
-      const start = performance.now();
-      const callEdges: GraphEdge[] = [];
-
-      for (const [filePath, tree] of trees) {
-        const edges = extractCallEdgesFromTreeSitter(
-          tree.rootNode as import("@mma/structural").TsNode,
-          filePath,
-          repo.name,
-        );
-        callEdges.push(...edges);
-      }
-
-      if (callEdges.length > 0) {
-        await options.graphStore.addEdges(callEdges);
-      }
-
-      const elapsed = Math.round(performance.now() - start);
-      log(`  ${repo.name}: ${callEdges.length} call edges (${elapsed}ms)`);
-    } catch (error) {
-      console.error(`  Failed to extract call graph for ${repo.name}:`, error);
-    }
-  }
-
-  // Phase 5: Heuristic analysis
-  log("Phase 5: Running heuristics...");
   const servicesByRepo = new Map<string, InferredService[]>();
   const patternsByRepo = new Map<string, DetectedPattern[]>();
   const flagsByRepo = new Map<string, FlagInventory>();
@@ -264,122 +167,206 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
 
   for (const repo of repos) {
     const classified = classifiedByRepo.get(repo.name);
-    const depGraph = depGraphByRepo.get(repo.name);
-    const trees = treesByRepo.get(repo.name);
-    const parsedFiles = parsedFilesByRepo.get(repo.name);
-    if (!classified || !depGraph) {
-      log(`  ${repo.name}: skipping heuristics (no classified files or dependency graph)`);
+    if (!classified || classified.length === 0) continue;
+
+    // --- Phase 3: Parse files ---
+    log(`  [${repo.name}] Parsing files...`);
+    let trees: ReadonlyMap<string, TreeSitterTree> | undefined;
+    try {
+      const result = await parseFiles(classified, repo.name, repo.localPath, {
+        enableTsMorph: options.enableTsMorph,
+        onProgress: verbose
+          ? (info) => {
+              if (info.current === 1 || info.current % 100 === 0 || info.current === info.total) {
+                log(`    [${info.phase}] ${info.current}/${info.total}`);
+              }
+            }
+          : undefined,
+      });
+
+      log(`  [${repo.name}] ${result.stats.fileCount} files, ${result.stats.symbolCount} symbols, ${result.stats.errorCount} errors`);
+      log(`    tree-sitter: ${result.stats.treeSitterTimeMs}ms, ts-morph: ${result.stats.tsMorphTimeMs}ms`);
+
+      if (result.parsedFiles.length === 0) {
+        log(`    warning: 0 parsed files produced -- downstream phases will have no data`);
+      } else if (result.stats.symbolCount === 0) {
+        log(`    warning: 0 symbols extracted from ${result.parsedFiles.length} files`);
+      }
+
+      trees = result.treeSitterTrees;
+      parsedFilesByRepo.set(repo.name, result.parsedFiles);
+    } catch (error) {
+      console.error(`  Failed to parse ${repo.name}:`, error);
       continue;
     }
 
-    try {
-      // 5a: Service inference
-      const packageJsonFiles = classified.filter(
-        (f) => f.kind === "json" && f.path.endsWith("package.json"),
-      );
+    // --- Phase 4: Dependency graph extraction ---
+    if (trees && trees.size > 0) {
+      log(`  [${repo.name}] Extracting dependency graph...`);
+      try {
+        const start = performance.now();
+        const graph = extractDependencyGraph(trees, repo.name, { detectCircular: true }, packageRoots);
+        const elapsed = Math.round(performance.now() - start);
 
-      const packageJsons = new Map<string, PackageJsonInfo>();
-      for (const pjFile of packageJsonFiles) {
-        try {
-          const absPath = join(repo.localPath, pjFile.path);
-          const raw = await readFile(absPath, "utf-8");
-          const parsed = JSON.parse(raw) as Record<string, unknown>;
-          packageJsons.set(dirname(pjFile.path), {
-            name: (parsed.name as string) ?? "",
-            main: parsed.main as string | undefined,
-            bin: (parsed.bin as Record<string, string>) ?? undefined,
-            dependencies: (parsed.dependencies as Record<string, string>) ?? {},
-            scripts: (parsed.scripts as Record<string, string>) ?? {},
-          });
-        } catch {
-          log(`    warning: could not read ${pjFile.path}`);
+        depGraphByRepo.set(repo.name, graph);
+        await options.graphStore.clear(repo.name);
+        await options.graphStore.addEdges(graph.edges);
+
+        log(`  [${repo.name}] ${graph.edges.length} import edges (${elapsed}ms)`);
+        if (graph.edges.length === 0) {
+          log(`    warning: 0 import edges from ${trees.size} trees -- pattern and flag detection may be limited`);
         }
-      }
-
-      const filePaths = classified.map((f) => f.path);
-      const services = inferServices({
-        repo: repo.name,
-        filePaths,
-        packageJsons,
-        dependencyGraph: depGraph,
-      });
-      servicesByRepo.set(repo.name, services);
-
-      log(`  ${repo.name}: ${services.length} services inferred, ${packageJsons.size} package.json files`);
-      for (const svc of services.slice(0, 10)) {
-        log(`    ${svc.name} (${svc.rootPath}) confidence=${svc.confidence} deps=${svc.dependencies.length}`);
-      }
-      if (services.length > 10) {
-        log(`    ... and ${services.length - 10} more`);
-      }
-
-      // Build intermediate maps for remaining heuristics
-      const symbolsByFile = new Map<string, readonly SymbolInfo[]>();
-      if (parsedFiles) {
-        for (const pf of parsedFiles) {
-          symbolsByFile.set(pf.path, pf.symbols);
+        if (graph.circularDependencies.length > 0) {
+          log(`    ${graph.circularDependencies.length} circular dependencies found`);
+          for (const cycle of graph.circularDependencies.slice(0, 5)) {
+            log(`      ${cycle.join(" -> ")}`);
+          }
+          if (graph.circularDependencies.length > 5) {
+            log(`      ... and ${graph.circularDependencies.length - 5} more`);
+          }
+          await kvStore.set(`circularDeps:${repo.name}`, JSON.stringify(graph.circularDependencies));
         }
+      } catch (error) {
+        console.error(`  Failed to extract dependency graph for ${repo.name}:`, error);
       }
-
-      const importsByFile = new Map<string, string[]>();
-      for (const edge of depGraph.edges) {
-        let imports = importsByFile.get(edge.source);
-        if (!imports) {
-          imports = [];
-          importsByFile.set(edge.source, imports);
-        }
-        imports.push(edge.target);
-      }
-
-      // 5b: Pattern detection
-      const patterns = detectPatterns({
-        repo: repo.name,
-        symbols: symbolsByFile,
-        imports: importsByFile,
-      });
-      patternsByRepo.set(repo.name, patterns);
-      log(`  ${repo.name}: ${patterns.length} patterns detected (from ${symbolsByFile.size} files with symbols)`);
-
-      // 5c: Feature flag scanning
-      if (trees && trees.size > 0) {
-        const flagInventory = scanForFlags(trees, repo.name);
-        flagsByRepo.set(repo.name, flagInventory);
-        log(`  ${repo.name}: ${flagInventory.flags.length} feature flags found`);
-
-        // 5d: Log statement extraction
-        const logIndex = extractLogStatements(trees, repo.name);
-        logIndexByRepo.set(repo.name, logIndex);
-        log(`  ${repo.name}: ${logIndex.templates.length} log templates extracted`);
-      } else {
-        log(`  ${repo.name}: skipping flag scan and log extraction (no tree-sitter trees)`);
-      }
-
-      // 5e: Naming analysis
-      if (symbolsByFile.size > 0) {
-        const namingResult = analyzeNaming(symbolsByFile, repo.name);
-        namingByRepo.set(repo.name, namingResult);
-        log(`  ${repo.name}: ${namingResult.methods.length} method purposes inferred`);
-      } else {
-        log(`  ${repo.name}: skipping naming analysis (no symbols)`);
-      }
-    } catch (error) {
-      console.error(`  Failed to run heuristics for ${repo.name}:`, error);
     }
-  }
 
-  // Phase 6a: Config and fault models (tree-dependent, run before summarization
-  // so tree-sitter ASTs can be released to free memory for large repos)
-  log("Phase 6a: Building config and fault models...");
+    // --- Phase 4b: Call graph extraction ---
+    if (trees && trees.size > 0) {
+      log(`  [${repo.name}] Extracting call graph...`);
+      try {
+        const start = performance.now();
+        const callEdges: GraphEdge[] = [];
 
-  for (const repo of repos) {
-    const trees = treesByRepo.get(repo.name);
+        for (const [filePath, tree] of trees) {
+          const edges = extractCallEdgesFromTreeSitter(
+            tree.rootNode as import("@mma/structural").TsNode,
+            filePath,
+            repo.name,
+          );
+          callEdges.push(...edges);
+        }
+
+        if (callEdges.length > 0) {
+          await options.graphStore.addEdges(callEdges);
+        }
+
+        const elapsed = Math.round(performance.now() - start);
+        log(`  [${repo.name}] ${callEdges.length} call edges (${elapsed}ms)`);
+      } catch (error) {
+        console.error(`  Failed to extract call graph for ${repo.name}:`, error);
+      }
+    }
+
+    // --- Phase 5: Heuristic analysis ---
     const depGraph = depGraphByRepo.get(repo.name);
+    const parsedFiles = parsedFilesByRepo.get(repo.name);
+    if (!depGraph) {
+      log(`  [${repo.name}] Skipping heuristics (no dependency graph)`);
+    } else {
+      log(`  [${repo.name}] Running heuristics...`);
+      try {
+        // 5a: Service inference
+        const packageJsonFiles = classified.filter(
+          (f) => f.kind === "json" && f.path.endsWith("package.json"),
+        );
+
+        const packageJsons = new Map<string, PackageJsonInfo>();
+        for (const pjFile of packageJsonFiles) {
+          try {
+            const absPath = join(repo.localPath, pjFile.path);
+            const raw = await readFile(absPath, "utf-8");
+            const parsed = JSON.parse(raw) as Record<string, unknown>;
+            packageJsons.set(dirname(pjFile.path), {
+              name: (parsed.name as string) ?? "",
+              main: parsed.main as string | undefined,
+              bin: (parsed.bin as Record<string, string>) ?? undefined,
+              dependencies: (parsed.dependencies as Record<string, string>) ?? {},
+              scripts: (parsed.scripts as Record<string, string>) ?? {},
+            });
+          } catch {
+            log(`    warning: could not read ${pjFile.path}`);
+          }
+        }
+
+        const filePaths = classified.map((f) => f.path);
+        const services = inferServices({
+          repo: repo.name,
+          filePaths,
+          packageJsons,
+          dependencyGraph: depGraph,
+        });
+        servicesByRepo.set(repo.name, services);
+
+        log(`    ${services.length} services inferred, ${packageJsons.size} package.json files`);
+        for (const svc of services.slice(0, 10)) {
+          log(`      ${svc.name} (${svc.rootPath}) confidence=${svc.confidence} deps=${svc.dependencies.length}`);
+        }
+        if (services.length > 10) {
+          log(`      ... and ${services.length - 10} more`);
+        }
+
+        // Build intermediate maps for remaining heuristics
+        const symbolsByFile = new Map<string, readonly SymbolInfo[]>();
+        if (parsedFiles) {
+          for (const pf of parsedFiles) {
+            symbolsByFile.set(pf.path, pf.symbols);
+          }
+        }
+
+        const importsByFile = new Map<string, string[]>();
+        for (const edge of depGraph.edges) {
+          let imports = importsByFile.get(edge.source);
+          if (!imports) {
+            imports = [];
+            importsByFile.set(edge.source, imports);
+          }
+          imports.push(edge.target);
+        }
+
+        // 5b: Pattern detection
+        const patterns = detectPatterns({
+          repo: repo.name,
+          symbols: symbolsByFile,
+          imports: importsByFile,
+        });
+        patternsByRepo.set(repo.name, patterns);
+        log(`    ${patterns.length} patterns detected (from ${symbolsByFile.size} files with symbols)`);
+
+        // 5c: Feature flag scanning
+        if (trees && trees.size > 0) {
+          const flagInventory = scanForFlags(trees, repo.name);
+          flagsByRepo.set(repo.name, flagInventory);
+          log(`    ${flagInventory.flags.length} feature flags found`);
+
+          // 5d: Log statement extraction
+          const logIndex = extractLogStatements(trees, repo.name);
+          logIndexByRepo.set(repo.name, logIndex);
+          log(`    ${logIndex.templates.length} log templates extracted`);
+        } else {
+          log(`    skipping flag scan and log extraction (no tree-sitter trees)`);
+        }
+
+        // 5e: Naming analysis
+        if (symbolsByFile.size > 0) {
+          const namingResult = analyzeNaming(symbolsByFile, repo.name);
+          namingByRepo.set(repo.name, namingResult);
+          log(`    ${namingResult.methods.length} method purposes inferred`);
+        } else {
+          log(`    skipping naming analysis (no symbols)`);
+        }
+      } catch (error) {
+        console.error(`  Failed to run heuristics for ${repo.name}:`, error);
+      }
+    }
+
+    // --- Phase 6a: Config and fault models ---
     const flagInventory = flagsByRepo.get(repo.name);
     const logIndex = logIndexByRepo.get(repo.name);
 
     // Config model
     if (!flagInventory || !depGraph || flagInventory.flags.length === 0) {
-      log(`  ${repo.name} [config]: skipped (${!flagInventory ? "no flag inventory" : !depGraph ? "no dep graph" : "0 flags found"})`);
+      log(`  [${repo.name}] [config]: skipped (${!flagInventory ? "no flag inventory" : !depGraph ? "no dep graph" : "0 flags found"})`);
     }
     if (flagInventory && depGraph && flagInventory.flags.length > 0) {
       try {
@@ -401,7 +388,7 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
         const { results: configResults, validation } = await validateFeatureModel(featureModel, repo.name);
         await kvStore.set(`sarif:config:${repo.name}`, JSON.stringify(configResults));
 
-        log(`  ${repo.name} [config]: ${featureModel.flags.length} flags, ${featureModel.constraints.length} constraints, ${configResults.length} findings`);
+        log(`  [${repo.name}] [config]: ${featureModel.flags.length} flags, ${featureModel.constraints.length} constraints, ${configResults.length} findings`);
         log(`    dead=${validation.deadFlags.length} always-on=${validation.alwaysOnFlags.length} untested=${validation.untestedInteractions.length}`);
       } catch (error) {
         console.error(`  Failed to build feature model for ${repo.name}:`, error);
@@ -410,7 +397,7 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
 
     // Fault model
     if (!logIndex || logIndex.templates.length === 0 || !trees) {
-      log(`  ${repo.name} [fault]: skipped (${!logIndex ? "no log index" : logIndex.templates.length === 0 ? "0 log templates" : "no trees"})`);
+      log(`  [${repo.name}] [fault]: skipped (${!logIndex ? "no log index" : logIndex.templates.length === 0 ? "0 log templates" : "no trees"})`);
     }
     if (logIndex && logIndex.templates.length > 0 && trees) {
       try {
@@ -473,16 +460,22 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
         await kvStore.set(`sarif:fault:${repo.name}`, JSON.stringify(gapResults));
         await kvStore.set(`faultTrees:${repo.name}`, JSON.stringify(faultTrees));
 
-        log(`  ${repo.name} [fault]: ${logRoots.length} log roots, ${cfgs.size} CFGs, ${faultTrees.length} fault trees, ${gapResults.length} gap findings`);
+        log(`  [${repo.name}] [fault]: ${logRoots.length} log roots, ${cfgs.size} CFGs, ${faultTrees.length} fault trees, ${gapResults.length} gap findings`);
       } catch (error) {
         console.error(`  Failed to build fault model for ${repo.name}:`, error);
       }
     }
 
-    // Release tree-sitter ASTs for this repo (no longer needed after config+fault models)
-    treesByRepo.delete(repo.name);
+    // Release tree-sitter ASTs: explicitly free WASM heap memory via tree.delete(),
+    // then drop JS references. Without tree.delete(), trees are only collected by
+    // JS GC which doesn't know about WASM heap pressure.
+    if (trees) {
+      for (const tree of trees.values()) {
+        tree.delete();
+      }
+    }
+    log(`  [${repo.name}] Released tree-sitter ASTs`);
   }
-  log(`  Released tree-sitter ASTs (${repos.length} repos)`);
 
   // Phase 6b: Summarization (tier-1 + tier-2)
   log("Phase 6b: Generating summaries...");
