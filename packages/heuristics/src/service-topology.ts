@@ -116,7 +116,8 @@ function findQueueProducers(
   _filePath: string,
 ): QueueRef[] {
   const results: QueueRef[] = [];
-  const queueFields = new Set<string>();
+  // Map from field name -> queue name (derived from injected type)
+  const queueFields = new Map<string, string>();
 
   // Strategy 1: Find constructor params matching *QueueService pattern
   visitNodes(rootNode, (node) => {
@@ -139,10 +140,10 @@ function findQueueProducers(
             if (typeAnnotation && QUEUE_SERVICE_PATTERN.test(typeAnnotation)) {
               const paramName = findParamName(param);
               if (paramName) {
-                queueFields.add(paramName);
                 const queueName = typeAnnotation
                   .replace("QueueService", "")
                   .toLowerCase();
+                queueFields.set(paramName, queueName);
                 results.push({
                   queueName,
                   detail: `${typeAnnotation} injected`,
@@ -155,6 +156,8 @@ function findQueueProducers(
     }
 
     // Strategy 2: Find .add() / .addBulk() calls on queue fields
+    // In BullMQ, queue.add(jobName, data) -- first arg is the job name, not queue name.
+    // The queue name comes from the injected service type.
     if (
       node.type === "call_expression" &&
       node.childForFieldName("function")?.type === "member_expression"
@@ -164,18 +167,23 @@ function findQueueProducers(
       if (method && QUEUE_ADD_METHODS.has(method)) {
         const object = memberExpr.childForFieldName("object");
         const objectText = object?.text ?? "";
+        const objectKey = objectText.startsWith("this.")
+          ? objectText.slice(5)
+          : objectText;
         // Check if object is a known queue field or matches queue pattern
         if (
-          queueFields.has(objectText) ||
-          objectText.endsWith("Queue") ||
-          objectText.endsWith("queue")
+          queueFields.has(objectKey) ||
+          objectKey.endsWith("Queue") ||
+          objectKey.endsWith("queue")
         ) {
-          // Try to extract queue name from arguments
           const args = node.childForFieldName("arguments");
-          const queueName = extractFirstStringArg(args) ?? objectText;
+          const jobName = extractFirstStringArg(args);
+          const queueName = queueFields.get(objectKey) ?? objectKey;
           results.push({
             queueName,
-            detail: `${objectText}.${method}()`,
+            detail: jobName
+              ? `${objectText}.${method}('${jobName}')`
+              : `${objectText}.${method}()`,
           });
         }
       }
@@ -213,17 +221,25 @@ function findQueueConsumers(
   const results: QueueRef[] = [];
 
   visitNodes(rootNode, (node) => {
-    // Strategy 1: @Processor('queueName') or @Process('jobName') decorators
+    // Strategy 1: @Processor('queueName') binds a class to a queue;
+    // @Process('jobName') filters a handler within that queue (not a queue name).
     if (node.type === "decorator") {
       const expr = node.namedChild(0);
       if (expr?.type === "call_expression") {
         const funcName = expr.childForFieldName("function")?.text;
-        if (funcName === "Processor" || funcName === "Process") {
+        if (funcName === "Processor") {
           const args = expr.childForFieldName("arguments");
           const queueName = extractFirstStringArg(args) ?? "unknown";
           results.push({
             queueName,
-            detail: `@${funcName}('${queueName}')`,
+            detail: `@Processor('${queueName}')`,
+          });
+        } else if (funcName === "Process") {
+          const args = expr.childForFieldName("arguments");
+          const jobName = extractFirstStringArg(args);
+          results.push({
+            queueName: "unknown",
+            detail: jobName ? `@Process('${jobName}')` : "@Process()",
           });
         }
       }
