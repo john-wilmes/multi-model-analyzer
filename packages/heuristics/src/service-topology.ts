@@ -119,9 +119,9 @@ function findQueueProducers(
   // Map from field name -> queue name (derived from injected type)
   const queueFields = new Map<string, string>();
 
-  // Strategy 1: Find constructor params matching *QueueService pattern
+  // Pass 1: Collect constructor injections so queueFields is populated
+  // before we look for .add() calls (constructor may appear after methods).
   visitNodes(rootNode, (node) => {
-    // Find class constructors with queue service injections
     if (node.type === "method_definition") {
       const nameNode = node.childForFieldName("name");
       if (nameNode?.text === "constructor") {
@@ -143,8 +143,10 @@ function findQueueProducers(
         }
       }
     }
+  });
 
-    // Strategy 2: Find .add() / .addBulk() calls on queue fields
+  // Pass 2: Find .add()/.addBulk() calls and @InjectQueue decorators.
+  visitNodes(rootNode, (node) => {
     // In BullMQ, queue.add(jobName, data) -- first arg is the job name, not queue name.
     // The queue name comes from the injected service type.
     if (
@@ -178,7 +180,7 @@ function findQueueProducers(
       }
     }
 
-    // Strategy 3: @InjectQueue('name') decorator
+    // @InjectQueue('name') decorator
     if (node.type === "decorator") {
       const expr = node.namedChild(0);
       if (
@@ -329,11 +331,10 @@ function findHttpCalls(
 
       const objectText = object?.text ?? "";
 
-      // axios/got calls
+      // axios/got calls (fetch is a function, not an object -- handled above)
       if (
         (usesAxios && objectText === "axios") ||
-        (usesGot && objectText === "got") ||
-        objectText === "fetch"
+        (usesGot && objectText === "got")
       ) {
         const args = node.childForFieldName("arguments");
         const url = extractFirstStringArg(args);
