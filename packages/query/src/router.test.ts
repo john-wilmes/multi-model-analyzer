@@ -33,6 +33,11 @@ describe("routeQuery", () => {
     expect(routeQuery("show architecture").route).toBe("architecture");
     expect(routeQuery("cross-repo topology").route).toBe("architecture");
     expect(routeQuery("service overview").route).toBe("architecture");
+    expect(routeQuery("architecture overview").route).toBe("architecture");
+  });
+
+  it("does not route bare 'overview' to architecture", () => {
+    expect(routeQuery("give me an overview").route).not.toBe("architecture");
   });
 
   it("routes synthesis patterns correctly", () => {

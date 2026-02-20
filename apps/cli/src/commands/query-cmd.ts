@@ -209,7 +209,13 @@ export async function queryCommand(
           arr.push(link);
           byType.set(key, arr);
         }
-        for (const [type, links] of byType) {
+        const sortedTypes = [...byType.entries()].sort(([a], [b]) => a.localeCompare(b));
+        for (const [type, links] of sortedTypes) {
+          links.sort((a, b) =>
+            a.sourceRepo.localeCompare(b.sourceRepo)
+            || a.sourceFile.localeCompare(b.sourceFile)
+            || a.target.localeCompare(b.target),
+          );
           console.log(`  [${type}] (${links.length} edges):`);
           for (const link of links.slice(0, 10)) {
             console.log(`    ${link.sourceRepo}:${link.sourceFile} -> ${link.target} (${link.detail})`);

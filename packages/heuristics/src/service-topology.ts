@@ -3,7 +3,7 @@
  *
  * Detects inter-service communication patterns from tree-sitter ASTs:
  * - Queue producers: queue.add(), addBulk(), @InjectQueue
- * - Queue consumers: @Process(), @Processor(), Worker.on('completed')
+ * - Queue consumers: @Process(), @Processor(), extends *WorkerService, initWorker()
  * - HTTP clients: fetch(), axios/got calls, HttpService injection
  *
  * Produces "service-call" graph edges with protocol metadata.
@@ -204,8 +204,7 @@ function findQueueProducers(
  * Find queue consumer patterns:
  * - @Process() / @Processor() decorators
  * - Classes extending *WorkerService
- * - worker.on('completed') / worker.on('failed') event handlers
- * - initWorker() calls
+ * - initWorker() / createWorker() calls
  */
 function findQueueConsumers(
   rootNode: TreeSitterNode,
@@ -286,6 +285,17 @@ function findHttpCalls(
     (imp) => imp === "@nestjs/axios" || imp === "@nestjs/common",
   );
 
+  const httpMethods = new Set([
+    "get",
+    "post",
+    "put",
+    "patch",
+    "delete",
+    "head",
+    "options",
+    "request",
+  ]);
+
   visitNodes(rootNode, (node) => {
     if (node.type !== "call_expression") return;
 
@@ -307,16 +317,6 @@ function findHttpCalls(
     if (func.type === "member_expression") {
       const object = func.childForFieldName("object");
       const method = func.childForFieldName("property")?.text;
-      const httpMethods = new Set([
-        "get",
-        "post",
-        "put",
-        "patch",
-        "delete",
-        "head",
-        "options",
-        "request",
-      ]);
 
       if (!method || !httpMethods.has(method)) return;
 

@@ -54,7 +54,7 @@ export function routeQuery(query: string): RouteDecision {
   }
 
   // Architecture patterns (cross-repo topology, service overview)
-  if (/\b(architecture|topology|service[\s-]?map|cross[\s-]?repo|overview)\b/.test(normalized)) {
+  if (/\b(architecture|topology|service[\s-]?map|cross[\s-]?repo|(?:architecture|service)\s+overview)\b/.test(normalized)) {
     return { route: "architecture", confidence: 0.9, extractedEntities: entities, repo, strippedQuery };
   }
 
