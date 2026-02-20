@@ -236,11 +236,12 @@ function findQueueConsumers(
       }
     }
 
-    // Strategy 2: class ... extends *WorkerService
+    // Strategy 2: class ... extends *WorkerService (strip generics for matching)
     if (node.type === "class_declaration" || node.type === "class") {
       const heritage = findHeritageClause(node);
-      if (heritage && WORKER_SERVICE_PATTERN.test(heritage)) {
-        const queueName = heritage
+      const heritageBase = heritage?.replace(/<.*>$/, "");
+      if (heritageBase && WORKER_SERVICE_PATTERN.test(heritageBase)) {
+        const queueName = heritageBase
           .replace("WorkerService", "")
           .replace("Worker", "")
           .toLowerCase();
