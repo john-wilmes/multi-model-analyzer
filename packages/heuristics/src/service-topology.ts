@@ -121,13 +121,6 @@ function findQueueProducers(
 
   // Strategy 1: Find constructor params matching *QueueService pattern
   visitNodes(rootNode, (node) => {
-    if (
-      node.type === "required_parameter" ||
-      node.type === "formal_parameters"
-    ) {
-      return; // skip, handled below
-    }
-
     // Find class constructors with queue service injections
     if (node.type === "method_definition") {
       const nameNode = node.childForFieldName("name");
@@ -144,10 +137,6 @@ function findQueueProducers(
                   .replace("QueueService", "")
                   .toLowerCase();
                 queueFields.set(paramName, queueName);
-                results.push({
-                  queueName,
-                  detail: `${typeAnnotation} injected`,
-                });
               }
             }
           }
@@ -260,14 +249,16 @@ function findQueueConsumers(
       }
     }
 
-    // Strategy 3: initWorker() calls
+    // Strategy 3: initWorker() / createWorker() calls
     if (node.type === "call_expression") {
       const func = node.childForFieldName("function");
       if (func?.type === "member_expression") {
         const method = func.childForFieldName("property")?.text;
         if (method === "initWorker" || method === "createWorker") {
+          const args = node.childForFieldName("arguments");
+          const queueName = extractFirstStringArg(args) ?? "worker";
           results.push({
-            queueName: "worker",
+            queueName,
             detail: `${method}()`,
           });
         }
@@ -298,7 +289,7 @@ function findHttpCalls(
     (imp) => imp === "got" || imp.startsWith("got/"),
   );
   const usesHttpService = fileImports.some(
-    (imp) => imp === "@nestjs/axios" || imp === "@nestjs/common",
+    (imp) => imp === "@nestjs/axios",
   );
 
   const httpMethods = new Set([
@@ -341,7 +332,7 @@ function findHttpCalls(
       // axios/got calls
       if (
         (usesAxios && objectText === "axios") ||
-        (usesGot && (objectText === "got" || objectText === "request")) ||
+        (usesGot && objectText === "got") ||
         objectText === "fetch"
       ) {
         const args = node.childForFieldName("arguments");
@@ -404,12 +395,7 @@ function findParamName(param: TreeSitterNode | null): string | null {
   // The identifier is typically the first child
   for (let i = 0; i < param.namedChildCount; i++) {
     const child = param.namedChild(i)!;
-    if (
-      child.type === "identifier" ||
-      child.type === "accessibility_modifier"
-    ) {
-      if (child.type === "identifier") return child.text;
-    }
+    if (child.type === "identifier") return child.text;
   }
   // Try the pattern node
   const pattern = param.childForFieldName("pattern");
