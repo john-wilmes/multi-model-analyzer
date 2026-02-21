@@ -11,7 +11,7 @@
 import { parseArgs } from "node:util";
 import { readFile } from "node:fs/promises";
 import { resolve, dirname } from "node:path";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, existsSync } from "node:fs";
 import type { RepoConfig } from "@mma/core";
 import { createSqliteStores } from "@mma/storage";
 import type { SqliteStores } from "@mma/storage";
@@ -45,11 +45,15 @@ async function main(): Promise<void> {
 
   // Resolve DB path (--db flag or default data/mma.db)
   const dbPath = values.db ? resolve(values.db) : resolve("data", "mma.db");
-  mkdirSync(dirname(dbPath), { recursive: true });
 
-  // serve command bypasses config -- only needs the DB
+  // serve command bypasses config -- only needs the DB (read-only)
   if (command === "serve") {
-    const stores = createSqliteStores({ dbPath });
+    if (!existsSync(dbPath)) {
+      console.error(`Database not found: ${dbPath}`);
+      console.error("Run 'mma index' first to create the analysis database.");
+      process.exit(1);
+    }
+    const stores = createSqliteStores({ dbPath, readonly: true });
     try {
       await serveCommand({
         graphStore: stores.graphStore,
@@ -61,6 +65,8 @@ async function main(): Promise<void> {
     }
     return;
   }
+
+  mkdirSync(dirname(dbPath), { recursive: true });
 
   const configPath = resolve(values.config);
   let config: CliConfig;

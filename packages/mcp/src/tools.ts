@@ -31,11 +31,12 @@ export function registerTools(server: McpServer, stores: Stores): void {
     description: "Route a natural language question to the appropriate analysis backend. Supports structural queries (callers, callees, dependencies, circular deps), search, diagnostics, architecture, patterns, documentation, and fault trees.",
     inputSchema: {
       query: z.string().describe("Natural language question about the codebase"),
+      repo: z.string().optional().describe("Filter to a specific repository name"),
     },
-  }, async ({ query }) => {
+  }, async ({ query, repo: repoParam }) => {
     const decision = routeQuery(query);
-    const repo = decision.repo;
-    const result = await dispatchRoute(decision.route, decision, stores);
+    const repo = repoParam ?? decision.repo;
+    const result = await dispatchRoute(decision.route, { ...decision, repo }, stores);
     return jsonResult({
       route: decision.route,
       confidence: decision.confidence,
