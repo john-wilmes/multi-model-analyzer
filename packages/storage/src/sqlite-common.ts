@@ -25,11 +25,13 @@ export interface SqliteStoreOptions {
   readonly dbPath: string;
   /** Enable WAL mode (default: true, set false for :memory:) */
   readonly wal?: boolean;
+  /** Open database in read-only mode (default: false) */
+  readonly readonly?: boolean;
 }
 
-export function openDatabase(dbPath: string, wal = true): Database.Database {
-  const db = new Database(dbPath);
-  if (wal) {
+export function openDatabase(dbPath: string, wal = true, readonly = false): Database.Database {
+  const db = new Database(dbPath, { readonly });
+  if (!readonly && wal) {
     db.pragma("journal_mode = WAL");
   }
   db.pragma("synchronous = NORMAL");
@@ -86,8 +88,11 @@ export function initSchema(db: Database.Database): void {
 
 export function createSqliteStores(options: SqliteStoreOptions): SqliteStores {
   const useWal = options.wal ?? options.dbPath !== ":memory:";
-  const db = openDatabase(options.dbPath, useWal);
-  initSchema(db);
+  const isReadonly = options.readonly ?? false;
+  const db = openDatabase(options.dbPath, useWal, isReadonly);
+  if (!isReadonly) {
+    initSchema(db);
+  }
 
   const graphStore = new SqliteGraphStore(db);
   const searchStore = new SqliteSearchStore(db);

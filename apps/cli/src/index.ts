@@ -10,13 +10,14 @@
 
 import { parseArgs } from "node:util";
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
-import { mkdirSync } from "node:fs";
+import { resolve, dirname } from "node:path";
+import { mkdirSync, existsSync } from "node:fs";
 import type { RepoConfig } from "@mma/core";
 import { createSqliteStores } from "@mma/storage";
 import type { SqliteStores } from "@mma/storage";
 import { indexCommand } from "./commands/index-cmd.js";
 import { queryCommand } from "./commands/query-cmd.js";
+import { serveCommand } from "./commands/serve-cmd.js";
 
 interface CliConfig {
   readonly repos: readonly RepoConfig[];
@@ -30,6 +31,7 @@ async function main(): Promise<void> {
       config: { type: "string", short: "c", default: "mma.config.json" },
       verbose: { type: "boolean", short: "v", default: false },
       help: { type: "boolean", short: "h", default: false },
+      db: { type: "string" },
     },
   });
 
@@ -39,9 +41,36 @@ async function main(): Promise<void> {
   }
 
   const command = positionals[0];
-  const configPath = resolve(values.config);
   const verbose = values.verbose;
 
+  // Resolve DB path (--db flag or default data/mma.db)
+  const dbPath = values.db
+    ? (values.db === ":memory:" ? ":memory:" : resolve(values.db))
+    : resolve("data", "mma.db");
+
+  // serve command bypasses config -- only needs the DB (read-only)
+  if (command === "serve") {
+    if (!existsSync(dbPath)) {
+      console.error(`Database not found: ${dbPath}`);
+      console.error("Run 'mma index' first to create the analysis database.");
+      process.exit(1);
+    }
+    const stores = createSqliteStores({ dbPath, readonly: true });
+    try {
+      await serveCommand({
+        graphStore: stores.graphStore,
+        searchStore: stores.searchStore,
+        kvStore: stores.kvStore,
+      });
+    } finally {
+      stores.close();
+    }
+    return;
+  }
+
+  mkdirSync(dirname(dbPath), { recursive: true });
+
+  const configPath = resolve(values.config);
   let config: CliConfig;
   try {
     const raw = await readFile(configPath, "utf-8");
@@ -52,12 +81,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Persistent SQLite stores in data/mma.db
-  const dataDir = resolve("data");
-  mkdirSync(dataDir, { recursive: true });
-  const stores: SqliteStores = createSqliteStores({
-    dbPath: resolve(dataDir, "mma.db"),
-  });
+  const stores: SqliteStores = createSqliteStores({ dbPath });
   const { graphStore, searchStore, kvStore } = stores;
 
   try {
@@ -105,10 +129,12 @@ Multi-Model Analyzer (mma)
 Usage:
   mma index [-c config.json] [-v]    Index repositories
   mma query [-c config.json] "..."   Query the index
+  mma serve [--db path/to/mma.db]    Start MCP server (stdio)
 
 Options:
   -c, --config  Path to config file (default: mma.config.json)
   -v, --verbose Enable verbose output
+  --db          Path to SQLite database (default: data/mma.db)
   -h, --help    Show this help message
 `);
 }

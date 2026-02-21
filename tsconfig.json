@@ -13,6 +13,7 @@
     { "path": "packages/models/functional" },
     { "path": "packages/diagnostics" },
     { "path": "packages/query" },
+    { "path": "packages/mcp" },
     { "path": "apps/cli" }
   ]
 }
