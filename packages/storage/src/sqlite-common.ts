@@ -31,7 +31,7 @@ export interface SqliteStoreOptions {
 
 export function openDatabase(dbPath: string, wal = true, readonly = false): Database.Database {
   const db = new Database(dbPath, { readonly });
-  if (wal) {
+  if (!readonly && wal) {
     db.pragma("journal_mode = WAL");
   }
   db.pragma("synchronous = NORMAL");

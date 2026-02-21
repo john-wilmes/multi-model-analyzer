@@ -44,7 +44,9 @@ async function main(): Promise<void> {
   const verbose = values.verbose;
 
   // Resolve DB path (--db flag or default data/mma.db)
-  const dbPath = values.db ? resolve(values.db) : resolve("data", "mma.db");
+  const dbPath = values.db
+    ? (values.db === ":memory:" ? ":memory:" : resolve(values.db))
+    : resolve("data", "mma.db");
 
   // serve command bypasses config -- only needs the DB (read-only)
   if (command === "serve") {
