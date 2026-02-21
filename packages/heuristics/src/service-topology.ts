@@ -533,6 +533,9 @@ function extractFirstStringArg(
   if (!argsNode) return null;
   for (let i = 0; i < argsNode.namedChildCount; i++) {
     const arg = argsNode.namedChild(i)!;
+    if (arg.type === "number") {
+      return arg.text;
+    }
     if (arg.type === "string" || arg.type === "template_string") {
       // Strip quotes
       const text = arg.text;

@@ -9,6 +9,7 @@ import { routeQuery } from "@mma/query";
 import { executeSearchQuery } from "@mma/query";
 import { executeCallersQuery, executeCalleesQuery, executeDependencyQuery } from "@mma/query";
 import { executeArchitectureQuery } from "@mma/query";
+import type { DetectedPattern, FaultTree } from "@mma/core";
 import type { GraphStore, SearchStore, KVStore } from "@mma/storage";
 
 export interface QueryOptions {
@@ -253,7 +254,7 @@ export async function queryCommand(
         if (repoFilter && repo !== repoFilter) continue;
         const json = await options.kvStore.get(key);
         if (!json) continue;
-        let patterns: { name: string; kind: string; confidence: number; locations: { repo: string; module: string }[] }[];
+        let patterns: DetectedPattern[];
         try {
           patterns = JSON.parse(json);
         } catch {
@@ -311,7 +312,7 @@ export async function queryCommand(
         if (repoFilter && repo !== repoFilter) continue;
         const json = await options.kvStore.get(key);
         if (!json) continue;
-        let trees: { topEvent: { id: string; label: string; kind: string; children: unknown[] }; repo: string }[];
+        let trees: FaultTree[];
         try {
           trees = JSON.parse(json);
         } catch {
