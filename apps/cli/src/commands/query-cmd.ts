@@ -228,6 +228,114 @@ export async function queryCommand(
       break;
     }
 
+    case "pattern": {
+      const keys = await options.kvStore.keys("patterns:");
+      let totalPatterns = 0;
+      const q = decision.strippedQuery.toLowerCase();
+      // Extract pattern kind filter from query
+      const kindMap: Record<string, string> = {
+        factory: "factory", factories: "factory",
+        singleton: "singleton", singletons: "singleton",
+        observer: "observer", observers: "observer",
+        adapter: "adapter", adapters: "adapter",
+        facade: "facade", facades: "facade",
+        repository: "repository", repositories: "repository",
+        middleware: "middleware", middlewares: "middleware",
+        decorator: "decorator", decorators: "decorator",
+      };
+      let kindFilter: string | null = null;
+      for (const [word, kind] of Object.entries(kindMap)) {
+        if (q.includes(word)) { kindFilter = kind; break; }
+      }
+
+      for (const key of keys) {
+        const repo = key.replace("patterns:", "");
+        if (repoFilter && repo !== repoFilter) continue;
+        const json = await options.kvStore.get(key);
+        if (!json) continue;
+        let patterns: { name: string; kind: string; confidence: number; locations: { repo: string; module: string }[] }[];
+        try {
+          patterns = JSON.parse(json);
+        } catch {
+          console.log(`Warning: corrupted pattern data for ${repo}. Re-run 'index' to regenerate.`);
+          continue;
+        }
+        if (kindFilter) {
+          patterns = patterns.filter((p) => p.kind === kindFilter);
+        }
+        totalPatterns += patterns.length;
+        if (patterns.length > 0) {
+          console.log(`${patterns.length} patterns (${repo})${kindFilter ? ` [${kindFilter}]` : ""}:`);
+          for (const p of patterns.slice(0, 30)) {
+            const loc = p.locations[0]?.module ?? "";
+            console.log(`  [${p.kind}] ${p.name} (confidence: ${p.confidence.toFixed(2)}) ${loc}`);
+          }
+          if (patterns.length > 30) {
+            console.log(`  ... and ${patterns.length - 30} more`);
+          }
+        }
+      }
+      if (totalPatterns === 0) {
+        console.log(repoFilter
+          ? `No patterns found for repo: ${repoFilter}${kindFilter ? ` [${kindFilter}]` : ""}`
+          : `No patterns found${kindFilter ? ` [${kindFilter}]` : ""}.`);
+      }
+      break;
+    }
+
+    case "documentation": {
+      const keys = await options.kvStore.keys("docs:functional:");
+      let found = false;
+      for (const key of keys) {
+        const repo = key.replace("docs:functional:", "");
+        if (repoFilter && repo !== repoFilter) continue;
+        const docs = await options.kvStore.get(key);
+        if (!docs) continue;
+        found = true;
+        console.log(`Documentation (${repo}):\n`);
+        console.log(docs);
+      }
+      if (!found) {
+        console.log(repoFilter
+          ? `No documentation found for repo: ${repoFilter}`
+          : "No documentation available. Run 'index' first.");
+      }
+      break;
+    }
+
+    case "faulttree": {
+      const keys = await options.kvStore.keys("faultTrees:");
+      let totalTrees = 0;
+      for (const key of keys) {
+        const repo = key.replace("faultTrees:", "");
+        if (repoFilter && repo !== repoFilter) continue;
+        const json = await options.kvStore.get(key);
+        if (!json) continue;
+        let trees: { topEvent: { id: string; label: string; kind: string; children: unknown[] }; repo: string }[];
+        try {
+          trees = JSON.parse(json);
+        } catch {
+          console.log(`Warning: corrupted fault tree data for ${repo}. Re-run 'index' to regenerate.`);
+          continue;
+        }
+        totalTrees += trees.length;
+        console.log(`${trees.length} fault trees (${repo}):`);
+        for (const tree of trees.slice(0, 20)) {
+          const childCount = tree.topEvent.children?.length ?? 0;
+          console.log(`  [${tree.topEvent.kind}] ${tree.topEvent.label} (${childCount} children)`);
+        }
+        if (trees.length > 20) {
+          console.log(`  ... and ${trees.length - 20} more`);
+        }
+      }
+      if (totalTrees === 0) {
+        console.log(repoFilter
+          ? `No fault trees found for repo: ${repoFilter}`
+          : "No fault trees found. Run 'index' first.");
+      }
+      break;
+    }
+
     case "synthesis": {
       console.log("Synthesis queries require tier 4 (Sonnet) -- not yet implemented in CLI.");
       break;
