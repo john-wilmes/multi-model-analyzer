@@ -11,3 +11,6 @@ export { extractLogStatements } from "./logs.js";
 export type { DrainOptions } from "./logs.js";
 
 export { analyzeNaming, splitIdentifier } from "./naming.js";
+
+export { extractServiceTopology } from "./service-topology.js";
+export type { ServiceTopologyInput } from "./service-topology.js";
