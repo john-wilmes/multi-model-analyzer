@@ -1,0 +1,24 @@
+{
+  "name": "@mma/mcp",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "type-check": "tsc --build --noEmit"
+  },
+  "dependencies": {
+    "@mma/core": "*",
+    "@mma/query": "*",
+    "@mma/storage": "*",
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "zod": "^3.25.0"
+  }
+}
