@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "mma": {
+      "command": "node",
+      "args": ["apps/cli/dist/index.js", "serve"]
+    }
+  }
+}
