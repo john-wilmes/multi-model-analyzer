@@ -150,6 +150,10 @@ npx mma query "dependencies of scheduler"
 npx mma query "error handling risks"
 ```
 
+## Roadmap
+
+See [docs/roadmap.md](docs/roadmap.md) for planned features informed by analysis of comparable tools.
+
 ## Development
 
 ```bash
