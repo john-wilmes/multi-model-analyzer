@@ -332,6 +332,9 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
           imports: importsByFile,
         });
         patternsByRepo.set(repo.name, patterns);
+        if (patterns.length > 0) {
+          await kvStore.set(`patterns:${repo.name}`, JSON.stringify(patterns));
+        }
         log(`    ${patterns.length} patterns detected (from ${symbolsByFile.size} files with symbols)`);
 
         // 5c: Feature flag scanning

@@ -95,4 +95,33 @@ describe("routeQuery", () => {
     expect(result.extractedEntities).toContain("renderToHTMLOrFlight");
     expect(result.route).toBe("structural");
   });
+
+  it("routes pattern queries correctly", () => {
+    expect(routeQuery("find patterns").route).toBe("pattern");
+    expect(routeQuery("show factories").route).toBe("pattern");
+    expect(routeQuery("list singletons").route).toBe("pattern");
+    expect(routeQuery("show adapters").route).toBe("pattern");
+    expect(routeQuery("find middleware").route).toBe("pattern");
+    expect(routeQuery("what decorators exist").route).toBe("pattern");
+    expect(routeQuery("find repositories").route).toBe("pattern");
+  });
+
+  it("routes documentation queries correctly", () => {
+    expect(routeQuery("show docs").route).toBe("documentation");
+    expect(routeQuery("documentation for worker").route).toBe("documentation");
+    expect(routeQuery("docs for novu-api").route).toBe("documentation");
+  });
+
+  it("routes fault tree queries correctly", () => {
+    expect(routeQuery("fault trees").route).toBe("faulttree");
+    expect(routeQuery("show fault tree").route).toBe("faulttree");
+    expect(routeQuery("failure paths in api").route).toBe("faulttree");
+    expect(routeQuery("failure analysis").route).toBe("faulttree");
+    expect(routeQuery("basic events").route).toBe("faulttree");
+  });
+
+  it("routes 'faults' (not 'fault tree') to analytical", () => {
+    expect(routeQuery("show faults").route).toBe("analytical");
+    expect(routeQuery("what are the faults").route).toBe("analytical");
+  });
 });

@@ -84,6 +84,22 @@ export function extractServiceTopology(
         },
       });
     }
+
+    // Detect WebSocket patterns
+    const wsCalls = findWebSocketCalls(tree.rootNode, filePath, fileImports);
+    for (const ws of wsCalls) {
+      edges.push({
+        source: filePath,
+        target: ws.target,
+        kind: "service-call",
+        metadata: {
+          repo: input.repo,
+          protocol: "websocket",
+          role: ws.role,
+          detail: ws.detail,
+        },
+      });
+    }
   }
 
   return edges;
@@ -366,6 +382,95 @@ function findHttpCalls(
   return results;
 }
 
+interface WebSocketRef {
+  readonly target: string;
+  readonly role: "server" | "client";
+  readonly detail: string;
+}
+
+/**
+ * Find WebSocket patterns:
+ * - @WebSocketGateway() decorators (NestJS server)
+ * - @SubscribeMessage() decorators (NestJS server)
+ * - socket.emit()/socket.on() with socket.io-client imports (client)
+ */
+function findWebSocketCalls(
+  rootNode: TreeSitterNode,
+  _filePath: string,
+  fileImports: readonly string[],
+): WebSocketRef[] {
+  const results: WebSocketRef[] = [];
+  const usesSocketClient = fileImports.some(
+    (imp) => imp === "socket.io-client" || imp.startsWith("socket.io-client/"),
+  );
+  const usesNestWs = fileImports.some(
+    (imp) => imp === "@nestjs/websockets",
+  );
+
+  visitNodes(rootNode, (node) => {
+    // @WebSocketGateway() decorator (NestJS server)
+    if (node.type === "decorator" && usesNestWs) {
+      const expr = node.namedChild(0);
+      if (expr?.type === "call_expression") {
+        const funcName = expr.childForFieldName("function")?.text;
+        if (funcName === "WebSocketGateway") {
+          const args = expr.childForFieldName("arguments");
+          const port = extractFirstStringArg(args);
+          results.push({
+            target: port ? `ws://localhost:${port}` : "websocket-gateway",
+            role: "server",
+            detail: port ? `@WebSocketGateway(${port})` : "@WebSocketGateway()",
+          });
+        }
+      }
+    }
+
+    // @SubscribeMessage('event') decorator (NestJS server)
+    if (node.type === "decorator" && usesNestWs) {
+      const expr = node.namedChild(0);
+      if (expr?.type === "call_expression") {
+        const funcName = expr.childForFieldName("function")?.text;
+        if (funcName === "SubscribeMessage") {
+          const args = expr.childForFieldName("arguments");
+          const event = extractFirstStringArg(args);
+          results.push({
+            target: event ?? "websocket-event",
+            role: "server",
+            detail: event ? `@SubscribeMessage('${event}')` : "@SubscribeMessage()",
+          });
+        }
+      }
+    }
+
+    // socket.emit()/socket.on() with socket.io-client
+    if (
+      node.type === "call_expression" &&
+      usesSocketClient &&
+      node.childForFieldName("function")?.type === "member_expression"
+    ) {
+      const memberExpr = node.childForFieldName("function")!;
+      const method = memberExpr.childForFieldName("property")?.text;
+      if (method === "emit" || method === "on") {
+        const objectText = memberExpr.childForFieldName("object")?.text ?? "";
+        // Only match socket-like objects (not arbitrary .emit calls)
+        if (/socket/i.test(objectText) || objectText === "io") {
+          const args = node.childForFieldName("arguments");
+          const event = extractFirstStringArg(args);
+          results.push({
+            target: event ?? "websocket-event",
+            role: "client",
+            detail: event
+              ? `${objectText}.${method}('${event}')`
+              : `${objectText}.${method}()`,
+          });
+        }
+      }
+    }
+  });
+
+  return results;
+}
+
 // --- AST helpers ---
 
 function visitNodes(
@@ -428,6 +533,9 @@ function extractFirstStringArg(
   if (!argsNode) return null;
   for (let i = 0; i < argsNode.namedChildCount; i++) {
     const arg = argsNode.namedChild(i)!;
+    if (arg.type === "number") {
+      return arg.text;
+    }
     if (arg.type === "string" || arg.type === "template_string") {
       // Strip quotes
       const text = arg.text;

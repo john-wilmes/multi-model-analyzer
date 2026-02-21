@@ -11,7 +11,7 @@
 import type { SarifLog } from "@mma/core";
 import type { GraphStore, SearchStore, KVStore } from "@mma/storage";
 
-export type QueryRoute = "structural" | "search" | "analytical" | "synthesis" | "architecture";
+export type QueryRoute = "structural" | "search" | "analytical" | "synthesis" | "architecture" | "pattern" | "documentation" | "faulttree";
 
 export interface RouterConfig {
   readonly graphStore: GraphStore;
@@ -48,6 +48,11 @@ export function routeQuery(query: string): RouteDecision {
     return { route: "structural", confidence: 0.9, extractedEntities: entities, repo, strippedQuery };
   }
 
+  // Fault tree patterns (before analytical to avoid "fault" triggering analytical)
+  if (/\bfault\s*trees?\b|\bfailure\s*(paths?|analysis)\b|\bbasic\s*events?\b/.test(normalized)) {
+    return { route: "faulttree", confidence: 0.9, extractedEntities: entities, repo, strippedQuery };
+  }
+
   // Analytical patterns
   if (/\b(risks?|faults?|errors?|failures?|dead|unused|orphan|violations?|flags?|config|diagnostics?|warnings?|issues?|gaps?|missing|circular)\b/.test(normalized)) {
     return { route: "analytical", confidence: 0.85, extractedEntities: entities, repo, strippedQuery };
@@ -56,6 +61,16 @@ export function routeQuery(query: string): RouteDecision {
   // Architecture patterns (cross-repo topology, service overview)
   if (/\b(architecture|topology|service[\s-]?map|cross[\s-]?repo|(?:architecture|service)\s+overview)\b/.test(normalized)) {
     return { route: "architecture", confidence: 0.9, extractedEntities: entities, repo, strippedQuery };
+  }
+
+  // Pattern detection patterns
+  if (/\b(patterns?|factor(?:y|ies)|singletons?|observers?|adapters?|facades?|repositor(?:y|ies)|middlewares?|decorators?)\b/.test(normalized)) {
+    return { route: "pattern", confidence: 0.85, extractedEntities: entities, repo, strippedQuery };
+  }
+
+  // Documentation patterns (before synthesis to avoid "describe" triggering synthesis)
+  if (/\b(docs?|documentation)\b/.test(normalized)) {
+    return { route: "documentation", confidence: 0.85, extractedEntities: entities, repo, strippedQuery };
   }
 
   // Synthesis patterns (complex questions)
