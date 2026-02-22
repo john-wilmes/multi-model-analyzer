@@ -188,7 +188,13 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
 
     // Recovery: load cached symbols from KV
     const symbolKeys = await kvStore.keys(`symbols:${repo.name}:`);
-    if (symbolKeys.length === 0) continue; // No cached symbols to recover from
+    if (symbolKeys.length === 0) {
+      // No cached symbols: pre-Increment-3 run. Backfill pipelineComplete
+      // since the old code only saved commit hash on successful parse.
+      await kvStore.set(`pipelineComplete:${repo.name}`, "true");
+      log(`  [${repo.name}] Backfilled pipelineComplete (pre-recovery-era data)`);
+      continue;
+    }
 
     log(`  [${repo.name}] Recovery: loading ${symbolKeys.length} cached files...`);
     const recoveredFiles: ParsedFile[] = [];
