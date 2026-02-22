@@ -104,13 +104,20 @@ function findLogCalls(
   return results;
 }
 
+const LOG_RECEIVERS = /(?:console|logger|log|winston|pino|bunyan)$/i;
+
 function inferSeverity(callText: string): LogSeverity | null {
-  // Generic patterns cover both console.X and logger.X forms
-  if (/\.(error|fatal)\s*$/.test(callText)) return "error";
-  if (/\.(warn|warning)\s*$/.test(callText)) return "warn";
-  if (/\.(info|log)\s*$/.test(callText)) return "info";
-  if (/\.(debug|trace|verbose)\s*$/.test(callText)) return "debug";
-  return null;
+  const match = callText.match(
+    /(?:^|[?.])([A-Za-z_$][\w$]*)\??\.(error|fatal|warn|warning|info|log|debug|trace|verbose)\s*$/,
+  );
+  if (!match) return null;
+  const receiver = match[1]!;
+  if (!LOG_RECEIVERS.test(receiver)) return null;
+  const level = match[2]!;
+  if (level === "error" || level === "fatal") return "error";
+  if (level === "warn" || level === "warning") return "warn";
+  if (level === "info" || level === "log") return "info";
+  return "debug";
 }
 
 function extractLogText(argsNode: TreeSitterNode): string {
@@ -159,7 +166,7 @@ function drainParse(
         logIds: [String(i)],
       });
 
-      if (clusters.length > options.maxChildren) {
+      if (clusters.length >= options.maxChildren) {
         console.warn(
           `[logs] Drain cluster limit reached (${options.maxChildren}); ${logMessages.length - i - 1} log messages not clustered`,
         );

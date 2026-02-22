@@ -48,7 +48,7 @@ describe("detectPatterns", () => {
     expect(singletons[0]!.name).toContain("Database");
   });
 
-  it("detects observer pattern by subscribe + notify methods", () => {
+  it("detects observer pattern by subscribe + emit methods", () => {
     const input = makeInput(
       new Map([
         [

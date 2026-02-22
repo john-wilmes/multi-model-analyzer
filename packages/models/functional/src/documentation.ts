@@ -90,6 +90,7 @@ export function findDocumentationGaps(
   const results: SarifResult[] = [];
 
   for (const entry of catalog) {
+    if (!entry.name) continue;
     // Check for services without tier 4 summaries
     const namePattern = new RegExp(`\\b${escapeRegExp(entry.name)}\\b`);
     const hasTier4 = [...summaries.values()].some(

@@ -80,7 +80,7 @@ function inferPurpose(words: string[]): PurposeResult | null {
 
   // Predicate pattern: isValid, hasPermission, canEdit
   // Checked before ACTION_VERBS since these produce more specific results
-  if (firstWord === "is" || firstWord === "has" || firstWord === "can" || firstWord === "should") {
+  if ((firstWord === "is" || firstWord === "has" || firstWord === "can" || firstWord === "should") && words.length > 1) {
     const predicate = words.slice(1).join(" ").toLowerCase();
     return {
       verb: "check",
@@ -91,7 +91,7 @@ function inferPurpose(words: string[]): PurposeResult | null {
   }
 
   // Event handler pattern: onSubmit, handleClick
-  if (firstWord === "on" || firstWord === "handle") {
+  if ((firstWord === "on" || firstWord === "handle") && words.length > 1) {
     const event = words.slice(1).join(" ").toLowerCase();
     return {
       verb: "handle",

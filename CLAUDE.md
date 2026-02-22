@@ -24,7 +24,7 @@ Monorepo with npm workspaces, 13 packages:
 
 ## Key Commands
 
-```
+```bash
 npm install                 # Install all workspace deps
 npm run build               # tsc --build (all 13 packages)
 npm run build -w packages/parsing && npm run build:wasm -w packages/parsing

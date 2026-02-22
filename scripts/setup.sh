@@ -21,7 +21,6 @@ info()  { echo -e "${GREEN}[setup]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[setup]${NC} $*"; }
 fail()  { echo -e "${RED}[setup]${NC} $*"; exit 1; }
 
-REPO_URL="https://github.com/john-wilmes/multi-model-analyzer.git"
 REPO_DIR="${MMA_DIR:-$HOME/multi-model-analyzer}"
 NODE_MIN_VERSION=22
 OLLAMA_MODEL="qwen2.5-coder:1.5b"
@@ -146,7 +145,7 @@ GLOBAL_TOOLS=(
   "@sourcegraph/scip-typescript"
 )
 for tool in "${GLOBAL_TOOLS[@]}"; do
-  PKG_NAME="$(echo "$tool" | sed 's/@.*//' | sed 's/.*\///')"
+  PKG_NAME="${tool##*/}"
   if ! command -v "$PKG_NAME" &>/dev/null && ! npx --yes "$tool" --version &>/dev/null 2>&1; then
     info "Installing $tool globally..."
     npm install -g "$tool" || warn "Could not install $tool globally -- will use npx at runtime"

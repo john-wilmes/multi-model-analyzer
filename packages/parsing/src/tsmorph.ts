@@ -55,7 +55,7 @@ export function createTsMorphProject(options?: CreateProjectOptions): Project {
     compilerOptions: {
       target: ScriptTarget.ESNext,
       module: ModuleKind.ESNext,
-      // JsxEmit.ReactJSX = 4 (not re-exported by ts-morph)
+      // ts-morph does not re-export JsxEmit; 4 = JsxEmit.ReactJSX from TypeScript
       jsx: 4 as never,
       allowJs: true,
       skipLibCheck: true,
