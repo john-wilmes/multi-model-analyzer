@@ -108,7 +108,7 @@ const LOG_RECEIVERS = /(?:console|logger|log|winston|pino|bunyan)$/i;
 
 function inferSeverity(callText: string): LogSeverity | null {
   const match = callText.match(
-    /(?:^|[?.])([A-Za-z_$][\w$]*)\.(error|fatal|warn|warning|info|log|debug|trace|verbose)\s*$/,
+    /(?:^|[?.])([A-Za-z_$][\w$]*)\??\.(error|fatal|warn|warning|info|log|debug|trace|verbose)\s*$/,
   );
   if (!match) return null;
   const receiver = match[1]!;
