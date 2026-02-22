@@ -256,7 +256,10 @@ async function dispatchRoute(
     }
 
     case "metrics": {
-      return await getMetrics(kvStore, q, repo);
+      const moduleFilter = decision.extractedEntities.length > 0
+        ? decision.extractedEntities[0]
+        : undefined;
+      return await getMetrics(kvStore, moduleFilter, repo);
     }
 
     case "blastradius": {

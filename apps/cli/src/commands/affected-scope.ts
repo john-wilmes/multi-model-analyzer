@@ -27,8 +27,11 @@ export async function computeAffectedScope(
       ...cs.addedFiles,
       ...cs.modifiedFiles,
     ];
+    // Include deleted files as blast radius roots: dependents of deleted files
+    // need re-analysis even though deleted files won't be parsed themselves.
+    const blastRoots = [...changedFiles, ...cs.deletedFiles];
 
-    if (changedFiles.length === 0) {
+    if (blastRoots.length === 0) {
       result.set(cs.repo, {
         changedFiles: [],
         affectedFiles: [],
@@ -39,12 +42,14 @@ export async function computeAffectedScope(
     }
 
     const blastResult = await computeBlastRadius(
-      changedFiles,
+      blastRoots,
       graphStore,
       { maxDepth, repo: cs.repo },
     );
 
     const affectedPaths = blastResult.affectedFiles.map((f) => f.path);
+    // allScopedFiles only includes files that still exist (not deleted),
+    // since deleted files can't be parsed.
     const allScoped = [...new Set([...changedFiles, ...affectedPaths])];
 
     result.set(cs.repo, {

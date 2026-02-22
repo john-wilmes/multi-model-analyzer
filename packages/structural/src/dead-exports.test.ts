@@ -69,7 +69,9 @@ describe("detectDeadExports", () => {
   });
 
   it("includes repo in SARIF location properties", () => {
-    const files = [pf("orphan.ts", [sym("Foo", "class")])];
+    const files: ParsedFile[] = [
+      { path: "orphan.ts", repo: "my-repo", kind: "typescript", symbols: [sym("Foo", "class")], errors: [], contentHash: "abc" },
+    ];
     const results = detectDeadExports(files, [], "my-repo");
 
     expect(results[0]!.locations?.[0]?.logicalLocations?.[0]?.properties?.["repo"]).toBe("my-repo");

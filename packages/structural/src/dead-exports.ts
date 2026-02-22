@@ -19,10 +19,10 @@ export function detectDeadExports(
 ): SarifResult[] {
   const entryPoints = options?.entryPoints ?? new Set<string>();
 
-  // Build set of all files that are import targets
+  // Build set of all files that are import targets (filtered to this repo)
   const importedFiles = new Set<string>();
   for (const edge of importEdges) {
-    if (edge.kind === "imports") {
+    if (edge.kind === "imports" && (!edge.metadata?.["repo"] || edge.metadata["repo"] === repo)) {
       importedFiles.add(edge.target);
     }
   }
@@ -30,6 +30,7 @@ export function detectDeadExports(
   const results: SarifResult[] = [];
 
   for (const pf of parsedFiles) {
+    if (pf.repo !== repo) continue;
     // Skip files with no exports
     const exportedSymbols = pf.symbols.filter((s) => s.exported);
     if (exportedSymbols.length === 0) continue;
