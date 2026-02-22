@@ -14,6 +14,7 @@ export interface AffectedScope {
   readonly repo: string;
 }
 
+/** Compute affected scope per repo. Expects one ChangeSet per repo. */
 export async function computeAffectedScope(
   changeSets: readonly ChangeSet[],
   graphStore: GraphStore,
