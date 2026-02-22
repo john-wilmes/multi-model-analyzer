@@ -166,13 +166,56 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
   const logIndexByRepo = new Map<string, LogTemplateIndex>();
   const namingByRepo = new Map<string, MethodPurposeMap>();
 
+  // Detect repos that need recovery: commit hash matches (no file changes detected)
+  // but pipelineComplete flag is missing (Phase 5+ failed on previous run).
+  // Load cached symbols so Phases 5+ can re-run without re-parsing.
+  const recoveryRepos = new Set<string>();
   for (const repo of repos) {
+    const classified = classifiedByRepo.get(repo.name);
+    if (classified && classified.length > 0) continue; // Has changes, normal processing
+
+    const savedCommit = previousCommits.get(repo.name);
+    if (!savedCommit) continue; // Never processed
+
+    const pipelineComplete = await kvStore.get(`pipelineComplete:${repo.name}`);
+    if (pipelineComplete) continue; // Fully completed last run
+
+    // Recovery: load cached symbols from KV
+    const symbolKeys = await kvStore.keys(`symbols:${repo.name}:`);
+    if (symbolKeys.length === 0) continue; // No cached symbols to recover from
+
+    log(`  [${repo.name}] Recovery: loading ${symbolKeys.length} cached files...`);
+    const recoveredFiles: ParsedFile[] = [];
+    for (const key of symbolKeys) {
+      const raw = await kvStore.get(key);
+      if (!raw) continue;
+      const { symbols, contentHash } = JSON.parse(raw) as { symbols: SymbolInfo[]; contentHash: string };
+      // Extract filePath from key: "symbols:<repo>:<filePath>"
+      const filePath = key.slice(`symbols:${repo.name}:`.length);
+      recoveredFiles.push({ path: filePath, repo: repo.name, kind: "typescript", symbols, contentHash, errors: [] });
+    }
+    if (recoveredFiles.length > 0) {
+      parsedFilesByRepo.set(repo.name, recoveredFiles);
+      // Reconstruct depGraph from persisted graph edges
+      const edges = await options.graphStore.getEdgesByKind("imports", repo.name);
+      depGraphByRepo.set(repo.name, { repo: repo.name, edges, circularDependencies: [] });
+      recoveryRepos.add(repo.name);
+      log(`  [${repo.name}] Recovered ${recoveredFiles.length} files, ${edges.length} import edges`);
+    }
+  }
+
+  for (const repo of repos) {
+    let trees: ReadonlyMap<string, TreeSitterTree> | undefined;
+
+    // Recovery repos skip Phases 3-4b (already have parsedFiles + graph edges)
+    if (recoveryRepos.has(repo.name)) {
+      log(`  [${repo.name}] Skipping Phases 3-4b (recovery mode)`);
+    } else {
     const classified = classifiedByRepo.get(repo.name);
     if (!classified || classified.length === 0) continue;
 
     // --- Phase 3: Parse files ---
     log(`  [${repo.name}] Parsing files...`);
-    let trees: ReadonlyMap<string, TreeSitterTree> | undefined;
     try {
       const result = await parseFiles(classified, repo.name, repo.localPath, {
         enableTsMorph: options.enableTsMorph,
@@ -196,6 +239,15 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
 
       trees = result.treeSitterTrees;
       parsedFilesByRepo.set(repo.name, result.parsedFiles);
+
+      // Persist parsed symbols to KV for failure recovery.
+      // If Phase 5+ fails, the next run can load these instead of re-parsing.
+      for (const pf of result.parsedFiles) {
+        await kvStore.set(
+          `symbols:${repo.name}:${pf.path}`,
+          JSON.stringify({ symbols: pf.symbols, contentHash: pf.contentHash }),
+        );
+      }
     } catch (error) {
       console.error(`  Failed to parse ${repo.name}:`, error);
       continue;
@@ -259,16 +311,27 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
       }
     }
 
+    // Save commit hash after graph extraction completes (Phases 3-4b done).
+    // Clear pipelineComplete so a Phase 5+ failure triggers recovery next run.
+    const repoChangeSet = changeSets.find(cs => cs.repo === repo.name);
+    if (repoChangeSet) {
+      await kvStore.delete(`pipelineComplete:${repo.name}`);
+      await kvStore.set(`commit:${repo.name}`, repoChangeSet.commitHash);
+    }
+    } // end of normal (non-recovery) Phases 3-4b block
+
     // --- Phase 5: Heuristic analysis ---
     const depGraph = depGraphByRepo.get(repo.name);
     const parsedFiles = parsedFilesByRepo.get(repo.name);
+    const repoClassified = classifiedByRepo.get(repo.name) ?? [];
     if (!depGraph) {
       log(`  [${repo.name}] Skipping heuristics (no dependency graph)`);
     } else {
       log(`  [${repo.name}] Running heuristics...`);
       try {
         // 5a: Service inference
-        const packageJsonFiles = classified.filter(
+        // In recovery mode, repoClassified may be empty; derive filePaths from parsedFiles.
+        const packageJsonFiles = repoClassified.filter(
           (f) => f.kind === "json" && f.path.endsWith("package.json"),
         );
 
@@ -290,7 +353,9 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
           }
         }
 
-        const filePaths = classified.map((f) => f.path);
+        const filePaths = repoClassified.length > 0
+          ? repoClassified.map((f) => f.path)
+          : (parsedFiles ?? []).map((pf) => pf.path);
         const services = inferServices({
           repo: repo.name,
           filePaths,
@@ -678,19 +743,12 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
     log(`  Aggregated ${allSarifResults.length} SARIF results into sarif:latest`);
   }
 
-  // Save commit hashes only for repos that completed successfully
-  const successfulRepos = new Set<string>();
+  // Mark repos that completed the full pipeline (Phases 3-6c).
+  // Commit hash was already saved after Phase 4b; pipelineComplete prevents
+  // unnecessary recovery on the next run.
   for (const repo of repos) {
-    // A repo succeeded if it has parsed files (Phase 3 completed)
     if (parsedFilesByRepo.has(repo.name)) {
-      successfulRepos.add(repo.name);
-    }
-  }
-  for (const changeSet of changeSets) {
-    if (successfulRepos.has(changeSet.repo)) {
-      await kvStore.set(`commit:${changeSet.repo}`, changeSet.commitHash);
-    } else {
-      log(`  Skipping commit hash for ${changeSet.repo} (processing incomplete)`);
+      await kvStore.set(`pipelineComplete:${repo.name}`, "true");
     }
   }
 

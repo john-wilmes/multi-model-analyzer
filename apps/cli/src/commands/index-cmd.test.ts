@@ -162,6 +162,7 @@ import { detectChanges, classifyFiles } from "@mma/ingestion";
 import { parseFiles } from "@mma/parsing";
 import { extractDependencyGraph } from "@mma/structural";
 import { tier1Summarize } from "@mma/summarization";
+import { inferServices } from "@mma/heuristics";
 
 const mockReadFile = readFile as ReturnType<typeof vi.fn>;
 const mockDetectChanges = detectChanges as ReturnType<typeof vi.fn>;
@@ -169,6 +170,7 @@ const mockClassifyFiles = classifyFiles as ReturnType<typeof vi.fn>;
 const mockParseFiles = parseFiles as ReturnType<typeof vi.fn>;
 const mockExtractDepGraph = extractDependencyGraph as ReturnType<typeof vi.fn>;
 const mockTier1Summarize = tier1Summarize as ReturnType<typeof vi.fn>;
+const mockInferServices = inferServices as ReturnType<typeof vi.fn>;
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -468,5 +470,78 @@ describe("indexCommand", () => {
     const cached = await kvStore.get("summary:t1:repo-a:src/svc.ts:newhash");
     expect(cached).toBeDefined();
     expect(JSON.parse(cached!)).toEqual(newSummaries);
+  });
+
+  // -----------------------------------------------------------------------
+  // Test 8: Failure recovery -- incomplete pipeline re-runs Phase 5+
+  // -----------------------------------------------------------------------
+  it("recovers from incomplete pipeline by loading cached symbols", async () => {
+    // Simulate a previous run that completed Phases 3-4b but not the full pipeline:
+    // - commit hash saved (Phase 4b done)
+    // - symbols cached in KV
+    // - pipelineComplete NOT set (Phase 5+ failed)
+    // - graph edges persisted
+    await kvStore.set("commit:repo-a", "recover1");
+    await kvStore.set(
+      "symbols:repo-a:src/main.ts",
+      JSON.stringify({ symbols: [{ name: "main", kind: "function", path: "src/main.ts", line: 1 }], contentHash: "h1" }),
+    );
+    await graphStore.addEdges([
+      { source: "src/main.ts", target: "src/util.ts", kind: "imports", metadata: { repo: "repo-a" } },
+    ]);
+    // pipelineComplete is intentionally NOT set
+
+    // detectChanges returns same commit -> empty changeset (no file changes)
+    mockDetectChanges.mockResolvedValue(
+      makeChangeSet({ repo: "repo-a", commitHash: "recover1", previousCommitHash: "recover1" }),
+    );
+    mockClassifyFiles.mockReturnValue([]);
+
+    // Phase 5 heuristics will be called on the recovered data
+    mockInferServices.mockReturnValue([]);
+    mockTier1Summarize.mockReturnValue([
+      { entityId: "src/main.ts#main", description: "main function", tier: 1, confidence: 0.7 },
+    ]);
+
+    await indexCommand(makeOptions([repoA], { kvStore, graphStore, searchStore }));
+
+    // parseFiles should NOT be called (recovery skips Phase 3)
+    expect(mockParseFiles).not.toHaveBeenCalled();
+
+    // inferServices should be called (Phase 5 re-runs)
+    expect(mockInferServices).toHaveBeenCalled();
+
+    // Summaries should be indexed in search store
+    const results = await searchStore.search("main function");
+    expect(results.length).toBeGreaterThan(0);
+
+    // pipelineComplete should now be set (full pipeline completed)
+    const complete = await kvStore.get("pipelineComplete:repo-a");
+    expect(complete).toBe("true");
+  });
+
+  // -----------------------------------------------------------------------
+  // Test 9: pipelineComplete flag prevents recovery on fully-completed repo
+  // -----------------------------------------------------------------------
+  it("skips recovery when pipelineComplete is set", async () => {
+    // Simulate a fully completed previous run
+    await kvStore.set("commit:repo-a", "done1");
+    await kvStore.set("pipelineComplete:repo-a", "true");
+    await kvStore.set(
+      "symbols:repo-a:src/app.ts",
+      JSON.stringify({ symbols: [], contentHash: "h2" }),
+    );
+
+    // detectChanges returns same commit -> no changes
+    mockDetectChanges.mockResolvedValue(
+      makeChangeSet({ repo: "repo-a", commitHash: "done1", previousCommitHash: "done1" }),
+    );
+    mockClassifyFiles.mockReturnValue([]);
+
+    await indexCommand(makeOptions([repoA], { kvStore, graphStore, searchStore }));
+
+    // Neither parse nor heuristics should run (repo fully completed, skipped)
+    expect(mockParseFiles).not.toHaveBeenCalled();
+    expect(mockInferServices).not.toHaveBeenCalled();
   });
 });
