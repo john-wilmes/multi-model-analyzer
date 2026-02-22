@@ -76,6 +76,7 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
 
   // Phase 1: Ingestion
   log("Phase 1: Detecting changes...");
+  const phase1Start = performance.now();
   const changeSets: ChangeSet[] = [];
   for (const repo of repos) {
     try {
@@ -89,8 +90,10 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
       console.error(`  Failed to index ${repo.name}:`, error);
     }
   }
+  log(`  Phase 1: ${Math.round(performance.now() - phase1Start)}ms`);
 
   // Phase 0: Cleanup stale data for deleted files
+  const phase0Start = performance.now();
   for (const changeSet of changeSets) {
     if (changeSet.deletedFiles.length > 0) {
       log(`Phase 0: Cleaning up ${changeSet.deletedFiles.length} deleted files from ${changeSet.repo}...`);
@@ -114,9 +117,11 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
       log(`  Removed stale data for ${changeSet.deletedFiles.length} files`);
     }
   }
+  log(`  Phase 0: ${Math.round(performance.now() - phase0Start)}ms`);
 
   // Phase 2: Classify files
   log("Phase 2: Classifying files...");
+  const phase2Start = performance.now();
   const classifiedByRepo = new Map<string, ReturnType<typeof classifyFiles>>();
   for (const changeSet of changeSets) {
     const classified = classifyFiles(changeSet);
@@ -153,6 +158,7 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
   if (packageRoots.size > 0) {
     log(`  Built packageRoots map: ${packageRoots.size} packages across all repos`);
   }
+  log(`  Phase 2: ${Math.round(performance.now() - phase2Start)}ms`);
 
   // Phases 3-6a: Per-repo processing (parse, structural, heuristics, models).
   // Each repo is fully processed through all tree-dependent phases before moving
@@ -216,6 +222,7 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
 
     // --- Phase 3: Parse files ---
     log(`  [${repo.name}] Parsing files...`);
+    const phase3Start = performance.now();
     try {
       const result = await parseFiles(classified, repo.name, repo.localPath, {
         enableTsMorph: options.enableTsMorph,
@@ -248,6 +255,7 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
           JSON.stringify({ symbols: pf.symbols, contentHash: pf.contentHash }),
         );
       }
+      log(`  [${repo.name}] Phase 3: ${Math.round(performance.now() - phase3Start)}ms`);
     } catch (error) {
       console.error(`  Failed to parse ${repo.name}:`, error);
       continue;
@@ -328,6 +336,7 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
       log(`  [${repo.name}] Skipping heuristics (no dependency graph)`);
     } else {
       log(`  [${repo.name}] Running heuristics...`);
+      const phase5Start = performance.now();
       try {
         // 5a: Service inference
         // In recovery mode, repoClassified may be empty; derive filePaths from parsedFiles.
@@ -443,12 +452,14 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
             log(`    0 service-call edges detected`);
           }
         }
+        log(`  [${repo.name}] Phase 5: ${Math.round(performance.now() - phase5Start)}ms`);
       } catch (error) {
         console.error(`  Failed to run heuristics for ${repo.name}:`, error);
       }
     }
 
     // --- Phase 6a: Config and fault models ---
+    const phase6aStart = performance.now();
     const flagInventory = flagsByRepo.get(repo.name);
     const logIndex = logIndexByRepo.get(repo.name);
 
@@ -554,6 +565,8 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
       }
     }
 
+    log(`  [${repo.name}] Phase 6a: ${Math.round(performance.now() - phase6aStart)}ms`);
+
     // Release tree-sitter ASTs: explicitly free WASM heap memory via tree.delete(),
     // then drop JS references. Without tree.delete(), trees are only collected by
     // JS GC which doesn't know about WASM heap pressure.
@@ -567,6 +580,7 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
 
   // Phase 6b: Summarization (tier-1 + tier-2)
   log("Phase 6b: Generating summaries...");
+  const phase6bStart = performance.now();
   const summariesByRepo = new Map<string, Map<string, Summary>>();
 
   for (const repo of repos) {
@@ -688,9 +702,11 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
       console.error(`  Failed to generate summaries for ${repo.name}:`, error);
     }
   }
+  log(`  Phase 6b: ${Math.round(performance.now() - phase6bStart)}ms`);
 
   // Phase 6c: Functional model (needs summaries from 6b, no trees needed)
   log("Phase 6c: Building functional models...");
+  const phase6cStart = performance.now();
 
   for (const repo of repos) {
     const services = servicesByRepo.get(repo.name);
@@ -714,6 +730,8 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
       console.error(`  Failed to build service catalog for ${repo.name}:`, error);
     }
   }
+
+  log(`  Phase 6c: ${Math.round(performance.now() - phase6cStart)}ms`);
 
   // Aggregate all per-repo SARIF into a combined latest result
   const allSarifResults: import("@mma/core").SarifResult[] = [];
