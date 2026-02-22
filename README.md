@@ -42,7 +42,7 @@ Repos --> Ingestion --> Parsing --> Structural Analysis --> Heuristic Analysis
 | `packages/models/functional` | Service catalog + documentation + NL query |
 | `packages/diagnostics` | SARIF emission, redaction, aggregation |
 | `packages/query` | Query routing (structural, search, analytical) |
-| `apps/cli` | CLI interface for indexing and querying |
+| `apps/cli` | CLI for indexing and querying |
 
 ### Summarization Tiers
 

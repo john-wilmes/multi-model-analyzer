@@ -201,10 +201,10 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
     for (const key of symbolKeys) {
       const raw = await kvStore.get(key);
       if (!raw) continue;
-      const { symbols, contentHash } = JSON.parse(raw) as { symbols: SymbolInfo[]; contentHash: string };
+      const { symbols, contentHash, kind = "typescript" } = JSON.parse(raw) as { symbols: SymbolInfo[]; contentHash: string; kind?: string };
       // Extract filePath from key: "symbols:<repo>:<filePath>"
       const filePath = key.slice(`symbols:${repo.name}:`.length);
-      recoveredFiles.push({ path: filePath, repo: repo.name, kind: "typescript", symbols, contentHash, errors: [] });
+      recoveredFiles.push({ path: filePath, repo: repo.name, kind: kind as ParsedFile["kind"], symbols, contentHash, errors: [] });
     }
     if (recoveredFiles.length > 0) {
       parsedFilesByRepo.set(repo.name, recoveredFiles);
@@ -258,7 +258,7 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
       for (const pf of result.parsedFiles) {
         await kvStore.set(
           `symbols:${repo.name}:${pf.path}`,
-          JSON.stringify({ symbols: pf.symbols, contentHash: pf.contentHash }),
+          JSON.stringify({ symbols: pf.symbols, contentHash: pf.contentHash, kind: pf.kind }),
         );
       }
       log(`  [${repo.name}] Phase 3: ${Math.round(performance.now() - phase3Start)}ms`);

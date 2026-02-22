@@ -256,7 +256,12 @@ export async function queryCommand(
         if (!json) continue;
         let patterns: DetectedPattern[];
         try {
-          patterns = JSON.parse(json);
+          const parsed: unknown = JSON.parse(json);
+          if (!Array.isArray(parsed)) {
+            console.log(`Warning: unexpected pattern data shape for ${repo}. Re-run 'index' to regenerate.`);
+            continue;
+          }
+          patterns = parsed as DetectedPattern[];
         } catch {
           console.log(`Warning: corrupted pattern data for ${repo}. Re-run 'index' to regenerate.`);
           continue;
@@ -314,7 +319,12 @@ export async function queryCommand(
         if (!json) continue;
         let trees: FaultTree[];
         try {
-          trees = JSON.parse(json);
+          const parsed: unknown = JSON.parse(json);
+          if (!Array.isArray(parsed)) {
+            console.log(`Warning: unexpected fault tree data shape for ${repo}. Re-run 'index' to regenerate.`);
+            continue;
+          }
+          trees = parsed as FaultTree[];
         } catch {
           console.log(`Warning: corrupted fault tree data for ${repo}. Re-run 'index' to regenerate.`);
           continue;

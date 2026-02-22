@@ -77,7 +77,7 @@ export async function getFileContent(
   const { stdout } = await execFileAsync(
     "git",
     ["show", `${commit}:${filePath}`],
-    { cwd: repoPath },
+    { cwd: repoPath, maxBuffer: 50 * 1024 * 1024 },
   );
   return stdout;
 }

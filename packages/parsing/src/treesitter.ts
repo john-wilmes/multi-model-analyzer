@@ -40,6 +40,9 @@ export async function initTreeSitter(): Promise<void> {
 }
 
 export function selectGrammar(filePath: string): Parser.Language {
+  if (!initialized) {
+    throw new Error("tree-sitter not initialized. Call initTreeSitter() first.");
+  }
   const ext = filePath.split(".").pop()?.toLowerCase();
   switch (ext) {
     case "tsx":

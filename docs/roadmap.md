@@ -1,6 +1,6 @@
 # Feature Roadmap
 
-Candidate features informed by analysis of comparable open source projects: [Roam Code](https://github.com/Cranot/roam-code), [Code Pathfinder](https://github.com/shivasurya/code-pathfinder), [dependency-cruiser](https://github.com/sverweij/dependency-cruiser), [Sourcegraph/SCIP](https://github.com/sourcegraph/scip), [CodeMCP](https://github.com/SimplyLiz/CodeMCP).
+Candidate features informed by analysis of comparable open-source projects: [Roam Code](https://github.com/Cranot/roam-code), [Code Pathfinder](https://github.com/shivasurya/code-pathfinder), [dependency-cruiser](https://github.com/sverweij/dependency-cruiser), [Sourcegraph/SCIP](https://github.com/sourcegraph/scip), [CodeMCP](https://github.com/SimplyLiz/CodeMCP).
 
 ## Landscape Summary
 

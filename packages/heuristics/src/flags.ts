@@ -188,7 +188,7 @@ function mergeFlag(
   }
 }
 
-const ENUM_FLAG_PATTERN = /^(IS_\w+_ENABLED|FEATURE_\w+|ENABLE_\w+|DISABLE_\w+)$/;
+const ENUM_FLAG_PATTERN = /^(IS_\w+_ENABLED|FEATURE_\w+|FF_\w+|FLAG_\w+|ENABLE_\w+|DISABLE_\w+)$/;
 
 function findEnumFlags(
   node: TreeSitterNode,

@@ -127,12 +127,13 @@ export async function parseFiles(
 
         // Replace tree-sitter result with richer ts-morph result
         const existingIdx = parsedFiles.findIndex((p) => p.path === relPath);
+        const existingErrors = existingIdx >= 0 ? parsedFiles[existingIdx]!.errors : [];
         const parsed: ParsedFile = {
           path: relPath,
           repo,
           kind: "typescript",
           symbols,
-          errors: [],
+          errors: existingErrors,
           contentHash: hashContent(content),
         };
 

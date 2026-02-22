@@ -53,6 +53,10 @@ export class SqliteKVStore implements KVStore {
   }
 
   async deleteByPrefix(prefix: string): Promise<number> {
+    if (prefix === "") {
+      const result = this.stmtClear.run();
+      return result.changes;
+    }
     const upper = prefix.slice(0, -1) + String.fromCharCode(prefix.charCodeAt(prefix.length - 1) + 1);
     const result = this.stmtDeleteByPrefix.run(prefix, upper);
     return result.changes;
