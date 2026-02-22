@@ -8,7 +8,9 @@ import {
   executeCalleesQuery,
   executeDependencyQuery,
   executeArchitectureQuery,
+  computeBlastRadius,
 } from "@mma/query";
+import type { ModuleMetrics, RepoMetricsSummary } from "@mma/core";
 import { z } from "zod";
 
 interface Stores {
@@ -167,6 +169,32 @@ export function registerTools(server: McpServer, stores: Stores): void {
       results: matching.slice(0, cap),
     });
   });
+  // 8. Module instability metrics
+  server.registerTool("get_metrics", {
+    description: "Get module instability metrics (coupling, abstractness, distance from main sequence) for indexed repositories.",
+    inputSchema: {
+      repo: z.string().optional().describe("Filter to a specific repository name"),
+      module: z.string().optional().describe("Filter to a specific module (file path)"),
+    },
+  }, async ({ repo, module }) => {
+    return jsonResult(await getMetrics(kvStore, module, repo));
+  });
+
+  // 9. Blast radius analysis
+  server.registerTool("get_blast_radius", {
+    description: "Compute the blast radius of changing one or more files: what other files would be affected via import and call dependencies.",
+    inputSchema: {
+      files: z.array(z.string()).describe("File paths to analyze the blast radius for"),
+      repo: z.string().optional().describe("Filter to a specific repository name"),
+      maxDepth: z.number().optional().describe("Max traversal depth (default 5)"),
+      includeCallGraph: z.boolean().optional().describe("Include call graph edges in traversal (default true)"),
+    },
+  }, async ({ files, repo, maxDepth, includeCallGraph }) => {
+    const result = await computeBlastRadius(files, graphStore, {
+      maxDepth, includeCallGraph, repo,
+    }, searchStore);
+    return jsonResult(result);
+  });
 }
 
 /** Dispatch a routed query to the appropriate handler, returning structured data. */
@@ -225,6 +253,17 @@ async function dispatchRoute(
 
     case "faulttree": {
       return await getFaultTrees(kvStore, repo);
+    }
+
+    case "metrics": {
+      return await getMetrics(kvStore, q, repo);
+    }
+
+    case "blastradius": {
+      if (decision.extractedEntities.length > 0) {
+        return await computeBlastRadiusFromDispatch(decision.extractedEntities, graphStore, searchStore, repo);
+      }
+      return { error: "No files specified for blast radius analysis." };
     }
 
     case "synthesis": {
@@ -382,4 +421,47 @@ function resolveCategoryRuleFilter(keywords: string[]): string | null {
     if (/^(?:configs?|flags?|interactions?|untested)$/.test(kw)) return "config/";
   }
   return null;
+}
+
+async function getMetrics(kvStore: KVStore, moduleFilter?: string, repo?: string): Promise<unknown> {
+  const keys = await kvStore.keys("metrics:");
+  // Filter to metrics keys (not metricsSummary keys)
+  const metricsKeys = keys.filter((k) => !k.startsWith("metricsSummary:"));
+  const results: Array<{ repo: string; modules?: ModuleMetrics[]; summary?: RepoMetricsSummary }> = [];
+
+  for (const key of metricsKeys) {
+    const r = key.replace("metrics:", "");
+    if (repo && r !== repo) continue;
+    const json = await kvStore.get(key);
+    if (!json) continue;
+    try {
+      let modules = JSON.parse(json) as ModuleMetrics[];
+      if (moduleFilter) {
+        modules = modules.filter((m) => m.module.includes(moduleFilter));
+      }
+      const summaryJson = await kvStore.get(`metricsSummary:${r}`);
+      const summary = summaryJson ? (JSON.parse(summaryJson) as RepoMetricsSummary) : undefined;
+      results.push({ repo: r, modules: moduleFilter ? modules : undefined, summary });
+    } catch { /* skip corrupted */ }
+  }
+
+  if (moduleFilter) {
+    const allModules = results.flatMap((r) => r.modules ?? []);
+    return { moduleFilter, total: allModules.length, modules: allModules };
+  }
+  return { total: results.length, repos: results };
+}
+
+async function computeBlastRadiusFromDispatch(
+  entities: readonly string[],
+  graphStore: GraphStore,
+  searchStore: SearchStore,
+  repo?: string,
+): Promise<unknown> {
+  return await computeBlastRadius(
+    [...entities],
+    graphStore,
+    { repo },
+    searchStore,
+  );
 }

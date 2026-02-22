@@ -49,6 +49,17 @@ export type {
   ServiceCatalogEntry,
   ApiEndpoint,
 
+  // Metrics
+  MetricZone,
+  ModuleMetrics,
+  RepoMetricsSummary,
+
+  // Architectural Rules
+  ArchitecturalRule,
+  LayerRuleConfig,
+  ForbiddenImportConfig,
+  DependencyDirectionConfig,
+
   // Shared
   LogicalLocation,
   ContentHash,

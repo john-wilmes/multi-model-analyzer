@@ -12,7 +12,7 @@ import { parseArgs } from "node:util";
 import { readFile } from "node:fs/promises";
 import { resolve, dirname } from "node:path";
 import { mkdirSync, existsSync } from "node:fs";
-import type { RepoConfig } from "@mma/core";
+import type { RepoConfig, ArchitecturalRule } from "@mma/core";
 import { createSqliteStores } from "@mma/storage";
 import type { SqliteStores } from "@mma/storage";
 import { indexCommand } from "./commands/index-cmd.js";
@@ -22,6 +22,7 @@ import { serveCommand } from "./commands/serve-cmd.js";
 interface CliConfig {
   readonly repos: readonly RepoConfig[];
   readonly mirrorDir: string;
+  readonly rules?: readonly ArchitecturalRule[];
 }
 
 async function main(): Promise<void> {
@@ -32,6 +33,7 @@ async function main(): Promise<void> {
       verbose: { type: "boolean", short: "v", default: false },
       help: { type: "boolean", short: "h", default: false },
       db: { type: "string" },
+      affected: { type: "boolean", default: false },
     },
   });
 
@@ -94,6 +96,8 @@ async function main(): Promise<void> {
           graphStore,
           searchStore,
           verbose,
+          rules: config.rules,
+          affected: values.affected,
         });
         break;
 
@@ -127,14 +131,15 @@ function printUsage(): void {
 Multi-Model Analyzer (mma)
 
 Usage:
-  mma index [-c config.json] [-v]    Index repositories
-  mma query [-c config.json] "..."   Query the index
-  mma serve [--db path/to/mma.db]    Start MCP server (stdio)
+  mma index [-c config.json] [-v] [--affected]  Index repositories
+  mma query [-c config.json] "..."              Query the index
+  mma serve [--db path/to/mma.db]               Start MCP server (stdio)
 
 Options:
   -c, --config  Path to config file (default: mma.config.json)
   -v, --verbose Enable verbose output
   --db          Path to SQLite database (default: data/mma.db)
+  --affected    Scope analysis to changed files and their blast radius
   -h, --help    Show this help message
 `);
 }

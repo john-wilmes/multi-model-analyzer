@@ -11,7 +11,7 @@
 import type { SarifLog } from "@mma/core";
 import type { GraphStore, SearchStore, KVStore } from "@mma/storage";
 
-export type QueryRoute = "structural" | "search" | "analytical" | "synthesis" | "architecture" | "pattern" | "documentation" | "faulttree";
+export type QueryRoute = "structural" | "search" | "analytical" | "synthesis" | "architecture" | "pattern" | "documentation" | "faulttree" | "metrics" | "blastradius";
 
 export interface RouterConfig {
   readonly graphStore: GraphStore;
@@ -42,6 +42,16 @@ export function routeQuery(query: string): RouteDecision {
 
   const entities = extractEntities(strippedQuery);
   const normalized = strippedQuery.toLowerCase().trim();
+
+  // Metrics patterns (instability, coupling)
+  if (/\b(metrics?|instability|coupling|afferent|efferent|abstractness|main[\s-]?sequence)\b/.test(normalized)) {
+    return { route: "metrics", confidence: 0.9, extractedEntities: entities, repo, strippedQuery };
+  }
+
+  // Blast radius patterns
+  if (/\b(blast\s*radius|impact|affected\s*by|ripple)\b/.test(normalized)) {
+    return { route: "blastradius", confidence: 0.9, extractedEntities: entities, repo, strippedQuery };
+  }
 
   // Structural patterns
   if (/\b(calls?|depend(?:s|ency|encies)?|imports?|extends?|implements?|references?|definition|callers?|callees?|uses|used|modules?|files?)\b/.test(normalized)) {

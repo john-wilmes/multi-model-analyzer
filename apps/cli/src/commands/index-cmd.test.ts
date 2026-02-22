@@ -42,6 +42,12 @@ vi.mock("@mma/structural", () => ({
   buildControlFlowGraph: vi.fn(),
   createCfgIdCounter: vi.fn().mockReturnValue({ next: () => 0 }),
   extractCallEdgesFromTreeSitter: vi.fn().mockReturnValue([]),
+  computeModuleMetrics: vi.fn().mockReturnValue([]),
+  summarizeRepoMetrics: vi.fn().mockReturnValue({
+    repo: "", moduleCount: 0, avgInstability: 0, avgAbstractness: 0,
+    avgDistance: 0, painZoneCount: 0, uselessnessZoneCount: 0,
+  }),
+  detectDeadExports: vi.fn().mockReturnValue([]),
 }));
 
 vi.mock("@mma/heuristics", () => ({
@@ -51,6 +57,7 @@ vi.mock("@mma/heuristics", () => ({
   extractLogStatements: vi.fn().mockReturnValue({ repo: "", templates: [] }),
   analyzeNaming: vi.fn().mockReturnValue({ methods: [] }),
   extractServiceTopology: vi.fn().mockReturnValue([]),
+  evaluateArchRules: vi.fn().mockReturnValue([]),
 }));
 
 vi.mock("@mma/summarization", () => ({
@@ -78,6 +85,10 @@ vi.mock("@mma/model-fault", () => ({
 vi.mock("@mma/model-functional", () => ({
   buildServiceCatalog: vi.fn().mockReturnValue([]),
   generateDocumentation: vi.fn().mockReturnValue(""),
+}));
+
+vi.mock("./affected-scope.js", () => ({
+  computeAffectedScope: vi.fn().mockResolvedValue(new Map()),
 }));
 
 // ---------------------------------------------------------------------------

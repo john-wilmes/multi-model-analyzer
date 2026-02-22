@@ -22,11 +22,12 @@ import type {
   Summary,
   ControlFlowGraph,
   CallGraph,
+  ArchitecturalRule,
 } from "@mma/core";
 import { detectChanges, classifyFiles } from "@mma/ingestion";
 import { parseFiles } from "@mma/parsing";
 import type { TreeSitterTree } from "@mma/parsing";
-import { extractDependencyGraph, buildControlFlowGraph, createCfgIdCounter, extractCallEdgesFromTreeSitter } from "@mma/structural";
+import { extractDependencyGraph, buildControlFlowGraph, createCfgIdCounter, extractCallEdgesFromTreeSitter, computeModuleMetrics, summarizeRepoMetrics, detectDeadExports } from "@mma/structural";
 import type { TreeSitterNode } from "@mma/parsing";
 import { buildFeatureModel, extractConstraintsFromCode, validateFeatureModel } from "@mma/model-config";
 import { identifyLogRoots, traceBackwardFromLog, buildFaultTree, analyzeGaps } from "@mma/model-fault";
@@ -38,6 +39,7 @@ import {
   extractLogStatements,
   analyzeNaming,
   extractServiceTopology,
+  evaluateArchRules,
 } from "@mma/heuristics";
 import type { PackageJsonInfo } from "@mma/heuristics";
 import type { KVStore, GraphStore, SearchStore } from "@mma/storage";
@@ -48,6 +50,8 @@ import {
   SONNET_DEFAULTS,
 } from "@mma/summarization";
 import type { ServiceSummaryInput } from "@mma/summarization";
+import { computeAffectedScope } from "./affected-scope.js";
+import type { AffectedScope } from "./affected-scope.js";
 
 export interface IndexOptions {
   readonly repos: readonly RepoConfig[];
@@ -58,6 +62,8 @@ export interface IndexOptions {
   readonly verbose: boolean;
   readonly enableTsMorph?: boolean;
   readonly anthropicApiKey?: string;
+  readonly rules?: readonly ArchitecturalRule[];
+  readonly affected?: boolean;
 }
 
 export async function indexCommand(options: IndexOptions): Promise<void> {
@@ -160,6 +166,17 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
   }
   log(`  Phase 2: ${Math.round(performance.now() - phase2Start)}ms`);
 
+  // Affected scoping: when --affected is set, compute blast radius per repo
+  // and filter Phase 3 parsing to only scoped files.
+  let scopeByRepo: Map<string, AffectedScope> | undefined;
+  if (options.affected) {
+    log("Computing affected scope...");
+    scopeByRepo = await computeAffectedScope(changeSets, options.graphStore);
+    for (const [repoName, scope] of scopeByRepo) {
+      log(`  ${repoName}: ${scope.changedFiles.length} changed, ${scope.affectedFiles.length} affected, ${scope.allScopedFiles.length} total scoped`);
+    }
+  }
+
   // Phases 3-6a: Per-repo processing (parse, structural, heuristics, models).
   // Each repo is fully processed through all tree-dependent phases before moving
   // to the next, so only one repo's trees occupy WASM memory at a time.
@@ -223,8 +240,18 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
     if (recoveryRepos.has(repo.name)) {
       log(`  [${repo.name}] Skipping Phases 3-4b (recovery mode)`);
     } else {
-    const classified = classifiedByRepo.get(repo.name);
+    let classified = classifiedByRepo.get(repo.name);
     if (!classified || classified.length === 0) continue;
+
+    // Filter to affected scope when --affected is active
+    if (scopeByRepo) {
+      const scope = scopeByRepo.get(repo.name);
+      if (scope && scope.allScopedFiles.length > 0) {
+        const scopedSet = new Set(scope.allScopedFiles);
+        classified = classified.filter((f) => scopedSet.has(f.path));
+        log(`  [${repo.name}] Scoped to ${classified.length} affected files`);
+      }
+    }
 
     // --- Phase 3: Parse files ---
     log(`  [${repo.name}] Parsing files...`);
@@ -322,6 +349,46 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
         log(`  [${repo.name}] ${callEdges.length} call edges (${elapsed}ms)`);
       } catch (error) {
         console.error(`  Failed to extract call graph for ${repo.name}:`, error);
+      }
+    }
+
+    // --- Phase 4c: Module instability metrics ---
+    {
+      const pf4c = parsedFilesByRepo.get(repo.name);
+      const dg4c = depGraphByRepo.get(repo.name);
+      if (pf4c && dg4c) {
+        log(`  [${repo.name}] Computing instability metrics...`);
+        try {
+          const start = performance.now();
+          const metrics = computeModuleMetrics(dg4c.edges, pf4c, repo.name);
+          const summary = summarizeRepoMetrics(metrics, repo.name);
+          await kvStore.set(`metrics:${repo.name}`, JSON.stringify(metrics));
+          await kvStore.set(`metricsSummary:${repo.name}`, JSON.stringify(summary));
+          const elapsed = Math.round(performance.now() - start);
+          log(`  [${repo.name}] ${metrics.length} modules, avg instability=${summary.avgInstability.toFixed(2)}, pain=${summary.painZoneCount}, uselessness=${summary.uselessnessZoneCount} (${elapsed}ms)`);
+        } catch (error) {
+          console.error(`  Failed to compute metrics for ${repo.name}:`, error);
+        }
+      }
+    }
+
+    // --- Phase 4d: Dead export detection ---
+    {
+      const pf4d = parsedFilesByRepo.get(repo.name);
+      const dg4d = depGraphByRepo.get(repo.name);
+      if (pf4d && dg4d) {
+        log(`  [${repo.name}] Detecting dead exports...`);
+        try {
+          const start = performance.now();
+          const deadResults = detectDeadExports(pf4d, dg4d.edges, repo.name);
+          if (deadResults.length > 0) {
+            await kvStore.set(`sarif:deadExports:${repo.name}`, JSON.stringify(deadResults));
+          }
+          const elapsed = Math.round(performance.now() - start);
+          log(`  [${repo.name}] ${deadResults.length} dead exports found (${elapsed}ms)`);
+        } catch (error) {
+          console.error(`  Failed to detect dead exports for ${repo.name}:`, error);
+        }
       }
     }
 
@@ -458,6 +525,15 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
             log(`    0 service-call edges detected`);
           }
         }
+        // 5g: Architectural rules evaluation
+        if (options.rules && options.rules.length > 0 && depGraph) {
+          const archResults = evaluateArchRules(options.rules, depGraph.edges, repo.name);
+          if (archResults.length > 0) {
+            await kvStore.set(`sarif:arch:${repo.name}`, JSON.stringify(archResults));
+          }
+          log(`    ${archResults.length} architectural rule violations`);
+        }
+
         log(`  [${repo.name}] Phase 5: ${Math.round(performance.now() - phase5Start)}ms`);
       } catch (error) {
         console.error(`  Failed to run heuristics for ${repo.name}:`, error);
@@ -742,7 +818,7 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
   // Aggregate all per-repo SARIF into a combined latest result
   const allSarifResults: import("@mma/core").SarifResult[] = [];
   for (const repo of repos) {
-    for (const key of ["config", "fault"] as const) {
+    for (const key of ["config", "fault", "deadExports", "arch"] as const) {
       const json = await kvStore.get(`sarif:${key}:${repo.name}`);
       if (json) {
         try {

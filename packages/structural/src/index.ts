@@ -27,3 +27,8 @@ export {
   parseScipSymbolString,
 } from "./scip.js";
 export type { ScipIndexResult, ScipSymbol, ScipRelationship } from "./scip.js";
+
+export { computeModuleMetrics, summarizeRepoMetrics } from "./metrics.js";
+
+export { detectDeadExports } from "./dead-exports.js";
+export type { DeadExportOptions } from "./dead-exports.js";

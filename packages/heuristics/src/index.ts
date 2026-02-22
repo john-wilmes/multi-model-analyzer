@@ -14,3 +14,5 @@ export { analyzeNaming, splitIdentifier } from "./naming.js";
 
 export { extractServiceTopology } from "./service-topology.js";
 export type { ServiceTopologyInput } from "./service-topology.js";
+
+export { evaluateArchRules } from "./arch-rules.js";

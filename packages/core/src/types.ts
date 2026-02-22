@@ -283,6 +283,59 @@ export interface ApiEndpoint {
   readonly description: string;
 }
 
+// -- Metrics --
+
+export type MetricZone = "pain" | "uselessness" | "main-sequence" | "balanced";
+
+export interface ModuleMetrics {
+  readonly module: string;
+  readonly repo: string;
+  readonly ca: number;
+  readonly ce: number;
+  readonly instability: number;
+  readonly abstractness: number;
+  readonly distance: number;
+  readonly zone: MetricZone;
+}
+
+export interface RepoMetricsSummary {
+  readonly repo: string;
+  readonly moduleCount: number;
+  readonly avgInstability: number;
+  readonly avgAbstractness: number;
+  readonly avgDistance: number;
+  readonly painZoneCount: number;
+  readonly uselessnessZoneCount: number;
+}
+
+// -- Architectural Rules --
+
+export interface ArchitecturalRule {
+  readonly id: string;
+  readonly description: string;
+  readonly kind: "layer-violation" | "forbidden-import" | "dependency-direction";
+  readonly severity: "error" | "warning" | "note";
+  readonly config: LayerRuleConfig | ForbiddenImportConfig | DependencyDirectionConfig;
+}
+
+export interface LayerRuleConfig {
+  readonly layers: ReadonlyArray<{
+    readonly name: string;
+    readonly patterns: readonly string[];
+    readonly allowedDependencies: readonly string[];
+  }>;
+}
+
+export interface ForbiddenImportConfig {
+  readonly from: readonly string[];
+  readonly forbidden: readonly string[];
+}
+
+export interface DependencyDirectionConfig {
+  readonly allowed: ReadonlyArray<readonly [string, string]>;
+  readonly denied: ReadonlyArray<readonly [string, string]>;
+}
+
 // -- Shared --
 
 export interface LogicalLocation {
