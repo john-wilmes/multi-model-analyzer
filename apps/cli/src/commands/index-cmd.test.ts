@@ -157,11 +157,13 @@ function makeOptions(
 // Import mocked modules for per-test configuration
 // ---------------------------------------------------------------------------
 
+import { readFile } from "node:fs/promises";
 import { detectChanges, classifyFiles } from "@mma/ingestion";
 import { parseFiles } from "@mma/parsing";
 import { extractDependencyGraph } from "@mma/structural";
 import { tier1Summarize } from "@mma/summarization";
 
+const mockReadFile = readFile as ReturnType<typeof vi.fn>;
 const mockDetectChanges = detectChanges as ReturnType<typeof vi.fn>;
 const mockClassifyFiles = classifyFiles as ReturnType<typeof vi.fn>;
 const mockParseFiles = parseFiles as ReturnType<typeof vi.fn>;
@@ -375,5 +377,96 @@ describe("indexCommand", () => {
     // repo-b failed: commit hash NOT saved
     const commitB = await kvStore.get("commit:repo-b");
     expect(commitB).toBeUndefined();
+  });
+
+  // -----------------------------------------------------------------------
+  // Test 6: Tier-1 summary caching -- cache miss writes, cache hit skips I/O
+  // -----------------------------------------------------------------------
+  it("caches tier-1 summaries by contentHash and serves from cache on re-index", async () => {
+    const summaries = [
+      { entityId: "src/app.ts#handler", description: "handles requests", tier: 1, confidence: 0.6 },
+    ];
+
+    // --- First run: cache miss, tier1Summarize is called and result cached ---
+    const changeSet1 = makeChangeSet({
+      repo: "repo-a",
+      commitHash: "cache1",
+      addedFiles: ["src/app.ts"],
+    });
+    mockDetectChanges.mockResolvedValue(changeSet1);
+    mockClassifyFiles.mockReturnValue([makeClassified("src/app.ts", "repo-a")]);
+    mockParseFiles.mockResolvedValue(
+      makeParseResult([makeParsedFile("src/app.ts", "repo-a")], ["src/app.ts"]),
+    );
+    mockExtractDepGraph.mockReturnValue({ ...emptyDepGraph, repo: "repo-a" });
+    mockTier1Summarize.mockReturnValue(summaries);
+
+    await indexCommand(makeOptions([repoA], { kvStore, graphStore, searchStore }));
+
+    expect(mockTier1Summarize).toHaveBeenCalledOnce();
+    const cacheKey = "summary:t1:repo-a:src/app.ts:abc123";
+    const cached = await kvStore.get(cacheKey);
+    expect(cached).toBeDefined();
+    expect(JSON.parse(cached!)).toEqual(summaries);
+
+    // --- Second run: same contentHash -> cache hit, tier1Summarize NOT called ---
+    vi.clearAllMocks();
+    mockDetectChanges.mockResolvedValue(
+      makeChangeSet({ repo: "repo-a", commitHash: "cache2", addedFiles: ["src/app.ts"] }),
+    );
+    mockClassifyFiles.mockReturnValue([makeClassified("src/app.ts", "repo-a")]);
+    mockParseFiles.mockResolvedValue(
+      makeParseResult([makeParsedFile("src/app.ts", "repo-a")], ["src/app.ts"]),
+    );
+    mockExtractDepGraph.mockReturnValue({ ...emptyDepGraph, repo: "repo-a" });
+
+    await indexCommand(makeOptions([repoA], { kvStore, graphStore, searchStore }));
+
+    // tier1Summarize should not be called -- served from cache
+    expect(mockTier1Summarize).not.toHaveBeenCalled();
+    // readFile should not be called for this file -- skipped by cache hit
+    expect(mockReadFile).not.toHaveBeenCalled();
+
+    // Summaries should still be indexed in search store
+    const results = await searchStore.search("handles requests");
+    expect(results.length).toBeGreaterThan(0);
+  });
+
+  // -----------------------------------------------------------------------
+  // Test 7: Changed contentHash invalidates summary cache
+  // -----------------------------------------------------------------------
+  it("invalidates summary cache when contentHash changes", async () => {
+    const oldSummaries = [
+      { entityId: "src/svc.ts#run", description: "runs service", tier: 1, confidence: 0.6 },
+    ];
+    const newSummaries = [
+      { entityId: "src/svc.ts#run", description: "starts service v2", tier: 1, confidence: 0.6 },
+    ];
+
+    // Seed cache with old contentHash
+    await kvStore.set(
+      "summary:t1:repo-a:src/svc.ts:oldhash",
+      JSON.stringify(oldSummaries),
+    );
+
+    // Index with a different contentHash
+    const pf: ParsedFile = { ...makeParsedFile("src/svc.ts", "repo-a"), contentHash: "newhash" };
+    mockDetectChanges.mockResolvedValue(
+      makeChangeSet({ repo: "repo-a", commitHash: "inv1", addedFiles: ["src/svc.ts"] }),
+    );
+    mockClassifyFiles.mockReturnValue([makeClassified("src/svc.ts", "repo-a")]);
+    mockParseFiles.mockResolvedValue(makeParseResult([pf], ["src/svc.ts"]));
+    mockExtractDepGraph.mockReturnValue({ ...emptyDepGraph, repo: "repo-a" });
+    mockTier1Summarize.mockReturnValue(newSummaries);
+
+    await indexCommand(makeOptions([repoA], { kvStore, graphStore, searchStore }));
+
+    // tier1Summarize called because hash changed (cache miss)
+    expect(mockTier1Summarize).toHaveBeenCalledOnce();
+
+    // New result cached under new hash
+    const cached = await kvStore.get("summary:t1:repo-a:src/svc.ts:newhash");
+    expect(cached).toBeDefined();
+    expect(JSON.parse(cached!)).toEqual(newSummaries);
   });
 });

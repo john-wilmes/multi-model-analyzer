@@ -515,17 +515,28 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
     try {
       const summaryMap = new Map<string, Summary>();
 
-      // Tier 1: template-based summaries from AST (batched parallel I/O)
+      // Tier 1: template-based summaries from AST (batched parallel I/O, cached by contentHash)
       let tier1ReadErrors = 0;
+      let tier1CacheHits = 0;
       const BATCH_SIZE = 20;
       for (let batchStart = 0; batchStart < parsedFiles.length; batchStart += BATCH_SIZE) {
         const batch = parsedFiles.slice(batchStart, batchStart + BATCH_SIZE);
         const results = await Promise.all(
           batch.map(async (pf) => {
+            const cacheKey = `summary:t1:${repo.name}:${pf.path}:${pf.contentHash}`;
+            const cached = await kvStore.get(cacheKey);
+            if (cached) {
+              tier1CacheHits++;
+              return JSON.parse(cached) as Summary[];
+            }
             try {
               const absPath = join(repo.localPath, pf.path);
               const sourceText = await readFile(absPath, "utf-8");
-              return tier1Summarize(pf.symbols, pf.path, sourceText);
+              const summaries = tier1Summarize(pf.symbols, pf.path, sourceText);
+              if (summaries.length > 0) {
+                await kvStore.set(cacheKey, JSON.stringify(summaries));
+              }
+              return summaries;
             } catch {
               tier1ReadErrors++;
               return [];
@@ -541,6 +552,9 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
         if (batchStart === 0 || processed % 1000 < BATCH_SIZE || processed === parsedFiles.length) {
           log(`    [tier-1] ${processed}/${parsedFiles.length}`);
         }
+      }
+      if (tier1CacheHits > 0) {
+        log(`    [tier-1] ${tier1CacheHits} files served from cache`);
       }
       if (tier1ReadErrors > 0) {
         log(`    warning: ${tier1ReadErrors} files could not be read for tier-1 summarization`);
