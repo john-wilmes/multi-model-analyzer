@@ -134,8 +134,9 @@ describe("checkDeadExport", () => {
     expect(reporter.counts.fail).toBe(0);
   });
 
-  it("records a fail when flagged file IS an import target (false positive)", async () => {
-    // src/imported.ts is flagged as dead but IS actually imported — false positive
+  it("records a skip when flagged file IS an import target (file-level only)", async () => {
+    // src/imported.ts is flagged as dead but IS actually imported at file level —
+    // we can't verify symbol-level, so this should skip (not fail)
     const findings = [
       {
         ruleId: "structural/dead-export",
@@ -146,14 +147,15 @@ describe("checkDeadExport", () => {
     ];
     await kv.set("sarif:deadExports:repo1", JSON.stringify(findings));
 
-    // src/a.ts imports src/imported.ts — contradiction with "dead" finding
+    // src/a.ts imports src/imported.ts — but we don't know if SomeExport is used
     await graph.addEdges([
       { source: "src/a.ts", target: "src/imported.ts", kind: "imports", metadata: { repo: "repo1" } },
     ]);
 
     await checkDeadExport(kv, graph, reporter, 50, makeRng());
 
-    expect(reporter.counts.fail).toBeGreaterThanOrEqual(1);
+    expect(reporter.counts.skip).toBeGreaterThanOrEqual(1);
+    expect(reporter.counts.fail).toBe(0);
   });
 
   it("skips when there are no findings", async () => {

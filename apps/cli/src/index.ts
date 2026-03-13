@@ -260,12 +260,22 @@ async function main(): Promise<void> {
         console.error(`Invalid format: "${values.format}". Must be one of: json, table, markdown`);
         process.exit(1);
       }
+      const sampleSize = parseInt(values["sample-size"] ?? "50", 10);
+      const seed = parseInt(values.seed ?? "42", 10);
+      if (!Number.isInteger(sampleSize) || sampleSize <= 0) {
+        console.error(`Invalid --sample-size: "${values["sample-size"]}". Must be a positive integer.`);
+        process.exit(1);
+      }
+      if (!Number.isInteger(seed)) {
+        console.error(`Invalid --seed: "${values.seed}". Must be an integer.`);
+        process.exit(1);
+      }
       const result = await validateCommand({
         kvStore: stores.kvStore,
         graphStore: stores.graphStore,
         mirrorsDir: values.mirrors,
-        sampleSize: parseInt(values["sample-size"] ?? "50", 10),
-        seed: parseInt(values.seed ?? "42", 10),
+        sampleSize,
+        seed,
         format: valFormat ?? "table",
         output: values.output,
       });

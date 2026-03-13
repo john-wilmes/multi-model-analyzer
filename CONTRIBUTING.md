@@ -61,7 +61,7 @@ Build before testing -- tests run against compiled output.
 2. Make your changes
 3. Ensure `npm run build && npm run test && npm run lint` passes
 4. Open a PR against `main`
-5. CI runs automatically (build, type-check, lint, test with coverage)
+5. CI runs automatically (build, type-check, lint, test)
 6. CodeRabbit reviews PRs automatically -- address its findings before merging
 
 ## Reporting Issues

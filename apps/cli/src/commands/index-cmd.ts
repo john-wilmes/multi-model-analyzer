@@ -24,7 +24,7 @@ import type {
   CallGraph,
   ArchitecturalRule,
 } from "@mma/core";
-import { detectChanges, classifyFiles, getFileContent, getHeadCommit } from "@mma/ingestion";
+import { detectChanges, classifyFiles, getFileContent, getHeadCommit, isBareRepo } from "@mma/ingestion";
 import { parseFiles } from "@mma/parsing";
 import type { TreeSitterTree } from "@mma/parsing";
 import { extractDependencyGraph, buildControlFlowGraph, createCfgIdCounter, extractCallEdgesFromTreeSitter, computeModuleMetrics, summarizeRepoMetrics, detectDeadExports, detectInstabilityViolations } from "@mma/structural";
@@ -55,6 +55,16 @@ import type { ServiceSummaryInput } from "@mma/summarization";
 import { computeAffectedScope } from "./affected-scope.js";
 import type { AffectedScope } from "./affected-scope.js";
 import { PipelineTracer } from "../tracer.js";
+
+const bareRepoCache = new Map<string, boolean>();
+async function checkBareRepo(repoPath: string): Promise<boolean> {
+  let cached = bareRepoCache.get(repoPath);
+  if (cached === undefined) {
+    cached = await isBareRepo(repoPath);
+    bareRepoCache.set(repoPath, cached);
+  }
+  return cached;
+}
 
 /** Resolve a commit hash for reading files from a bare repo. */
 async function resolveCommitForBare(
@@ -172,7 +182,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     const packageJsonFiles = classified.filter(
       (f) => f.kind === "json" && f.path.endsWith("package.json"),
     );
-    const isBare = repo.localPath.endsWith(".git");
+    const isBare = await checkBareRepo(repo.localPath);
     for (const pjFile of packageJsonFiles) {
       try {
         const raw = isBare
@@ -295,7 +305,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     try {
       // Detect bare repos (no working tree) so we can read content via git show.
       // A bare repo path ends with ".git" or git rev-parse reports it is bare.
-      const isBare = repo.localPath.endsWith(".git");
+      const isBare = await checkBareRepo(repo.localPath);
       const bareCommit = isBare ? await resolveCommitForBare(repo.localPath, changeSets, repo.name) : undefined;
       const contentProvider =
         isBare && bareCommit
@@ -468,7 +478,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         );
 
         const packageJsons = new Map<string, PackageJsonInfo>();
-        const isBare = repo.localPath.endsWith(".git");
+        const isBare = await checkBareRepo(repo.localPath);
         for (const pjFile of packageJsonFiles) {
           try {
             const raw = isBare
@@ -755,7 +765,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
               }
             }
             try {
-              const isBare = repo.localPath.endsWith(".git");
+              const isBare = await checkBareRepo(repo.localPath);
               const sourceText = isBare
                 ? await getFileContent(repo.localPath, await resolveCommitForBare(repo.localPath, changeSets, repo.name), pf.path)
                 : await readFile(join(repo.localPath, pf.path), "utf-8");

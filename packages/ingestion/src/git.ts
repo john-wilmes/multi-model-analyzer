@@ -33,6 +33,19 @@ export async function cloneOrFetch(
   return repoPath;
 }
 
+export async function isBareRepo(repoPath: string): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync(
+      "git",
+      ["rev-parse", "--is-bare-repository"],
+      { cwd: repoPath },
+    );
+    return stdout.trim() === "true";
+  } catch {
+    return false;
+  }
+}
+
 export async function getHeadCommit(repoPath: string): Promise<string> {
   const { stdout } = await execFileAsync(
     "git",

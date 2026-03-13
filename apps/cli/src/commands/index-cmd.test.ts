@@ -33,6 +33,7 @@ vi.mock("node:fs/promises", () => ({
 vi.mock("@mma/ingestion", () => ({
   detectChanges: vi.fn(),
   classifyFiles: vi.fn().mockReturnValue([]),
+  isBareRepo: vi.fn().mockResolvedValue(false),
 }));
 
 vi.mock("@mma/parsing", () => ({

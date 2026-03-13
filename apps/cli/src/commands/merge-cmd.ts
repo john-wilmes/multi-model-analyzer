@@ -78,7 +78,11 @@ export async function mergeCommand(
             try {
               const sarif = JSON.parse(row.value) as SarifLog;
               if (Array.isArray(sarif.runs)) {
-                mergedSarifRuns.push(...sarif.runs);
+                const validRuns = sarif.runs.filter(
+                  (run: unknown): run is Record<string, unknown> =>
+                    typeof run === "object" && run !== null && "tool" in run,
+                );
+                mergedSarifRuns.push(...validRuns);
               }
             } catch {
               // Skip malformed SARIF

@@ -194,7 +194,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
 ```bash
 npm run build          # TypeScript compilation
 npm run type-check     # Type checking without emit
-npm run test           # Run all tests (1054 tests)
+npm run test           # Run all tests
 npm run lint           # ESLint
 ```
 

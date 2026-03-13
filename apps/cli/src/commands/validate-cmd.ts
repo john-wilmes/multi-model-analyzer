@@ -252,8 +252,8 @@ export async function checkDeadExport(
       const importTargets = new Set(edges.map((e) => e.target));
 
       if (importTargets.has(filePath)) {
-        reporter.fail("dead-export", repo, `precision: ${fqn(finding)}`,
-          "file IS an import target");
+        reporter.skip("dead-export", repo, `precision: ${fqn(finding)}`,
+          "file-level import found — cannot verify symbol-level");
       } else {
         reporter.pass("dead-export", repo, `precision: ${fqn(finding)}`);
       }
@@ -571,6 +571,33 @@ export async function checkUselessnessZone(
   }
 }
 
+// ─── Catch-block heuristic helper ─────────────────────────
+
+function hasSilentCatchBlock(source: string): boolean {
+  const loggingRe =
+    /\b(console\.(log|warn|error|info|debug)|logger\.|log\.|logging\.|this\.logger|throw\b)/i;
+  const intentionalHandlingRe =
+    /\b(return\s+[^;]+;|expect\s*[\s.(])/;
+  const catchRe = /catch\s*(?:\([^)]*\))?\s*\{/g;
+  let catchIdx;
+  while ((catchIdx = catchRe.exec(source)) !== null) {
+    const bodyStart = catchIdx.index + catchIdx[0].length;
+    const bodySlice = source.slice(bodyStart, bodyStart + 500);
+    let depth = 1;
+    let end = 0;
+    for (let i = 0; i < bodySlice.length && depth > 0; i++) {
+      if (bodySlice[i] === "{") depth++;
+      else if (bodySlice[i] === "}") depth--;
+      end = i;
+    }
+    const catchBody = bodySlice.slice(0, end);
+    if (!loggingRe.test(catchBody) && !intentionalHandlingRe.test(catchBody)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export async function checkFault(
   kvStore: KVStore,
   graphStore: GraphStore,
@@ -588,10 +615,17 @@ export async function checkFault(
     return;
   }
 
-  const loggingRe =
-    /\b(console\.(log|warn|error|info|debug)|logger\.|log\.|logging\.|this\.logger|throw\b)/i;
-  const intentionalHandlingRe =
-    /\b(return\s+[^;]+;|expect\s*[\s.(])/;
+  // Cache of indexed commit hashes per repo
+  const commitCache = new Map<string, string>();
+  async function getIndexedCommit(repo: string, repoDir: string): Promise<string> {
+    let commit = commitCache.get(repo);
+    if (!commit) {
+      const stored = await kvStore.get(`commit:${repo}`);
+      commit = stored ?? await getHeadCommit(repoDir);
+      commitCache.set(repo, commit);
+    }
+    return commit;
+  }
 
   // --- Precision ---
   const flat = flattenFindings(allFault);
@@ -613,32 +647,10 @@ export async function checkFault(
       }
 
       try {
-        const commit = await getHeadCommit(repoDir);
+        const commit = await getIndexedCommit(repo, repoDir);
         const source = await getFileContent(repoDir, commit, modulePath);
 
-        const catchRe = /catch\s*(?:\([^)]*\))?\s*\{/g;
-        let hasSilentCatch = false;
-        let catchIdx;
-
-        while ((catchIdx = catchRe.exec(source)) !== null) {
-          const bodyStart = catchIdx.index + catchIdx[0].length;
-          const bodySlice = source.slice(bodyStart, bodyStart + 500);
-          let depth = 1;
-          let end = 0;
-          for (let i = 0; i < bodySlice.length && depth > 0; i++) {
-            if (bodySlice[i] === "{") depth++;
-            else if (bodySlice[i] === "}") depth--;
-            end = i;
-          }
-          const catchBody = bodySlice.slice(0, end);
-
-          if (!loggingRe.test(catchBody) && !intentionalHandlingRe.test(catchBody)) {
-            hasSilentCatch = true;
-            break;
-          }
-        }
-
-        if (hasSilentCatch) {
+        if (hasSilentCatchBlock(source)) {
           reporter.pass("fault", repo, `precision: ${modulePath}`);
         } else {
           reporter.fail("fault", repo, `precision: ${modulePath}`,
@@ -672,40 +684,18 @@ export async function checkFault(
     const sampled = sampleN(unflaggedTs, 5, rng);
     for (const filePath of sampled) {
       try {
-        const commit = await getHeadCommit(repoDir);
+        const commit = await getIndexedCommit(repo, repoDir);
         const source = await getFileContent(repoDir, commit, filePath);
         if (!source.includes("catch")) continue;
 
-        const catchRe = /catch\s*(?:\([^)]*\))?\s*\{/g;
-        let catchIdx;
-        let hasSilent = false;
-
-        while ((catchIdx = catchRe.exec(source)) !== null) {
-          const bodyStart = catchIdx.index + catchIdx[0].length;
-          const bodySlice = source.slice(bodyStart, bodyStart + 500);
-          let depth = 1;
-          let end = 0;
-          for (let i = 0; i < bodySlice.length && depth > 0; i++) {
-            if (bodySlice[i] === "{") depth++;
-            else if (bodySlice[i] === "}") depth--;
-            end = i;
-          }
-          const catchBody = bodySlice.slice(0, end);
-
-          if (!loggingRe.test(catchBody) && !intentionalHandlingRe.test(catchBody)) {
-            hasSilent = true;
-            break;
-          }
-        }
-
-        if (hasSilent) {
+        if (hasSilentCatchBlock(source)) {
           reporter.fail("fault", repo, `recall: ${filePath}`,
             "has silent catch block but not in findings");
         } else {
           reporter.pass("fault", repo, `recall: ${filePath}`);
         }
       } catch {
-        // File may not exist at HEAD
+        // File may not exist at indexed commit
       }
     }
   }
