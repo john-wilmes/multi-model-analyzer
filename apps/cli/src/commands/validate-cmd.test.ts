@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { InMemoryKVStore, InMemoryGraphStore } from "@mma/storage";
 import {
   mulberry32,
@@ -12,6 +12,26 @@ import {
   validateCommand,
   resetCaches,
 } from "./validate-cmd.js";
+
+vi.mock("@mma/ingestion", async () => {
+  const actual = await vi.importActual("@mma/ingestion");
+  return {
+    ...actual,
+    getFileContent: vi.fn(),
+    getHeadCommit: vi.fn(),
+  };
+});
+
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual("node:fs");
+  return {
+    ...actual,
+    existsSync: vi.fn(),
+  };
+});
+
+import { getFileContent, getHeadCommit } from "@mma/ingestion";
+import { existsSync } from "node:fs";
 
 // ─── mulberry32 + sampleN ───────────────────────────────────
 
@@ -260,11 +280,24 @@ describe("checkThresholdConsistency", () => {
 
     expect(reporter.counts.fail).toBe(1);
   });
+
+  it("passes when no SDP findings exist (empty KV)", async () => {
+    // kv is empty — no instability keys at all
+    await checkThresholdConsistency(kv, reporter);
+
+    // inconsistent === 0 => reporter.pass branch
+    expect(reporter.counts.pass).toBe(1);
+    expect(reporter.counts.fail).toBe(0);
+  });
 });
 
 // ─── checkFault (no mirrorsDir) ─────────────────────────────
 
 describe("checkFault", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
   it("records exactly 2 skips and no crash when mirrorsDir is undefined", async () => {
     const kv = new InMemoryKVStore();
     const graph = new InMemoryGraphStore();
@@ -286,6 +319,156 @@ describe("checkFault", () => {
     expect(reporter.counts.skip).toBe(2);
     expect(reporter.counts.fail).toBe(0);
     expect(reporter.counts.pass).toBe(0);
+  });
+
+  it("precision: pass when source has a silent catch block", async () => {
+    const kv = new InMemoryKVStore();
+    const graph = new InMemoryGraphStore();
+    const reporter = new ValidationReporter();
+
+    const findings = [
+      {
+        ruleId: "structural/fault",
+        level: "error",
+        message: { text: "Silent catch block" },
+        locations: [
+          {
+            logicalLocations: [
+              { fullyQualifiedName: "src/handler.ts#handleRequest#catch" },
+            ],
+          },
+        ],
+      },
+    ];
+    await kv.set("sarif:fault:repo1", JSON.stringify(findings));
+
+    // existsSync: true for both mirrorsDir and repoDir checks
+    vi.mocked(existsSync).mockReturnValue(true);
+    vi.mocked(getHeadCommit).mockResolvedValue("abc123");
+    // Silent catch: no logging, no rethrow
+    vi.mocked(getFileContent).mockResolvedValue(
+      "function handle() { try { foo(); } catch(e) { } }",
+    );
+
+    await checkFault(kv, graph, reporter, 50, makeRng(), "/tmp/mirrors");
+
+    expect(reporter.counts.pass).toBeGreaterThanOrEqual(1);
+    expect(reporter.counts.fail).toBe(0);
+  });
+
+  it("precision: fail when all catch blocks have logging", async () => {
+    const kv = new InMemoryKVStore();
+    const graph = new InMemoryGraphStore();
+    const reporter = new ValidationReporter();
+
+    const findings = [
+      {
+        ruleId: "structural/fault",
+        level: "error",
+        message: { text: "Silent catch block" },
+        locations: [
+          {
+            logicalLocations: [
+              { fullyQualifiedName: "src/handler.ts#handleRequest#catch" },
+            ],
+          },
+        ],
+      },
+    ];
+    await kv.set("sarif:fault:repo1", JSON.stringify(findings));
+
+    vi.mocked(existsSync).mockReturnValue(true);
+    vi.mocked(getHeadCommit).mockResolvedValue("abc123");
+    // Catch with console.error — not silent
+    vi.mocked(getFileContent).mockResolvedValue(
+      "function handle() { try { foo(); } catch(e) { console.error(e); } }",
+    );
+
+    await checkFault(kv, graph, reporter, 50, makeRng(), "/tmp/mirrors");
+
+    expect(reporter.counts.fail).toBeGreaterThanOrEqual(1);
+  });
+
+  it("precision: skips when finding has no module path (empty FQN)", async () => {
+    const kv = new InMemoryKVStore();
+    const graph = new InMemoryGraphStore();
+    const reporter = new ValidationReporter();
+
+    // FQN starts with '#' so split('#')[0] is empty string
+    const findings = [
+      {
+        ruleId: "structural/fault",
+        level: "error",
+        message: { text: "Silent catch block" },
+        locations: [
+          {
+            logicalLocations: [{ fullyQualifiedName: "#handleRequest#catch" }],
+          },
+        ],
+      },
+    ];
+    await kv.set("sarif:fault:repo1", JSON.stringify(findings));
+
+    vi.mocked(existsSync).mockReturnValue(true);
+    vi.mocked(getHeadCommit).mockResolvedValue("abc123");
+    vi.mocked(getFileContent).mockResolvedValue("");
+
+    await checkFault(kv, graph, reporter, 50, makeRng(), "/tmp/mirrors");
+
+    // The finding with empty modulePath yields a skip, not a pass or fail
+    expect(reporter.counts.skip).toBeGreaterThanOrEqual(1);
+    expect(reporter.counts.fail).toBe(0);
+    expect(reporter.counts.pass).toBe(0);
+  });
+
+  it("recall: passes when unflagged files have no silent catch", async () => {
+    const kv = new InMemoryKVStore();
+    const graph = new InMemoryGraphStore();
+    const reporter = new ValidationReporter();
+
+    // Seed a fault finding to populate allFault (so repos list is non-empty for recall)
+    const findings = [
+      {
+        ruleId: "structural/fault",
+        level: "error",
+        message: { text: "Silent catch block" },
+        locations: [
+          {
+            logicalLocations: [
+              { fullyQualifiedName: "src/flagged.ts#doThing#catch" },
+            ],
+          },
+        ],
+      },
+    ];
+    await kv.set("sarif:fault:repo1", JSON.stringify(findings));
+
+    // Add import edges so getImportEdges returns files for repo1;
+    // src/other.ts is unflagged and will be sampled for recall
+    await graph.addEdges([
+      {
+        source: "src/flagged.ts",
+        target: "src/other.ts",
+        kind: "imports",
+        metadata: { repo: "repo1" },
+      },
+    ]);
+
+    vi.mocked(existsSync).mockReturnValue(true);
+    vi.mocked(getHeadCommit).mockResolvedValue("abc123");
+    // src/flagged.ts (precision target) has a silent catch so precision passes;
+    // src/other.ts (recall target) has a catch with logging — no silent catch => recall pass
+    vi.mocked(getFileContent).mockImplementation(async (_repo, _commit, filePath) => {
+      if (filePath === "src/flagged.ts") {
+        return "function flagged() { try { foo(); } catch(e) { } }";
+      }
+      return "function other() { try { bar(); } catch(e) { console.warn(e); } }";
+    });
+
+    await checkFault(kv, graph, reporter, 50, makeRng(), "/tmp/mirrors");
+
+    // Recall loop should produce passes, no fails for the unflagged file
+    expect(reporter.counts.fail).toBe(0);
   });
 });
 
