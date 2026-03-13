@@ -1,0 +1,47 @@
+{
+  "mirrorDir": "./data/mirrors",
+  "dbPath": "./data/mma.db",
+  "repos": [
+    {
+      "name": "example-service",
+      "url": "https://github.com/org/example-service.git",
+      "branch": "main",
+      "localPath": "./data/mirrors/example-service.git"
+    }
+  ],
+  "rules": [
+    {
+      "id": "layer-boundaries",
+      "description": "Enforce layered architecture: UI -> Service -> DB",
+      "kind": "layer-violation",
+      "severity": "warning",
+      "config": {
+        "layers": [
+          { "name": "ui", "patterns": ["src/ui/**", "src/components/**"], "allowedDependencies": ["service"] },
+          { "name": "service", "patterns": ["src/service/**", "src/services/**"], "allowedDependencies": ["db"] },
+          { "name": "db", "patterns": ["src/db/**", "src/repositories/**"], "allowedDependencies": [] }
+        ]
+      }
+    },
+    {
+      "id": "no-lodash-frontend",
+      "description": "Frontend must not use lodash (use native alternatives)",
+      "kind": "forbidden-import",
+      "severity": "error",
+      "config": {
+        "from": ["src/ui/**", "src/components/**"],
+        "forbidden": ["node_modules/lodash/**"]
+      }
+    },
+    {
+      "id": "db-no-ui",
+      "description": "Database layer must not depend on UI layer",
+      "kind": "dependency-direction",
+      "severity": "error",
+      "config": {
+        "allowed": [["src/ui/**", "src/service/**"]],
+        "denied": [["src/db/**", "src/ui/**"], ["src/db/**", "src/components/**"]]
+      }
+    }
+  ]
+}
