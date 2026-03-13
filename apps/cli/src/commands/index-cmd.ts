@@ -161,10 +161,13 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     const packageJsonFiles = classified.filter(
       (f) => f.kind === "json" && f.path.endsWith("package.json"),
     );
+    const isBare = repo.localPath.endsWith(".git");
+    const repoCS = changeSets.find(cs => cs.repo === repo.name);
     for (const pjFile of packageJsonFiles) {
       try {
-        const absPath = join(repo.localPath, pjFile.path);
-        const raw = await readFile(absPath, "utf-8");
+        const raw = isBare && repoCS
+          ? await getFileContent(repo.localPath, repoCS.commitHash, pjFile.path)
+          : await readFile(join(repo.localPath, pjFile.path), "utf-8");
         const parsed = JSON.parse(raw) as Record<string, unknown>;
         const name = parsed.name as string | undefined;
         if (name) {
@@ -455,10 +458,13 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         );
 
         const packageJsons = new Map<string, PackageJsonInfo>();
+        const isBare = repo.localPath.endsWith(".git");
+        const repoCS = changeSets.find(cs => cs.repo === repo.name);
         for (const pjFile of packageJsonFiles) {
           try {
-            const absPath = join(repo.localPath, pjFile.path);
-            const raw = await readFile(absPath, "utf-8");
+            const raw = isBare && repoCS
+              ? await getFileContent(repo.localPath, repoCS.commitHash, pjFile.path)
+              : await readFile(join(repo.localPath, pjFile.path), "utf-8");
             const parsed = JSON.parse(raw) as Record<string, unknown>;
             packageJsons.set(dirname(pjFile.path), {
               name: (parsed.name as string) ?? "",

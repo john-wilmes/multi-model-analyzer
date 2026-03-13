@@ -24,6 +24,7 @@ import { serveCommand } from "./commands/serve-cmd.js";
 import { reportCommand } from "./commands/report-cmd.js";
 import { practicesCommand } from "./commands/practices-cmd.js";
 import { exportCommand } from "./commands/export-cmd.js";
+import { mergeCommand } from "./commands/merge-cmd.js";
 import { printJson, printTable, printSarif, validateFormat, validateReportFormat } from "./formatter.js";
 import { parseWatchInterval, watchLoop } from "./watch.js";
 
@@ -224,6 +225,23 @@ async function main(): Promise<void> {
     return;
   }
 
+  // merge command: combine multiple export DBs
+  if (command === "merge") {
+    const inputPaths = positionals.slice(1).map((p) => resolve(p));
+    if (inputPaths.length === 0) {
+      console.error("Usage: mma merge file1.db file2.db ... [-o merged.db]");
+      process.exit(1);
+    }
+    const outputPath = resolve(values.output ?? "merged.db");
+    try {
+      await mergeCommand(inputPaths, outputPath);
+    } catch (err) {
+      console.error(`merge failed: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
+    return;
+  }
+
   // report command bypasses config -- only needs the DB (read-only)
   if (command === "report") {
     if (!existsSync(dbPath)) {
@@ -393,6 +411,8 @@ Usage:
   mma serve [--db path/to/mma.db]               Start MCP server (stdio)
   mma export [--db path] [-o file.db] [--salt hex]
                                                 Export anonymized SQLite DB
+  mma merge file1.db file2.db ... [-o merged.db]
+                                                Merge anonymized export DBs
   mma report [--db path] [-o file] [--format json|table|sarif|markdown|both]
              [--include-sarif] [--salt hex] [--note "text"]
                                                 Generate anonymized report (default: json)

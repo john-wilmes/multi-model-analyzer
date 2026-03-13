@@ -648,7 +648,7 @@ describe("SARIF Findings Statistical Validation", () => {
             /\b(console\.(log|warn|error|info|debug)|logger\.|log\.|logging\.|this\.logger|throw\b)/i;
 
           for (const { repo, finding } of sampled) {
-            const modulePath = fqn(finding);
+            const modulePath = fqn(finding).split("#")[0];
             if (!modulePath) { skipped++; continue; }
 
             const repoDir = bareRepoPath(repo);
@@ -722,7 +722,7 @@ describe("SARIF Findings Statistical Validation", () => {
             if (!existsSync(repoDir)) continue;
 
             const findings = allFault.get(repo) ?? [];
-            const flaggedPaths = new Set(findings.map((f) => fqn(f)));
+            const flaggedPaths = new Set(findings.map((f) => fqn(f).split("#")[0]));
 
             const edges = await getImportEdges(graphStore, repo);
             const allFiles = new Set([
