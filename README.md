@@ -1,22 +1,128 @@
 [![CI](https://github.com/john-wilmes/multi-model-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/john-wilmes/multi-model-analyzer/actions/workflows/ci.yml)
 
-# Multi-Model Analyzer
+# Multi-Model Analyzer (mma)
 
-Static analysis system for large TypeScript/Node.js codebases. Extracts structural information, infers architecture, identifies configuration risks, builds fault trees, and generates documentation -- with minimal LLM usage.
+Point `mma` at your TypeScript repos. Get back a health report with structural problems, fault risks, and dead code -- in seconds, with no LLM required.
 
-## What It Does
+```
+$ mma index -c repos.json && mma practices
 
-Three analysis functions over a set of GitHub repositories:
+Practices Report — Grade: F (0/100) — 1 repo(s)
 
-1. **Configuration Validation** -- Inventories feature flags, infers constraints between them, checks for dead flags, impossible combinations, and untested interactions.
-2. **Fault Tree Analysis** -- Finds error/warning log statements, traces backward through control flow to identify root causes, builds fault trees, flags silent failures and missing error boundaries.
-3. **Functional Modeling** -- Generates service-level documentation from code structure and summaries, supports natural language queries over the codebase.
+Category Scorecard:
+Category      Health  Errors  Warnings  Notes  Total
+------------  ------  ------  --------  -----  -----
+structural    ★☆☆☆☆   0       64        420    484
+fault         ★★☆☆☆   0       15        0      15
+blast-radius  ★★★★★   0       0         10     10
 
-Output is SARIF v2.1.0 (static analysis standard) with logical locations only -- no source code is included in results.
+Top Findings:
+Rule                                Category    Level    Count  Score
+----------------------------------  ----------  -------  -----  -----
+structural/unstable-dependency      structural  warning  64     115
+fault/unhandled-error-path          fault       warning  15     95
+structural/dead-export              structural  note     186    75
+structural/pain-zone-module         structural  note     222    75
+```
 
-## Architecture
+That output is real -- [TypeORM](https://github.com/typeorm/typeorm) (3,371 modules, 61k call graph edges), indexed in 26 seconds on a laptop.
 
-Index-heavy, query-cheap. Expensive analysis runs once at index time; queries are lookups and graph traversals.
+## What It Finds
+
+| Category | What | Example |
+|----------|------|---------|
+| **Structural** | Unstable dependencies, dead exports, pain zone modules | "Module A (stable) depends on module B (unstable) -- inverted dependency direction" |
+| **Fault** | Unhandled error paths, silent catch blocks, missing re-throws | "Catch block in `handler` has no logging or re-throw" |
+| **Blast radius** | High-PageRank modules where changes ripple widely | "This module's public API affects 40% of the import graph" |
+
+All findings are SARIF v2.1.0 with logical locations only -- no source code leaves your machine.
+
+## Quick Start
+
+```bash
+# Clone and install
+git clone https://github.com/john-wilmes/multi-model-analyzer.git
+cd multi-model-analyzer && npm install && npm run build
+
+# Create a config pointing at your repos
+cat > mma.config.json << 'EOF'
+{
+  "mirrorDir": "./data/mirrors",
+  "dbPath": "./data/mma.db",
+  "repos": [{
+    "name": "my-service",
+    "url": "https://github.com/org/my-service.git",
+    "branch": "main",
+    "localPath": "./data/mirrors/my-service.git"
+  }]
+}
+EOF
+
+# Index and analyze
+npx mma index -v
+npx mma practices
+```
+
+## Commands
+
+```
+mma index      Index repositories (clone, parse, analyze)
+mma practices  Health report with prioritized findings and grades
+mma query      Natural language queries ("what calls auth?", "dependencies of scheduler")
+mma report     Anonymized field trial report (JSON, markdown, SARIF)
+mma export     Export anonymized SQLite DB for sharing
+mma affected   Blast radius for a rev range
+mma serve      MCP server for IDE integration (stdio)
+```
+
+## Example: Prioritized Practices Report
+
+The `practices` command partitions findings into action tiers:
+
+- **Fix Now** -- warnings and errors that indicate active risk
+- **Plan For** -- notes worth addressing in the next cycle
+- **Monitor** -- low-priority items to track over time
+
+Each finding includes a concrete action:
+
+```json
+{
+  "ruleId": "structural/unstable-dependency",
+  "count": 64,
+  "level": "warning",
+  "interpretation": "A stable module depends on an unstable one, inverting the expected dependency direction.",
+  "action": "Introduce an abstraction layer or inversion-of-control boundary to isolate the unstable module."
+}
+```
+
+Output formats: `--format table` (default), `json`, `markdown`.
+
+## Example: Anonymized SARIF
+
+When sharing results externally, use `--salt` to redact identifiers:
+
+```json
+{
+  "ruleId": "fault/unhandled-error-path",
+  "level": "warning",
+  "message": {
+    "text": "Catch block in [REDACTED:b1861bbf]#handler has no logging or re-throw"
+  },
+  "locations": [{
+    "logicalLocations": [{
+      "name": "[REDACTED:ad0b9153]",
+      "kind": "module",
+      "properties": { "repo": "[REDACTED:527d4d8a]" }
+    }]
+  }]
+}
+```
+
+No source code, no file paths, no service names -- just the structural finding.
+
+## How It Works
+
+Index-heavy, query-cheap. All analysis runs at index time; queries are lookups and graph traversals.
 
 ```
 Repos --> Ingestion --> Parsing --> Structural Analysis --> Heuristic Analysis
@@ -28,159 +134,56 @@ Repos --> Ingestion --> Parsing --> Structural Analysis --> Heuristic Analysis
                                                       SARIF Diagnostics
 ```
 
-### Package Inventory
+**Parsing** uses [tree-sitter](https://tree-sitter.github.io/tree-sitter/) (WASM) for fast syntax-only parsing, with optional [ts-morph](https://ts-morph.com/) for type-resolved symbols.
+
+**Summarization** has 4 tiers -- the first 3 are free and local:
+
+| Tier | Source | Cost | Example |
+|------|--------|------|---------|
+| 1 | Templates from AST | Free | "Accepts (patientId: string), returns Promise" |
+| 2 | Heuristics from naming | Free | "Fetches appointments for a patient" |
+| 3 | qwen2.5-coder:1.5b via Ollama | Free (local) | "Queries appointment table, maps results, handles pagination" |
+| 4 | Claude Sonnet API | API tokens | "The Scheduler service manages appointment booking across provider calendars" |
+
+## Architecture
+
+Monorepo with npm workspaces:
 
 | Package | Purpose |
 |---------|---------|
-| `packages/core` | Shared types, SARIF schema, hypothesis abstraction |
+| `packages/core` | Shared types, SARIF schema |
 | `packages/ingestion` | Git clone/fetch, change detection, file classification |
-| `packages/parsing` | AST parsing (tree-sitter for speed, ts-morph for type resolution) |
-| `packages/structural` | Call graphs, dependency graphs, control flow graphs, SCIP index |
-| `packages/heuristics` | Service boundary inference, pattern detection, feature flag scanning, log template mining, naming analysis |
-| `packages/summarization` | 4-tier description generation (see below) |
-| `packages/storage` | Adapter interfaces for graph DB, search engine, KV store |
-| `packages/models/config` | Feature model + constraint validation |
-| `packages/models/fault` | Fault tree construction + gap analysis |
-| `packages/models/functional` | Service catalog + documentation + NL query |
+| `packages/parsing` | AST parsing (tree-sitter WASM + ts-morph) |
+| `packages/structural` | Call graphs, dependency graphs, control flow graphs |
+| `packages/heuristics` | Service inference, pattern detection, feature flags, log mining |
+| `packages/summarization` | 4-tier description generation |
+| `packages/storage` | Graph DB, search (FTS5/BM25), KV store (SQLite) |
+| `packages/models/*` | Config model, fault model, functional model |
 | `packages/diagnostics` | SARIF emission, redaction, aggregation |
-| `packages/query` | Query routing (structural, search, analytical) |
-| `packages/mcp` | MCP server for IDE integration (stdio transport) |
-| `apps/cli` | CLI entry point (`index`, `query`, `serve`, `report`, `export`) |
+| `packages/query` | Natural language query routing |
+| `packages/mcp` | MCP server for IDE integration |
+| `apps/cli` | CLI entry point |
 
-### Summarization Tiers
+## Prerequisites
 
-| Tier | Source | Cost | Network | Example |
-|------|--------|------|---------|---------|
-| 1 | Templates from AST | Free | None | "Accepts (patientId: string), returns Promise" |
-| 2 | Heuristics from naming | Free | None | "Fetches appointments for a patient" |
-| 3 | qwen2.5-coder:1.5b via Ollama | Free | None (local) | "Queries appointment table, maps results, handles pagination" |
-| 4 | Claude Sonnet API | API tokens | api.anthropic.com | "The Scheduler service manages appointment booking across provider calendars" |
+- Node.js 22+
+- macOS or Linux
 
-Tiers 1-3 run locally with zero network calls. Tier 4 is optional and used only for service-level summaries.
-
-## Setup
-
-### Prerequisites
-
-macOS or Linux with internet access for initial setup. Node.js 22+ required.
-
-### One-Line Bootstrap
-
-```bash
-gh repo clone <owner>/multi-model-analyzer && cd multi-model-analyzer && ./scripts/setup.sh
-```
-
-Replace `<owner>` with the GitHub user or organization that hosts your copy of the repo.
-
-### What the Setup Script Installs
-
-| Software | Version | Source | Purpose | Network Access |
-|----------|---------|--------|---------|---------------|
-| Xcode CLT | System | Apple (macOS only) | Git, C compiler for native modules | None after install |
-| Homebrew | Latest | brew.sh (macOS only) | Package manager | brew.sh, GitHub |
-| Node.js | 22 LTS | nvm (GitHub) | JavaScript runtime | nodejs.org |
-| npm packages | Per package.json | npmjs.com | Project dependencies | registry.npmjs.org |
-| GitHub CLI | Latest | Homebrew / apt | Authenticated repo clone | github.com |
-| SQLite | System/Brew/apt | OS package manager | Graph, search, and KV storage | None (local DB) |
-| Ollama | Latest | Homebrew / ollama.com | Local LLM runtime | ollama.com (model download only) |
-| qwen2.5-coder:1.5b | 1.5B params | Ollama registry | Code summarization (tier 3) | ~1 GB download, then local only |
-| tree-sitter | Latest | Homebrew / npm | Fast incremental parsing | None |
-| dependency-cruiser | Latest | npmjs.com | Module dependency analysis | None |
-| scip-typescript | Latest | npmjs.com | Cross-repo code intelligence | None |
-
-On Linux, the script uses `apt-get` where available. For other Linux distros, it prints manual install instructions.
-
-### Network Access Summary
-
-| Destination | When | Purpose |
-|-------------|------|---------|
-| github.com | Setup + indexing | Clone target repos, install tools |
-| registry.npmjs.org | Setup only | Install npm packages |
-| brew.sh | Setup only (macOS) | Homebrew packages |
-| ollama.com | Setup only | Download LLM model (~1 GB) |
-| api.anthropic.com | Tier 4 only (optional) | Claude Sonnet API for service-level summaries |
-
-After setup, the system operates **entirely locally** for tiers 1-3. The only ongoing network access is `git fetch` against target repos (for incremental re-indexing) and optionally the Anthropic API for tier 4 summaries.
-
-### Runtime Services
-
-One local service is used during analysis (optional -- tier 3 summarization only):
-
-| Service | Port | Data Location | Purpose |
-|---------|------|---------------|---------|
-| Ollama | 11434 | `~/.ollama/` | Local LLM inference (tier 3) |
-
-Ollama is localhost-only and does not accept external connections by default. Override the URL and model via environment variables: `OLLAMA_BASE_URL`, `OLLAMA_MODEL`.
+Optional:
+- [Ollama](https://ollama.com/) for tier 3 summarization (free, local)
+- Anthropic API key for tier 4 summarization
 
 ## Data Handling
 
-- **Input**: Git repositories (cloned as bare mirrors to `./data/mirrors/`)
-- **Processing**: AST parsing, graph extraction, heuristic analysis -- all in-memory or local storage
-- **Output**: SARIF JSON files with logical locations only (no source snippets, no file contents)
-- **Redaction**: Built-in SARIF redaction can hash service names and identifiers before sharing results
-- **No telemetry**: The system sends no usage data anywhere
-
-## Configuration
-
-Copy `mma.config.example.json` to `mma.config.json` and add your target repositories:
-
-```json
-{
-  "mirrorDir": "./data/mirrors",
-  "dbPath": "./data/mma.db",
-  "repos": [
-    {
-      "name": "service-name",
-      "url": "https://github.com/org/service-name.git",
-      "branch": "main",
-      "localPath": "./data/mirrors/service-name.git"
-    }
-  ]
-}
-```
-
-`dbPath` is resolved relative to the config file directory. It can also be overridden with the `--db` CLI flag.
-
-## Usage
-
-```bash
-# Start Ollama (optional, for tier 3 summarization)
-ollama serve &
-
-# Index repositories
-npx mma index -v
-
-# Query the index
-npx mma query "what calls the authentication service?"
-npx mma query "dependencies of scheduler"
-npx mma query "error handling risks"
-
-# Start MCP server (for IDE integration, stdio transport)
-npx mma serve
-
-# Generate anonymized field trial report
-npx mma report --format markdown -o report.md
-npx mma report --include-sarif --salt "$(openssl rand -hex 16)"
-
-# Export anonymized database for sharing
-npx mma export -o export.db --salt "$(openssl rand -hex 16)"
-
-# Generate best-practices recommendations
-npx mma practices
-npx mma practices --format json -o practices.json
-```
-
-The `export` command creates a portable SQLite database with all repo names, file paths, and service names hashed. It includes KV and edge data but strips symbols and FTS indexes. Use `--salt` to control the hash seed (omit for a random salt).
-
-The `practices` command reads SARIF findings and structural metrics to produce a prioritized report with health grades, tier-partitioned findings (Fix Now / Plan For / Monitor), structural health ratings, and concrete recommendations. Unlike `report`, it uses real repo names and is designed for the repo owner, not for anonymized data collection.
-
-## Roadmap
-
-See [docs/roadmap.md](docs/roadmap.md) for planned features informed by analysis of comparable tools.
+- Repos are cloned as bare mirrors (no working tree checkout)
+- All analysis is local -- in-memory or SQLite
+- Output uses logical locations only (no source snippets)
+- Built-in redaction hashes all identifiers before sharing
+- No telemetry
 
 ## Findings Reference
 
-See [docs/findings-guide.md](docs/findings-guide.md) for detailed explanations of all SARIF diagnostic rules, metrics, and model outputs.
+See [docs/findings-guide.md](docs/findings-guide.md) for all SARIF rule IDs, severity levels, and metrics.
 
 ## Contributing
 
@@ -191,6 +194,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
 ```bash
 npm run build          # TypeScript compilation
 npm run type-check     # Type checking without emit
-npm run test           # Run all tests
-npm run clean          # Clean build artifacts
+npm run test           # Run all tests (1054 tests)
+npm run lint           # ESLint
 ```
+
+## License
+
+[Apache 2.0](LICENSE)
