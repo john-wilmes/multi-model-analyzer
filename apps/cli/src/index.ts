@@ -419,14 +419,9 @@ async function main(): Promise<void> {
         : undefined;
 
     if (baselinePath) {
-      // Check if DB is fresh (no commit keys for any configured repo)
-      let hasPriorData = false;
-      for (const repo of config.repos) {
-        if (await kvStore.get(`commit:${repo.name}`)) {
-          hasPriorData = true;
-          break;
-        }
-      }
+      // Check if DB already contains data
+      const existingKeys = await kvStore.keys();
+      const hasPriorData = existingKeys.length > 0;
 
       if (!hasPriorData) {
         if (!existsSync(baselinePath)) {

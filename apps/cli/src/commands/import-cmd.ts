@@ -32,6 +32,25 @@ interface EdgeRow {
   metadata: string | null;
 }
 
+function isExportManifest(value: unknown): value is ExportManifest {
+  if (typeof value !== "object" || value === null) return false;
+  const m = value as Partial<ExportManifest>;
+  return (
+    typeof m.schemaVersion === "number" &&
+    Number.isInteger(m.schemaVersion) &&
+    typeof m.exportedAt === "string" &&
+    (m.mode === "raw" || m.mode === "anonymized") &&
+    Array.isArray(m.repos) &&
+    m.repos.every(
+      (r) =>
+        typeof r === "object" &&
+        r !== null &&
+        typeof (r as { name?: unknown }).name === "string" &&
+        typeof (r as { commit?: unknown }).commit === "string",
+    )
+  );
+}
+
 export async function importCommand(
   options: ImportOptions,
 ): Promise<{ kvCount: number; edgeCount: number }> {
@@ -57,7 +76,19 @@ export async function importCommand(
       );
     }
 
-    const manifest = JSON.parse(manifestRow.value) as ExportManifest;
+    let manifest: ExportManifest;
+    try {
+      const parsed: unknown = JSON.parse(manifestRow.value);
+      if (!isExportManifest(parsed)) {
+        throw new Error("Invalid MMA export manifest format.");
+      }
+      manifest = parsed;
+    } catch (err) {
+      if (err instanceof SyntaxError) {
+        throw new Error("Invalid MMA export manifest: malformed JSON.");
+      }
+      throw err;
+    }
 
     if (manifest.mode !== "raw") {
       throw new Error(
@@ -95,27 +126,29 @@ export async function importCommand(
       }
     }
 
-    // 5. Read all KV rows (excluding manifest) and write to local store
+    // 5. Read and validate all data before writing (avoid partial import)
     const kvRows = srcDb
       .prepare("SELECT key, value FROM kv WHERE key != ?")
       .all("mma:manifest") as KvRow[];
 
-    for (const row of kvRows) {
-      await kvStore.set(row.key, row.value);
-    }
-
-    // 6. Read all edges and batch write to graph store
     const edgeRows = srcDb
       .prepare("SELECT source, target, kind, metadata FROM edges")
       .all() as EdgeRow[];
 
-    if (edgeRows.length > 0) {
-      const edges: GraphEdge[] = edgeRows.map((row) => ({
-        source: row.source,
-        target: row.target,
-        kind: row.kind as GraphEdge["kind"],
-        metadata: row.metadata ? (JSON.parse(row.metadata) as Record<string, unknown>) : undefined,
-      }));
+    // Parse all edge metadata upfront so a parse error doesn't leave partial state
+    const edges: GraphEdge[] = edgeRows.map((row) => ({
+      source: row.source,
+      target: row.target,
+      kind: row.kind as GraphEdge["kind"],
+      metadata: row.metadata ? (JSON.parse(row.metadata) as Record<string, unknown>) : undefined,
+    }));
+
+    // 6. Write to local stores (all validation passed)
+    for (const row of kvRows) {
+      await kvStore.set(row.key, row.value);
+    }
+
+    if (edges.length > 0) {
       await graphStore.addEdges(edges);
     }
 

@@ -60,6 +60,7 @@ export async function exportCommand(
 
   // 2. Collect all data (async) before writing to destination
   const kvPairs: Array<[string, string]> = [];
+  const commitByRepo = new Map<string, string>();
   const allKeys = await kvStore.keys();
 
   for (const key of allKeys) {
@@ -67,6 +68,10 @@ export async function exportCommand(
 
     const value = await kvStore.get(key);
     if (value === undefined) continue;
+
+    if (key.startsWith("commit:")) {
+      commitByRepo.set(key.slice("commit:".length), value);
+    }
 
     if (raw) {
       kvPairs.push([key, value]);
@@ -174,13 +179,8 @@ export async function exportCommand(
     // Write manifest
     const repoCommits: Array<{ name: string; commit: string }> = [];
     for (const repo of repoNames) {
-      const commitPair = kvPairs.find(([k]) =>
-        raw ? k === `commit:${repo}` : k.startsWith("commit:"),
-      );
-      // In anonymized mode, hash the repo name so it doesn't appear in the
-      // exported DB in cleartext (import will reject anonymized exports anyway).
       const repoName = raw ? repo : hashToken(repo, salt, tokenMap);
-      repoCommits.push({ name: repoName, commit: commitPair?.[1] ?? "" });
+      repoCommits.push({ name: repoName, commit: commitByRepo.get(repo) ?? "" });
     }
     const manifest: ExportManifest = {
       schemaVersion: 1,
