@@ -24,7 +24,7 @@ import type {
   CallGraph,
   ArchitecturalRule,
 } from "@mma/core";
-import { detectChanges, classifyFiles, getFileContent } from "@mma/ingestion";
+import { detectChanges, classifyFiles, getFileContent, getHeadCommit } from "@mma/ingestion";
 import { parseFiles } from "@mma/parsing";
 import type { TreeSitterTree } from "@mma/parsing";
 import { extractDependencyGraph, buildControlFlowGraph, createCfgIdCounter, extractCallEdgesFromTreeSitter, computeModuleMetrics, summarizeRepoMetrics, detectDeadExports, detectInstabilityViolations } from "@mma/structural";
@@ -55,6 +55,17 @@ import type { ServiceSummaryInput } from "@mma/summarization";
 import { computeAffectedScope } from "./affected-scope.js";
 import type { AffectedScope } from "./affected-scope.js";
 import { PipelineTracer } from "../tracer.js";
+
+/** Resolve a commit hash for reading files from a bare repo. */
+async function resolveCommitForBare(
+  repoPath: string,
+  changeSets: readonly ChangeSet[],
+  repoName: string,
+): Promise<string> {
+  const cs = changeSets.find(c => c.repo === repoName);
+  if (cs) return cs.commitHash;
+  return getHeadCommit(repoPath);
+}
 
 export interface IndexOptions {
   readonly repos: readonly RepoConfig[];
@@ -162,11 +173,10 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       (f) => f.kind === "json" && f.path.endsWith("package.json"),
     );
     const isBare = repo.localPath.endsWith(".git");
-    const repoCS = changeSets.find(cs => cs.repo === repo.name);
     for (const pjFile of packageJsonFiles) {
       try {
-        const raw = isBare && repoCS
-          ? await getFileContent(repo.localPath, repoCS.commitHash, pjFile.path)
+        const raw = isBare
+          ? await getFileContent(repo.localPath, await resolveCommitForBare(repo.localPath, changeSets, repo.name), pjFile.path)
           : await readFile(join(repo.localPath, pjFile.path), "utf-8");
         const parsed = JSON.parse(raw) as Record<string, unknown>;
         const name = parsed.name as string | undefined;
@@ -286,11 +296,11 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       // Detect bare repos (no working tree) so we can read content via git show.
       // A bare repo path ends with ".git" or git rev-parse reports it is bare.
       const isBare = repo.localPath.endsWith(".git");
-      const repoChangeSetForParse = changeSets.find(cs => cs.repo === repo.name);
+      const bareCommit = isBare ? await resolveCommitForBare(repo.localPath, changeSets, repo.name) : undefined;
       const contentProvider =
-        isBare && repoChangeSetForParse
+        isBare && bareCommit
           ? (filePath: string) =>
-              getFileContent(repo.localPath, repoChangeSetForParse.commitHash, filePath)
+              getFileContent(repo.localPath, bareCommit, filePath)
           : undefined;
 
       const result = await parseFiles(classified, repo.name, repo.localPath, {
@@ -459,11 +469,10 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
 
         const packageJsons = new Map<string, PackageJsonInfo>();
         const isBare = repo.localPath.endsWith(".git");
-        const repoCS = changeSets.find(cs => cs.repo === repo.name);
         for (const pjFile of packageJsonFiles) {
           try {
-            const raw = isBare && repoCS
-              ? await getFileContent(repo.localPath, repoCS.commitHash, pjFile.path)
+            const raw = isBare
+              ? await getFileContent(repo.localPath, await resolveCommitForBare(repo.localPath, changeSets, repo.name), pjFile.path)
               : await readFile(join(repo.localPath, pjFile.path), "utf-8");
             const parsed = JSON.parse(raw) as Record<string, unknown>;
             packageJsons.set(dirname(pjFile.path), {
@@ -747,9 +756,8 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
             }
             try {
               const isBare = repo.localPath.endsWith(".git");
-              const cs = changeSets.find(c => c.repo === repo.name);
-              const sourceText = isBare && cs
-                ? await getFileContent(repo.localPath, cs.commitHash, pf.path)
+              const sourceText = isBare
+                ? await getFileContent(repo.localPath, await resolveCommitForBare(repo.localPath, changeSets, repo.name), pf.path)
                 : await readFile(join(repo.localPath, pf.path), "utf-8");
               const summaries = tier1Summarize(pf.symbols, pf.path, sourceText);
               if (summaries.length > 0) {
