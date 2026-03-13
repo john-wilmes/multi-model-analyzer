@@ -740,8 +740,11 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
               }
             }
             try {
-              const absPath = join(repo.localPath, pf.path);
-              const sourceText = await readFile(absPath, "utf-8");
+              const isBare = repo.localPath.endsWith(".git");
+              const cs = changeSets.find(c => c.repo === repo.name);
+              const sourceText = isBare && cs
+                ? await getFileContent(repo.localPath, cs.commitHash, pf.path)
+                : await readFile(join(repo.localPath, pf.path), "utf-8");
               const summaries = tier1Summarize(pf.symbols, pf.path, sourceText);
               if (summaries.length > 0) {
                 await kvStore.set(cacheKey, JSON.stringify(summaries));
