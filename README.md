@@ -70,7 +70,10 @@ mma index      Index repositories (clone, parse, analyze)
 mma practices  Health report with prioritized findings and grades
 mma query      Natural language queries ("what calls auth?", "dependencies of scheduler")
 mma report     Anonymized field trial report (JSON, markdown, SARIF)
-mma export     Export anonymized SQLite DB for sharing
+mma export     Export SQLite DB (anonymized by default, --raw for baseline sharing)
+mma import     Import a raw baseline export into local DB
+mma merge      Combine multiple anonymized export DBs
+mma validate   Statistical validation of SARIF findings quality
 mma affected   Blast radius for a rev range
 mma serve      MCP server for IDE integration (stdio)
 ```
@@ -180,6 +183,69 @@ Optional:
 - Output uses logical locations only (no source snippets)
 - Built-in redaction hashes all identifiers before sharing
 - No telemetry
+
+## Baseline Sharing
+
+Share an indexed baseline so colleagues (or their agents) skip full reindexing -- only changed files are reprocessed.
+
+### Setup (one-time, by the person who indexed)
+
+```bash
+# Export raw baseline (includes all internal keys needed for incremental indexing)
+mma export --raw -o baseline.db
+```
+
+Share `baseline.db` via shared drive, S3, artifact store, etc.
+
+### Usage (by colleagues)
+
+**Option A: Config-driven (recommended)**
+
+Add `baselinePath` to your `mma.config.json`:
+
+```jsonc
+{
+  "baselinePath": "baseline.db",   // relative to config file, or absolute
+  "mirrorDir": "./data/mirrors",
+  "repos": [...]
+}
+```
+
+Then just run:
+
+```bash
+mma index -c mma.config.json -v
+```
+
+On a fresh database, the baseline is auto-imported before indexing. On subsequent runs it's skipped.
+
+**Option B: CLI flag**
+
+```bash
+mma index -c mma.config.json --baseline baseline.db
+```
+
+The `--baseline` flag overrides `baselinePath` from config.
+
+**Option C: Manual import**
+
+```bash
+mma import baseline.db --db my.db
+mma index -c mma.config.json --db my.db
+```
+
+### How it works
+
+The incremental engine checks stored commit hashes (`commit:<repo>`) against current HEAD. If a repo's hash matches, it's skipped entirely. If it differs, only changed files are reprocessed. The baseline seeds these hashes plus cached symbols and pipeline state, so the first incremental run only processes the delta.
+
+### For AI agents
+
+If you're an AI coding agent working with MMA:
+
+1. Check if `baselinePath` exists in `mma.config.json` -- if so, `mma index` handles everything automatically
+2. If you have a baseline file but no config field, use `--baseline path/to/baseline.db`
+3. The import is idempotent on fresh DBs and no-op on populated DBs -- safe to always include `--baseline` if unsure
+4. Errors during baseline import are non-fatal: indexing falls back to full processing with a warning
 
 ## Findings Reference
 

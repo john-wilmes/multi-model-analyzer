@@ -32,6 +32,9 @@ npm run build -w packages/parsing && npm run build:wasm -w packages/parsing
 npx tsc --build --noEmit    # Type-check without emit
 npx vitest run              # Run tests
 node apps/cli/dist/index.js index -c mma.config.json -v   # Index repos
+node apps/cli/dist/index.js export --raw -o baseline.db    # Export raw baseline
+node apps/cli/dist/index.js import baseline.db             # Import baseline
+node apps/cli/dist/index.js validate --mirrors ./mirrors   # Validate findings
 ```
 
 ## Parsing Layer
@@ -64,3 +67,7 @@ Findings reference: `docs/findings-guide.md` — explains all SARIF rule IDs, se
 - Barrel exports via `src/index.ts` in each package
 - SQLite (better-sqlite3) for persistent storage; in-memory backends for unit tests
 - Analysis output targets SARIF v2.1.0 format
+
+## Baseline Sharing
+
+Raw exports (`mma export --raw`) include all KV keys and graph edges needed for incremental indexing. Colleagues import via `mma import` or set `baselinePath` in config for automatic import on first `mma index` run. See `docs/baseline-sharing.md` or README for details.
