@@ -86,6 +86,7 @@ export interface IndexOptions {
   readonly verbose: boolean;
   readonly enableTsMorph?: boolean;
   readonly anthropicApiKey?: string;
+  readonly maxApiCalls?: number;
   readonly rules?: readonly ArchitecturalRule[];
   readonly affected?: boolean;
 }
@@ -245,9 +246,9 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     const pipelineComplete = await kvStore.get(`pipelineComplete:${repo.name}`);
     if (pipelineComplete) continue; // Fully completed last run
 
-    // Recovery: load cached symbols from KV
-    const symbolKeys = await kvStore.keys(`symbols:${repo.name}:`);
-    if (symbolKeys.length === 0) {
+    // Recovery: batch-load cached symbols from KV (single range scan)
+    const symbolEntries = await kvStore.getByPrefix(`symbols:${repo.name}:`);
+    if (symbolEntries.size === 0) {
       // No cached symbols: pre-Increment-3 run. Backfill pipelineComplete
       // since the old code only saved commit hash on successful parse.
       await kvStore.set(`pipelineComplete:${repo.name}`, "true");
@@ -255,11 +256,9 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       continue;
     }
 
-    log(`  [${repo.name}] Recovery: loading ${symbolKeys.length} cached files...`);
+    log(`  [${repo.name}] Recovery: loading ${symbolEntries.size} cached files...`);
     const recoveredFiles: ParsedFile[] = [];
-    for (const key of symbolKeys) {
-      const raw = await kvStore.get(key);
-      if (!raw) continue;
+    for (const [key, raw] of symbolEntries) {
       try {
         const { symbols, contentHash, kind = "typescript" } = JSON.parse(raw) as { symbols: SymbolInfo[]; contentHash: string; kind?: string };
         // Extract filePath from key: "symbols:<repo>:<filePath>"
@@ -827,15 +826,20 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
             entryPoints: [...svc.entryPoints],
           }));
           log(`    Tier 4 (Sonnet): summarizing ${inputs.length} services`);
-          const tier4Results = await tier4BatchSummarize(inputs, {
+          const tier4Result = await tier4BatchSummarize(inputs, {
             ...SONNET_DEFAULTS,
             apiKey: options.anthropicApiKey,
+            kvStore,
+            maxApiCalls: options.maxApiCalls,
           });
-          for (const s of tier4Results) {
+          for (const s of tier4Result.summaries) {
             if (s.confidence > 0) {
               summaryMap.set(s.entityId, s);
               tier4Count++;
             }
+          }
+          if (tier4Result.cacheHits > 0) {
+            log(`    Tier 4: ${tier4Result.cacheHits} cache hits, ${tier4Result.apiCallsMade} API calls`);
           }
         }
       }

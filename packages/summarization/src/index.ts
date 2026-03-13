@@ -3,4 +3,4 @@ export { summarizeFromNaming, tier2Summarize, shouldEscalateToTier3 } from "./he
 export { summarizeWithOllama, isOllamaAvailable, tier3Summarize } from "./ollama.js";
 export type { OllamaOptions } from "./ollama.js";
 export { summarizeWithSonnet, tier4BatchSummarize, SONNET_DEFAULTS } from "./sonnet.js";
-export type { SonnetOptions, ServiceSummaryInput } from "./sonnet.js";
+export type { SonnetOptions, ServiceSummaryInput, Tier4BatchOptions, Tier4BatchResult } from "./sonnet.js";

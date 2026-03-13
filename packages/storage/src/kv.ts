@@ -14,6 +14,10 @@ export interface KVStore {
   deleteByPrefix(prefix: string): Promise<number>;
   has(key: string): Promise<boolean>;
   keys(prefix?: string): Promise<string[]>;
+  /** Batch read: returns all key-value pairs matching the given prefix. */
+  getByPrefix(prefix: string): Promise<Map<string, string>>;
+  /** Returns true if the store contains no keys. */
+  isEmpty(): Promise<boolean>;
   clear(): Promise<void>;
   close(): Promise<void>;
 }
@@ -56,6 +60,20 @@ export class InMemoryKVStore implements KVStore {
     const allKeys = [...this.store.keys()];
     if (!prefix) return allKeys;
     return allKeys.filter((k) => k.startsWith(prefix));
+  }
+
+  async getByPrefix(prefix: string): Promise<Map<string, string>> {
+    const result = new Map<string, string>();
+    for (const [key, value] of this.store) {
+      if (key.startsWith(prefix)) {
+        result.set(key, value);
+      }
+    }
+    return result;
+  }
+
+  async isEmpty(): Promise<boolean> {
+    return this.store.size === 0;
   }
 
   async clear(): Promise<void> {

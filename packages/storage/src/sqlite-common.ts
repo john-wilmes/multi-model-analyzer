@@ -35,8 +35,12 @@ export function openDatabase(dbPath: string, wal = true, readonly = false): Data
     db.pragma("journal_mode = WAL");
   }
   db.pragma("synchronous = NORMAL");
-  db.pragma("cache_size = -64000");
+  db.pragma("cache_size = -131072"); // 128MB
+  db.pragma("temp_store = MEMORY");
   db.pragma("foreign_keys = ON");
+  if (dbPath !== ":memory:") {
+    db.pragma("mmap_size = 268435456"); // 256MB
+  }
   return db;
 }
 

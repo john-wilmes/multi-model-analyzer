@@ -39,6 +39,22 @@ describe("openDatabase", () => {
 
     expect(row[0]!.foreign_keys).toBe(1);
   });
+
+  it("sets cache_size to 128MB", () => {
+    const db = cleanup(openDatabase(":memory:", false));
+    const row = db.pragma("cache_size") as Array<{ cache_size: number }>;
+
+    // -131072 = 128MB in KiB pages
+    expect(row[0]!.cache_size).toBe(-131072);
+  });
+
+  it("sets temp_store to MEMORY", () => {
+    const db = cleanup(openDatabase(":memory:", false));
+    const row = db.pragma("temp_store") as Array<{ temp_store: number }>;
+
+    // MEMORY = 2
+    expect(row[0]!.temp_store).toBe(2);
+  });
 });
 
 describe("initSchema", () => {

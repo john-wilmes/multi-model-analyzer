@@ -149,6 +149,52 @@ describe("SqliteKVStore", () => {
     });
   });
 
+  describe("getByPrefix", () => {
+    it("returns all key-value pairs matching prefix", async () => {
+      await kvStore.set("symbols:r1:a.ts", '{"symbols":[]}');
+      await kvStore.set("symbols:r1:b.ts", '{"symbols":[1]}');
+      await kvStore.set("symbols:r2:c.ts", '{"symbols":[2]}');
+      await kvStore.set("commit:r1", "abc123");
+
+      const result = await kvStore.getByPrefix("symbols:r1:");
+      expect(result.size).toBe(2);
+      expect(result.get("symbols:r1:a.ts")).toBe('{"symbols":[]}');
+      expect(result.get("symbols:r1:b.ts")).toBe('{"symbols":[1]}');
+    });
+
+    it("returns empty map when no keys match", async () => {
+      await kvStore.set("foo:bar", "1");
+      const result = await kvStore.getByPrefix("baz:");
+      expect(result.size).toBe(0);
+    });
+
+    it("returns all entries for broad prefix", async () => {
+      await kvStore.set("symbols:r1:a.ts", "1");
+      await kvStore.set("symbols:r1:b.ts", "2");
+      await kvStore.set("symbols:r2:c.ts", "3");
+
+      const result = await kvStore.getByPrefix("symbols:");
+      expect(result.size).toBe(3);
+    });
+  });
+
+  describe("isEmpty", () => {
+    it("returns true for empty store", async () => {
+      expect(await kvStore.isEmpty()).toBe(true);
+    });
+
+    it("returns false when store has entries", async () => {
+      await kvStore.set("key", "value");
+      expect(await kvStore.isEmpty()).toBe(false);
+    });
+
+    it("returns true after clearing all entries", async () => {
+      await kvStore.set("key", "value");
+      await kvStore.clear();
+      expect(await kvStore.isEmpty()).toBe(true);
+    });
+  });
+
   describe("clear", () => {
     it("removes all entries", async () => {
       await kvStore.set("a", "1");

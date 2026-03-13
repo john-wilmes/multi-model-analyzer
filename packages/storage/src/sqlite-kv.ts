@@ -17,6 +17,8 @@ export class SqliteKVStore implements KVStore {
   private readonly stmtKeysPrefix: Database.Statement;
   private readonly stmtClear: Database.Statement;
   private readonly stmtDeleteByPrefix: Database.Statement;
+  private readonly stmtGetByPrefix: Database.Statement;
+  private readonly stmtIsEmpty: Database.Statement;
 
   constructor(db: Database.Database) {
     this.stmtGet = db.prepare("SELECT value FROM kv WHERE key = ?");
@@ -33,6 +35,10 @@ export class SqliteKVStore implements KVStore {
     this.stmtDeleteByPrefix = db.prepare(
       "DELETE FROM kv WHERE key >= ? AND key < ?",
     );
+    this.stmtGetByPrefix = db.prepare(
+      "SELECT key, value FROM kv WHERE key >= ? AND key < ? ORDER BY key",
+    );
+    this.stmtIsEmpty = db.prepare("SELECT 1 FROM kv LIMIT 1");
   }
 
   async get(key: string): Promise<string | undefined> {
@@ -73,6 +79,20 @@ export class SqliteKVStore implements KVStore {
       key: string;
     }>;
     return rows.map((r) => r.key);
+  }
+
+  async getByPrefix(prefix: string): Promise<Map<string, string>> {
+    const upper = prefix.slice(0, -1) + String.fromCharCode(prefix.charCodeAt(prefix.length - 1) + 1);
+    const rows = this.stmtGetByPrefix.all(prefix, upper) as Array<{ key: string; value: string }>;
+    const result = new Map<string, string>();
+    for (const row of rows) {
+      result.set(row.key, row.value);
+    }
+    return result;
+  }
+
+  async isEmpty(): Promise<boolean> {
+    return this.stmtIsEmpty.get() === undefined;
   }
 
   async clear(): Promise<void> {

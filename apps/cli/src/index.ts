@@ -60,6 +60,8 @@ async function main(): Promise<void> {
       "watch-interval": { type: "string", default: "30" },
       raw: { type: "boolean", default: false },
       baseline: { type: "string" },
+      "api-key": { type: "string" },
+      "max-api-calls": { type: "string" },
     },
   });
 
@@ -420,8 +422,7 @@ async function main(): Promise<void> {
 
     if (baselinePath) {
       // Check if DB already contains data
-      const existingKeys = await kvStore.keys();
-      const hasPriorData = existingKeys.length > 0;
+      const hasPriorData = !(await kvStore.isEmpty());
 
       if (!hasPriorData) {
         if (!existsSync(baselinePath)) {
@@ -449,6 +450,12 @@ async function main(): Promise<void> {
     switch (command) {
       case "index": {
         const indexFormat = validateFormat(values.format, "table");
+        const anthropicApiKey = values["api-key"] || process.env.ANTHROPIC_API_KEY;
+        const maxApiCalls = values["max-api-calls"] ? parseInt(values["max-api-calls"], 10) : undefined;
+        if (maxApiCalls !== undefined && (isNaN(maxApiCalls) || maxApiCalls < 0)) {
+          console.error(`Invalid --max-api-calls: "${values["max-api-calls"]}". Must be a non-negative integer.`);
+          process.exit(1);
+        }
         const indexOpts = {
           repos: config.repos,
           mirrorDir: config.mirrorDir,
@@ -458,6 +465,8 @@ async function main(): Promise<void> {
           verbose,
           rules: validatedRules,
           affected: values.affected,
+          anthropicApiKey,
+          maxApiCalls,
         } as const;
 
         if (values.watch) {

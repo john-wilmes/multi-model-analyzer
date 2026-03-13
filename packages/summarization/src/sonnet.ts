@@ -9,6 +9,7 @@
  */
 
 import type { Summary } from "@mma/core";
+import type { KVStore } from "@mma/storage";
 
 export interface SonnetOptions {
   readonly apiKey: string;
@@ -31,6 +32,22 @@ export interface ServiceSummaryInput {
   readonly entryPoints: readonly string[];
 }
 
+export interface Tier4BatchOptions extends SonnetOptions {
+  /** KV store for caching tier-4 summaries. */
+  readonly kvStore?: KVStore;
+  /** Maximum total API calls allowed; uncached services beyond this cap are skipped. */
+  readonly maxApiCalls?: number;
+}
+
+/** How many API calls were made (for logging/testing). */
+export interface Tier4BatchResult {
+  readonly summaries: Summary[];
+  readonly apiCallsMade: number;
+  readonly cacheHits: number;
+}
+
+const T4_CACHE_PREFIX = "summary:t4:";
+
 export async function summarizeWithSonnet(
   input: ServiceSummaryInput,
   options: SonnetOptions,
@@ -38,7 +55,7 @@ export async function summarizeWithSonnet(
   const prompt = buildServicePrompt(input);
 
   try {
-    const response = await callSonnet(prompt, options);
+    const response = await callSonnetWithRetry(prompt, options);
     return {
       entityId: input.entityId,
       tier: 4,
@@ -71,6 +88,44 @@ function buildServicePrompt(input: ServiceSummaryInput): string {
   ].join("\n");
 }
 
+const RETRY_DELAYS = [1000, 2000, 4000, 8000];
+
+async function callSonnetWithRetry(
+  prompt: string,
+  options: SonnetOptions,
+): Promise<string> {
+  let lastError: Error | undefined;
+
+  for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
+    try {
+      return await callSonnet(prompt, options);
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+
+      // Only retry on 429 (rate limit)
+      if (!err.message.includes("429")) {
+        throw err;
+      }
+
+      lastError = err;
+      if (attempt < RETRY_DELAYS.length) {
+        // Honor Retry-After header if embedded in message, otherwise use backoff
+        const retryAfterMatch = err.message.match(/retry-after:(\d+)/i);
+        const delayMs = retryAfterMatch
+          ? parseInt(retryAfterMatch[1]!, 10) * 1000
+          : RETRY_DELAYS[attempt]!;
+        await sleep(delayMs);
+      }
+    }
+  }
+
+  throw lastError ?? new Error("callSonnet failed after retries");
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function callSonnet(
   prompt: string,
   options: SonnetOptions,
@@ -91,7 +146,9 @@ async function callSonnet(
   });
 
   if (!response.ok) {
-    throw new Error(`Anthropic API error: ${response.status}`);
+    const retryAfter = response.headers.get("retry-after");
+    const extra = retryAfter ? ` retry-after:${retryAfter}` : "";
+    throw new Error(`Anthropic API error: ${response.status}${extra}`);
   }
 
   const data = (await response.json()) as {
@@ -104,21 +161,52 @@ async function callSonnet(
 
 export async function tier4BatchSummarize(
   inputs: readonly ServiceSummaryInput[],
-  options: SonnetOptions,
-): Promise<Summary[]> {
-  const results: Summary[] = [];
+  options: Tier4BatchOptions,
+): Promise<Tier4BatchResult> {
   if (options.batchSize <= 0) {
     throw new Error(`batchSize must be positive, got ${options.batchSize}`);
   }
 
-  // Process in batches to respect rate limits
+  const summaries: Summary[] = [];
+  let apiCallsMade = 0;
+  let cacheHits = 0;
+
   for (let i = 0; i < inputs.length; i += options.batchSize) {
     const batch = inputs.slice(i, i + options.batchSize);
     const batchResults = await Promise.all(
-      batch.map((input) => summarizeWithSonnet(input, options)),
+      batch.map(async (input) => {
+        // Check cache first
+        if (options.kvStore) {
+          const cached = await options.kvStore.get(`${T4_CACHE_PREFIX}${input.entityId}`);
+          if (cached) {
+            cacheHits++;
+            return JSON.parse(cached) as Summary;
+          }
+        }
+
+        // Check API call cap
+        if (options.maxApiCalls !== undefined && apiCallsMade >= options.maxApiCalls) {
+          return {
+            entityId: input.entityId,
+            tier: 4,
+            description: `[Skipped] API call cap reached (${options.maxApiCalls})`,
+            confidence: 0,
+          } satisfies Summary;
+        }
+
+        apiCallsMade++;
+        const result = await summarizeWithSonnet(input, options);
+
+        // Write to cache on success
+        if (options.kvStore && result.confidence > 0) {
+          await options.kvStore.set(`${T4_CACHE_PREFIX}${input.entityId}`, JSON.stringify(result));
+        }
+
+        return result;
+      }),
     );
-    results.push(...batchResults);
+    summaries.push(...batchResults);
   }
 
-  return results;
+  return { summaries, apiCallsMade, cacheHits };
 }

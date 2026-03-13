@@ -20,6 +20,7 @@
   "dependencies": {
     "@mma/core": "*",
     "@mma/parsing": "*",
-    "@mma/heuristics": "*"
+    "@mma/heuristics": "*",
+    "@mma/storage": "*"
   }
 }
