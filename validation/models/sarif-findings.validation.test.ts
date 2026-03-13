@@ -646,6 +646,9 @@ describe("SARIF Findings Statistical Validation", () => {
 
           const loggingRe =
             /\b(console\.(log|warn|error|info|debug)|logger\.|log\.|logging\.|this\.logger|throw\b)/i;
+          // Catch blocks that return a value or call expect() are intentional handling
+          const intentionalHandlingRe =
+            /\b(return\s+[^;]+;|expect\s*[\s.(])/;
 
           for (const { repo, finding } of sampled) {
             const modulePath = fqn(finding).split("#")[0];
@@ -659,7 +662,8 @@ describe("SARIF Findings Statistical Validation", () => {
               const source = await getFileContent(repoDir, commit, modulePath);
 
               // Heuristic: find catch blocks and check for logging/re-throw
-              const catchRe = /catch\s*\([^)]*\)\s*\{/g;
+              // Match both `catch (e) {` and `catch {` (no binding)
+              const catchRe = /catch\s*(?:\([^)]*\))?\s*\{/g;
               let hasSilentCatch = false;
               let catchIdx;
 
@@ -677,7 +681,7 @@ describe("SARIF Findings Statistical Validation", () => {
                 }
                 const catchBody = bodySlice.slice(0, end);
 
-                if (!loggingRe.test(catchBody)) {
+                if (!loggingRe.test(catchBody) && !intentionalHandlingRe.test(catchBody)) {
                   hasSilentCatch = true;
                   break;
                 }
@@ -741,9 +745,12 @@ describe("SARIF Findings Statistical Validation", () => {
                 if (!source.includes("catch")) continue;
 
                 checked++;
-                const catchRe = /catch\s*\([^)]*\)\s*\{/g;
+                // Match both `catch (e) {` and `catch {` (no binding)
+                const catchRe = /catch\s*(?:\([^)]*\))?\s*\{/g;
                 const loggingRe =
                   /\b(console\.(log|warn|error|info|debug)|logger\.|log\.|logging\.|this\.logger|throw\b)/i;
+                const intentionalHandlingRe =
+                  /\b(return\s+[^;]+;|expect\s*[\s.(])/;
                 let catchIdx;
 
                 while ((catchIdx = catchRe.exec(source)) !== null) {
@@ -758,7 +765,7 @@ describe("SARIF Findings Statistical Validation", () => {
                   }
                   const catchBody = bodySlice.slice(0, end);
 
-                  if (!loggingRe.test(catchBody)) {
+                  if (!loggingRe.test(catchBody) && !intentionalHandlingRe.test(catchBody)) {
                     missed++;
                     reporter.fail("fault", repo, `recall: ${filePath}`,
                       "has silent catch block but not in findings");
