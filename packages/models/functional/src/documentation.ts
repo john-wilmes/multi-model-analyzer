@@ -91,8 +91,15 @@ export function findDocumentationGaps(
 
   for (const entry of catalog) {
     if (!entry.name) continue;
-    // Check for services without tier 4 summaries
-    const namePattern = new RegExp(`\\b${escapeRegExp(entry.name)}\\b`);
+    // Check for services without tier 4 summaries.
+    // Require the name to appear as a complete path/identifier segment:
+    // preceded by start-of-string or a separator (: / #) and followed by
+    // end-of-string or a separator. This prevents "auth" from matching
+    // "reauth" or "auth-v2" while still matching "service:auth" or "auth#method".
+    const escaped = escapeRegExp(entry.name);
+    const namePattern = new RegExp(
+      `(?:^|[:/# ])${escaped}(?:[:/# ]|$)`,
+    );
     const hasTier4 = [...summaries.values()].some(
       (s) => s.tier === 4 && namePattern.test(s.entityId),
     );

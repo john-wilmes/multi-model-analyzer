@@ -136,7 +136,10 @@ export function detectInstabilityViolations(
 
   // Zone anomalies
   for (const m of metrics) {
-    if (m.zone === "pain") {
+    // Gate pain-zone notes on ca > 0: orphan files (ca=0, ce=0) satisfy
+    // instability < 0.3 && abstractness < 0.3 but have no dependents, so
+    // flagging them as "hard to change" is misleading — nobody depends on them.
+    if (m.zone === "pain" && m.ca > 0) {
       results.push({
         ruleId: "structural/pain-zone-module",
         level: "note",

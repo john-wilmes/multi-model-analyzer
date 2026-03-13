@@ -42,8 +42,12 @@ export function extractLogStatements(
     rawLogs.push(...logs);
   }
 
+  // Prepend severity to each log message so that logs with the same text but
+  // different severity levels (e.g. console.error("timeout") vs
+  // console.warn("timeout")) are never merged into the same cluster.
+  const SEVERITY_SEP = "\x00";
   const clusters = drainParse(
-    rawLogs.map((l) => l.text),
+    rawLogs.map((l) => `${l.severity}${SEVERITY_SEP}${l.text}`),
     DEFAULT_DRAIN_OPTIONS,
   );
 
@@ -54,9 +58,12 @@ export function extractLogStatements(
     const severity = matchingLogs[0]?.severity ?? "info";
     const locations = matchingLogs.map((l) => l.location);
 
+    // Strip the leading severity token that was prepended before clustering.
+    const templateTokens = cluster.template.slice(1);
+
     return {
       id: `log-template-${i}`,
-      template: cluster.template.join(" "),
+      template: templateTokens.join(" "),
       severity,
       locations,
       frequency: matchingLogs.length,
@@ -104,7 +111,10 @@ function findLogCalls(
   return results;
 }
 
-const LOG_RECEIVERS = /(?:console|logger|log|winston|pino|bunyan)$/i;
+// Exact-name match: the receiver identifier must be one of these names in full.
+// Without word-boundary anchoring, names like "dialog", "catalog", and "backlog"
+// would match because they end with the substring "log".
+const LOG_RECEIVERS = /^(?:console|logger|log|winston|pino|bunyan)$/i;
 
 function inferSeverity(callText: string): LogSeverity | null {
   const match = callText.match(

@@ -68,13 +68,7 @@ export function traceBackwardFromLog(
 
   // Trace backward through CFG
   const visited = new Set<string>();
-  traceBackwardDFS(
-    logNode,
-    cfg,
-    visited,
-    steps,
-    root.location,
-  );
+  traceBackwardDFS(logNode, cfg, visited, steps);
 
   // Find callers of this function for cross-service tracing
   const callers = callGraph.edges.filter(
@@ -123,8 +117,22 @@ function findLogNode(
     }
   }
 
-  // Strategy 3: match by severity keywords (least precise)
-  const SEV_RE = /\.(?:error|warn|warning|log|info|debug|fatal)\s*\(/i;
+  // Strategy 3: match by severity keyword constrained to the root's severity
+  // level. Matching any log call risks binding to the wrong statement when a
+  // function contains multiple logging calls at different severities.
+  const severity = root.template.severity.toLowerCase();
+  // Map common severity aliases to their log-call forms.
+  const sevAliases: Record<string, string> = {
+    warning: "warn",
+    warn: "warn",
+    error: "error",
+    fatal: "(?:fatal|error)",
+    info: "info",
+    debug: "debug",
+    log: "log",
+  };
+  const sevPattern = sevAliases[severity] ?? severity;
+  const SEV_RE = new RegExp(`\\.${sevPattern}\\s*\\(`, "i");
   for (const node of cfg.nodes) {
     if (node.kind === "statement" && SEV_RE.test(node.label)) {
       return node.id;
@@ -138,7 +146,6 @@ function traceBackwardDFS(
   cfg: ControlFlowGraph,
   visited: Set<string>,
   steps: TraceStep[],
-  location: LogicalLocation,
 ): void {
   if (visited.has(nodeId)) return;
   visited.add(nodeId);
@@ -150,16 +157,18 @@ function traceBackwardDFS(
     : node.kind === "entry" ? "entry" as const
     : "error-source" as const;
 
+  // Use the CFG node's own location so each step points at its source
+  // position, not the root log statement's location.
   steps.push({
     nodeId,
     kind,
     description: node.label,
-    location,
+    location: node.location,
   });
 
   // Find predecessors
   const incomingEdges = cfg.edges.filter((e) => e.to === nodeId);
   for (const edge of incomingEdges) {
-    traceBackwardDFS(edge.from, cfg, visited, steps, location);
+    traceBackwardDFS(edge.from, cfg, visited, steps);
   }
 }

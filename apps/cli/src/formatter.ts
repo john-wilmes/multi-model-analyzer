@@ -39,11 +39,12 @@ export function printJson(data: unknown): void {
 }
 
 /**
- * Emit a padded-column table to stdout.
+ * Format a padded-column table as a string.
  *
  * Each column is sized to the widest value (header or cell) plus 2 spaces.
+ * Returns the formatted table without a trailing newline.
  */
-export function printTable(headers: string[], rows: string[][]): void {
+export function formatTable(headers: string[], rows: string[][]): string {
   const colWidths = headers.map((h, i) => {
     let max = h.length;
     for (const row of rows) {
@@ -55,11 +56,22 @@ export function printTable(headers: string[], rows: string[][]): void {
 
   const pad = (s: string, width: number) => s + " ".repeat(Math.max(0, width - s.length));
 
-  console.log(headers.map((h, i) => pad(h, colWidths[i]!)).join("  "));
-  console.log(colWidths.map((w) => "-".repeat(w)).join("  "));
+  const lines: string[] = [];
+  lines.push(headers.map((h, i) => pad(h, colWidths[i]!)).join("  "));
+  lines.push(colWidths.map((w) => "-".repeat(w)).join("  "));
   for (const row of rows) {
-    console.log(row.map((c, i) => pad(c, colWidths[i]!)).join("  "));
+    lines.push(row.map((c, i) => pad(c, colWidths[i]!)).join("  "));
   }
+  return lines.join("\n");
+}
+
+/**
+ * Emit a padded-column table to stdout.
+ *
+ * Each column is sized to the widest value (header or cell) plus 2 spaces.
+ */
+export function printTable(headers: string[], rows: string[][]): void {
+  console.log(formatTable(headers, rows));
 }
 
 /** Wrap results in a SARIF v2.1.0 log and emit to stdout. */

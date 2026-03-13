@@ -61,6 +61,9 @@ function buildTemplateDescription(
 }
 
 function extractParams(line: string): string | null {
+  // This regex matches the first balanced pair of parens but does not handle
+  // nested parentheses in parameter types (e.g. callback: (err: Error) => void).
+  // For such signatures the extracted text will be truncated at the first ")".
   const match = /\(([^)]*)\)/.exec(line);
   return match?.[1]?.trim() || null;
 }

@@ -44,7 +44,7 @@ describe("validateFeatureModel", () => {
     expect(validation.deadFlags).toHaveLength(0);
     expect(validation.alwaysOnFlags).toHaveLength(0);
     expect(validation.impossibleCombinations).toHaveLength(0);
-    expect(validation.untestedInteractions).toHaveLength(0);
+    expect(validation.inferredUntestedPairs).toHaveLength(0);
   });
 
   it("detects dead flags (excluded but not required by any)", async () => {
@@ -127,8 +127,8 @@ describe("validateFeatureModel", () => {
 
     const { results, validation } = await validateFeatureModel(model, "repo");
 
-    expect(validation.untestedInteractions).toHaveLength(1);
-    expect(validation.untestedInteractions[0]).toEqual(["a", "b"]);
+    expect(validation.inferredUntestedPairs).toHaveLength(1);
+    expect(validation.inferredUntestedPairs[0]).toEqual(["a", "b"]);
     const untestedResult = results.find((r) => r.ruleId === "config/untested-interaction");
     expect(untestedResult).toBeDefined();
   });
@@ -141,7 +141,7 @@ describe("validateFeatureModel", () => {
 
     const { validation } = await validateFeatureModel(model, "repo");
 
-    expect(validation.untestedInteractions).toHaveLength(0);
+    expect(validation.inferredUntestedPairs).toHaveLength(0);
   });
 
   it("produces SARIF results with correct locations", async () => {
@@ -158,17 +158,19 @@ describe("validateFeatureModel", () => {
   });
 
   it("reports always-on flags as SARIF note level", async () => {
-    const flags = [makeFlag("core"), makeFlag("a"), makeFlag("b")];
+    // Use the same 4-flag setup as the "detects always-on" test so the heuristic
+    // fires: requiringFlags.length (3) === flags.length - 1 (3).
+    const flags = [makeFlag("core"), makeFlag("a"), makeFlag("b"), makeFlag("c")];
     const constraints = [
       makeConstraint("requires", ["core", "core"]),
       makeConstraint("requires", ["a", "core"]),
       makeConstraint("requires", ["b", "core"]),
+      // requiringFlags = ["core", "a", "b"], length 3 = flags.length - 1
     ];
     const { results } = await validateFeatureModel(makeModel(flags, constraints), "repo");
 
     const alwaysOnResult = results.find((r) => r.ruleId === "config/always-on-flag");
-    if (alwaysOnResult) {
-      expect(alwaysOnResult.level).toBe("note");
-    }
+    expect(alwaysOnResult).toBeDefined();
+    expect(alwaysOnResult!.level).toBe("note");
   });
 });

@@ -2,17 +2,26 @@
  * SARIF baseline comparison: assigns baselineState to results
  * by comparing current results against a previous baseline run.
  *
- * Fingerprinting uses ruleId + first logicalLocation fullyQualifiedName
- * to identify matching results across runs.
+ * Fingerprinting uses ruleId + all logicalLocation fullyQualifiedNames to
+ * identify matching results across runs.  Using all locations (not just the
+ * first) avoids false matches when logicalLocations are missing or when
+ * multiple violations share the same first location.
  */
 
 import type { SarifResult, SarifBaselineState } from "@mma/core";
 
 /** Result fingerprint for matching across runs */
 function fingerprint(result: SarifResult): string {
-  const loc =
-    result.locations?.[0]?.logicalLocations?.[0]?.fullyQualifiedName ?? "";
-  return `${result.ruleId}::${loc}`;
+  // Collect all logicalLocation FQNs across all locations for a richer key.
+  // Joining them avoids collisions when multiple findings share the same
+  // ruleId and first-location FQN (e.g. two SDP violations from the same
+  // source module to different targets).
+  const allFqns = result.locations
+    ?.flatMap((loc) =>
+      loc.logicalLocations?.map((l) => l.fullyQualifiedName ?? "") ?? [],
+    )
+    .join("|") ?? "";
+  return `${result.ruleId}::${allFqns}`;
 }
 
 export interface BaselineResult extends SarifResult {

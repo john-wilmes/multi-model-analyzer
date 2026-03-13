@@ -103,9 +103,29 @@ export class ArchitectureReflexionEngine
     const extractedNames = new Set(extracted.services.map((s) => s.name));
     const hypothesisNames = new Set(hypothesis.services.map((s) => s.name));
 
+    const hypothesisServiceMap = new Map(hypothesis.services.map((s) => [s.name, s]));
+    const extractedServiceMap = new Map(extracted.services.map((s) => [s.name, s]));
+
     for (const name of hypothesisNames) {
       if (extractedNames.has(name)) {
         convergences.push(`Service "${name}" found in both hypothesis and extraction`);
+
+        // Diff expectedDependencies for services present in both
+        const hypDeps = new Set(hypothesisServiceMap.get(name)!.expectedDependencies);
+        const extDeps = new Set(extractedServiceMap.get(name)!.expectedDependencies);
+
+        for (const dep of hypDeps) {
+          if (extDeps.has(dep)) {
+            convergences.push(`Service "${name}": dependency "${dep}" present in both`);
+          } else {
+            absences.push(`Service "${name}": expected dependency "${dep}" not found in extracted`);
+          }
+        }
+        for (const dep of extDeps) {
+          if (!hypDeps.has(dep)) {
+            divergences.push(`Service "${name}": unexpected dependency "${dep}" found in extracted`);
+          }
+        }
       } else {
         absences.push(`Expected service "${name}" not found in extracted architecture`);
       }
@@ -152,14 +172,16 @@ export interface ConfigConstraintHypothesis {
 export class HeuristicConfigConstraintProvider
   implements HypothesisProvider<ConfigConstraintHypothesis>
 {
-  private confidence = 0;
+  private readonly inferred: readonly FeatureConstraint[];
+  private readonly confidence: number;
 
-  constructor(private readonly constraints: readonly FeatureConstraint[]) {}
+  constructor(constraints: readonly FeatureConstraint[]) {
+    this.inferred = constraints.filter((c) => c.source === "inferred");
+    this.confidence = this.inferred.length > 0 ? 0.28 : 0; // ~28% per Nadi 2015
+  }
 
   async getHypothesis(): Promise<ConfigConstraintHypothesis> {
-    const inferred = this.constraints.filter((c) => c.source === "inferred");
-    this.confidence = inferred.length > 0 ? 0.28 : 0; // ~28% per Nadi 2015
-    return { constraints: inferred };
+    return { constraints: this.inferred };
   }
 
   getConfidence(): number {

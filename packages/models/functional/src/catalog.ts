@@ -45,9 +45,17 @@ function findServiceSummary(
   service: InferredService,
   summaries: ReadonlyMap<string, Summary>,
 ): string {
-  // Look for a tier 4 (service-level) summary first
+  // Look for a tier 4 (service-level) summary first.
+  // Use a strict path boundary (exact match or trailing "/") to prevent
+  // cross-service contamination from sibling paths sharing a common prefix
+  // (e.g. "services/auth" must not match "services/auth-v2").
+  const root = service.rootPath;
+  function isUnderRoot(entityId: string): boolean {
+    return entityId === root || entityId.startsWith(root + "/");
+  }
+
   for (const [entityId, summary] of summaries) {
-    if (entityId.startsWith(service.rootPath) && summary.tier === 4) {
+    if (isUnderRoot(entityId) && summary.tier === 4) {
       return summary.description;
     }
   }
@@ -55,7 +63,7 @@ function findServiceSummary(
   // Fall back to composing from method summaries
   const methodSummaries: string[] = [];
   for (const [entityId, summary] of summaries) {
-    if (entityId.startsWith(service.rootPath)) {
+    if (isUnderRoot(entityId)) {
       methodSummaries.push(summary.description);
     }
   }
@@ -82,9 +90,11 @@ function inferApiSurface(
     });
   }
 
-  // Infer from exported function names
+  // Infer from exported function names.
+  // Use strict path boundary to avoid matching sibling service paths.
+  const root = service.rootPath;
   for (const [entityId, summary] of summaries) {
-    if (!entityId.startsWith(service.rootPath)) continue;
+    if (entityId !== root && !entityId.startsWith(root + "/")) continue;
 
     const name = entityId.split("#").pop() ?? "";
     if (
@@ -110,8 +120,11 @@ function summarizeErrorHandling(
   service: InferredService,
   logIndex: LogTemplateIndex,
 ): string {
+  const serviceRoot = service.rootPath;
   const serviceTemplates = logIndex.templates.filter((t) =>
-    t.locations.some((l) => l.module.startsWith(service.rootPath)),
+    t.locations.some(
+      (l) => l.module === serviceRoot || l.module.startsWith(serviceRoot + "/"),
+    ),
   );
 
   const errorCount = serviceTemplates.filter((t) => t.severity === "error").length;

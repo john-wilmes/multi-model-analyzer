@@ -42,6 +42,12 @@ export function inferServices(input: ServiceInferenceInput): InferredService[] {
     if (pkgInfo.bin) entryPoints.push(...Object.values(pkgInfo.bin));
     if (pkgInfo.scripts["start"]) entryPoints.push("(start script)");
 
+    // Skip library-only packages that have no executable entry point.
+    // A package.json without main/bin/start is almost certainly a shared
+    // library, not a deployable service. Including it at 0.9 confidence
+    // would flood the service catalog with non-service entries.
+    if (entryPoints.length === 0) continue;
+
     const deps = findServiceDependencies(dirPath, input.dependencyGraph);
 
     services.push({
@@ -79,6 +85,20 @@ export function inferServices(input: ServiceInferenceInput): InferredService[] {
   return services;
 }
 
+/**
+ * Returns true when `filePath` is rooted at `dirPath`.
+ *
+ * Requires the match to occur at a path-separator boundary so that a service
+ * rooted at "apps/api" does not accidentally absorb files belonging to the
+ * sibling "apps/api-gateway" service.
+ */
+function isUnderDir(filePath: string, dirPath: string): boolean {
+  return (
+    filePath === dirPath ||
+    filePath.startsWith(dirPath + "/")
+  );
+}
+
 function findServiceDependencies(
   rootPath: string,
   graph: DependencyGraph,
@@ -86,8 +106,8 @@ function findServiceDependencies(
   const deps = new Set<string>();
   for (const edge of graph.edges) {
     if (
-      edge.source.startsWith(rootPath) &&
-      !edge.target.startsWith(rootPath) &&
+      isUnderDir(edge.source, rootPath) &&
+      !isUnderDir(edge.target, rootPath) &&
       !edge.target.startsWith("node_modules")
     ) {
       deps.add(edge.target);

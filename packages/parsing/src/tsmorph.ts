@@ -165,17 +165,27 @@ export function extractSymbolsFromSourceFile(
   return symbols;
 }
 
+function detectLanguageKind(filePath: string): "typescript" | "javascript" {
+  const lower = filePath.toLowerCase();
+  if (lower.endsWith(".js") || lower.endsWith(".jsx") ||
+      lower.endsWith(".mjs") || lower.endsWith(".cjs")) {
+    return "javascript";
+  }
+  return "typescript";
+}
+
 export function parseFileWithTsMorph(
   sourceFile: SourceFile,
   repo: string,
 ): ParsedFile {
   const content = sourceFile.getFullText();
   const symbols = extractSymbolsFromSourceFile(sourceFile);
+  const filePath = sourceFile.getFilePath();
 
   return {
-    path: sourceFile.getFilePath(),
+    path: filePath,
     repo,
-    kind: "typescript",
+    kind: detectLanguageKind(filePath),
     symbols,
     errors: [],
     contentHash: hashContent(content),

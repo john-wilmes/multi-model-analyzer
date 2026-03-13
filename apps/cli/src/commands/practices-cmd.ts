@@ -9,7 +9,7 @@
 import type { KVStore } from "@mma/storage";
 import type { SarifLog, SarifResult, RepoMetricsSummary } from "@mma/core";
 import type { ReportFormat } from "../formatter.js";
-import { printTable } from "../formatter.js";
+import { formatTable } from "../formatter.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -698,16 +698,18 @@ export function renderPracticesTable(report: PracticesReport): string {
   // Scorecard table
   if (report.scorecard.length > 0) {
     push("Category Scorecard:");
-    printTable(
-      ["Category", "Health", "Errors", "Warnings", "Notes", "Total"],
-      report.scorecard.map((r) => [
-        r.category,
-        r.stars,
-        String(r.errorCount),
-        String(r.warningCount),
-        String(r.noteCount),
-        String(r.total),
-      ]),
+    push(
+      formatTable(
+        ["Category", "Health", "Errors", "Warnings", "Notes", "Total"],
+        report.scorecard.map((r) => [
+          r.category,
+          r.stars,
+          String(r.errorCount),
+          String(r.warningCount),
+          String(r.noteCount),
+          String(r.total),
+        ]),
+      ),
     );
     push("");
   }
@@ -721,15 +723,17 @@ export function renderPracticesTable(report: PracticesReport): string {
 
   if (allFindings.length > 0) {
     push("Top Findings:");
-    printTable(
-      ["Rule", "Category", "Level", "Count", "Score"],
-      allFindings.map((g) => [
-        g.ruleId,
-        g.category,
-        g.level,
-        String(g.count),
-        String(g.priorityScore),
-      ]),
+    push(
+      formatTable(
+        ["Rule", "Category", "Level", "Count", "Score"],
+        allFindings.map((g) => [
+          g.ruleId,
+          g.category,
+          g.level,
+          String(g.count),
+          String(g.priorityScore),
+        ]),
+      ),
     );
     push("");
   }
@@ -750,8 +754,12 @@ export async function practicesCommand(
   const sarifJson = await kvStore.get("sarif:latest");
   let results: SarifResult[] = [];
   if (sarifJson) {
-    const log = JSON.parse(sarifJson) as SarifLog;
-    results = [...(log.runs[0]?.results ?? [])];
+    try {
+      const log = JSON.parse(sarifJson) as SarifLog;
+      results = [...(log.runs[0]?.results ?? [])];
+    } catch {
+      // Malformed sarif:latest — skip rather than aborting the entire command.
+    }
   }
 
   // Discover repos

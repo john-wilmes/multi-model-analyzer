@@ -79,9 +79,25 @@ if (missing > 0) {
   console.warn("[build-wasm] Some WASM files are missing. Grammar packages may not ship pre-built WASM.");
 }
 
-// Verify critical tree-sitter.wasm exists
-const criticalWasm = join(outDir, "tree-sitter.wasm");
-if (!existsSync(criticalWasm)) {
-  console.error("[build-wasm] FATAL: tree-sitter.wasm not found in output directory. Build cannot proceed.");
+// Verify all required WASM files exist in the output directory.
+// Fail fast so callers get a clear error rather than a silent runtime failure.
+const requiredWasmFiles = [
+  "tree-sitter.wasm",
+  "tree-sitter-typescript.wasm",
+  "tree-sitter-tsx.wasm",
+  "tree-sitter-javascript.wasm",
+];
+
+let hasMissingRequired = false;
+for (const file of requiredWasmFiles) {
+  const dest = join(outDir, file);
+  if (!existsSync(dest)) {
+    console.error(`[build-wasm] FATAL: required file ${file} not found in output directory.`);
+    hasMissingRequired = true;
+  }
+}
+
+if (hasMissingRequired) {
+  console.error("[build-wasm] One or more required WASM grammar files are missing. Build cannot proceed.");
   process.exit(1);
 }

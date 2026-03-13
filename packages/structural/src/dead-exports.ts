@@ -1,7 +1,14 @@
 /**
  * Dead export detection: find exported symbols with no consumers.
  *
- * A file's exports are "dead" if no other file imports that file.
+ * Detection granularity: file-level. A file's exports are all considered live
+ * if *any* other file imports that file. This is a conservative heuristic —
+ * it avoids false positives when only a subset of a file's exports are used,
+ * but it cannot detect individual dead exports within an imported file.
+ *
+ * For symbol-level precision, symbol-level import data (e.g. from SCIP or
+ * ts-morph named-import extraction) would be required.
+ *
  * Entry points (package.json main/bin) are excluded from detection.
  */
 
@@ -38,7 +45,8 @@ export function detectDeadExports(
     // Skip entry points
     if (entryPoints.has(pf.path)) continue;
 
-    // Skip if any file imports this one
+    // Skip if any file imports this one (file-level heuristic: if the file is
+    // imported at all, all its exports are considered reachable)
     if (importedFiles.has(pf.path)) continue;
 
     // Flag each exported symbol

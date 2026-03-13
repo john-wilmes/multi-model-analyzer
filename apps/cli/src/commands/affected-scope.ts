@@ -44,7 +44,8 @@ export async function computeAffectedScope(
     const blastRoots = [...changedFiles, ...cs.deletedFiles];
 
     if (blastRoots.length === 0) {
-      result.set(cs.repo, {
+      const existing = result.get(cs.repo);
+      result.set(cs.repo, existing ?? {
         changedFiles: [],
         affectedFiles: [],
         allScopedFiles: [],
@@ -64,12 +65,27 @@ export async function computeAffectedScope(
     // since deleted files can't be parsed.
     const allScoped = [...new Set([...changedFiles, ...affectedPaths])];
 
-    result.set(cs.repo, {
-      changedFiles,
-      affectedFiles: affectedPaths,
-      allScopedFiles: allScoped,
-      repo: cs.repo,
-    });
+    // Merge with any previously computed scope for this repo (union all sets)
+    // to avoid silent overwrites when changeSets contains duplicate repo entries.
+    const existing = result.get(cs.repo);
+    if (existing) {
+      const mergedChanged = [...new Set([...existing.changedFiles, ...changedFiles])];
+      const mergedAffected = [...new Set([...existing.affectedFiles, ...affectedPaths])];
+      const mergedAll = [...new Set([...existing.allScopedFiles, ...allScoped])];
+      result.set(cs.repo, {
+        changedFiles: mergedChanged,
+        affectedFiles: mergedAffected,
+        allScopedFiles: mergedAll,
+        repo: cs.repo,
+      });
+    } else {
+      result.set(cs.repo, {
+        changedFiles,
+        affectedFiles: affectedPaths,
+        allScopedFiles: allScoped,
+        repo: cs.repo,
+      });
+    }
   }
 
   return result;

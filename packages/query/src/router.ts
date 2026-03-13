@@ -117,8 +117,9 @@ function extractEntities(query: string): string[] {
     entities.push(...quoted.map((q) => q.replace(/"/g, "")));
   }
 
-  // Extract PascalCase identifiers
-  const pascalCase = query.match(/\b[A-Z][a-zA-Z]+\b/g);
+  // Extract PascalCase identifiers (require at least one internal uppercase
+  // letter so sentence-starting words like "Why" or "Please" are excluded).
+  const pascalCase = query.match(/\b[A-Z][a-z]+[A-Z][a-zA-Z]*\b/g);
   if (pascalCase) {
     entities.push(...pascalCase);
   }

@@ -40,14 +40,20 @@ function redactRun(
   options: RedactionOptions,
   tokenMap: Map<string, string>,
 ): SarifRun {
+  // Redact child objects first so tokenMap is fully populated before we
+  // snapshot redactionTokens.
+  const redactedResults = run.results.map((r) => redactResult(r, options, tokenMap));
+  const redactedLogicalLocations = run.logicalLocations?.map((l) =>
+    redactLogicalLocation(l, options, tokenMap),
+  );
+
+  // Snapshot after all child redactions have run.
   const redactionTokens = [...tokenMap.values()];
 
   return {
     ...run,
-    results: run.results.map((r) => redactResult(r, options, tokenMap)),
-    logicalLocations: run.logicalLocations?.map((l) =>
-      redactLogicalLocation(l, options, tokenMap),
-    ),
+    results: redactedResults,
+    logicalLocations: redactedLogicalLocations,
     redactionTokens: redactionTokens.length > 0 ? redactionTokens : undefined,
     properties: options.preserveStatistics ? run.properties : undefined,
   };
@@ -63,10 +69,15 @@ function redactResult(
     ruleId: options.preserveRuleIds
       ? result.ruleId
       : hashToken(result.ruleId, options.salt, tokenMap),
+    // Preserve all existing message fields; only overwrite the text subfield.
     message: {
+      ...result.message,
       text: redactText(result.message.text, options, tokenMap),
     },
     locations: result.locations?.map((loc) => ({
+      // Preserve physicalLocation and any other location fields; only
+      // overwrite logicalLocations.
+      ...loc,
       logicalLocations: loc.logicalLocations?.map((l) =>
         redactLogicalLocation(l, options, tokenMap),
       ),

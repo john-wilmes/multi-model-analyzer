@@ -2,7 +2,7 @@
  * Tier 3 summarization: local LLM via Ollama (qwen2.5-coder:1.5b).
  *
  * Free (runs locally), moderate latency (~1-5s per method).
- * Produces method body summaries with implementation details.
+ * Produces method body summaries focused on business logic.
  *
  * Example: "Queries the appointment table filtering by patient ID and date range,
  *           maps results to Appointment objects, handles pagination"

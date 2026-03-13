@@ -136,6 +136,10 @@ export interface RevisionRange {
  *   "HEAD~3..HEAD"        → { from: "HEAD~3", to: "HEAD" }
  *   "HEAD~3"              → { from: "HEAD~3", to: "HEAD" }
  *   "abc123"              → { from: "abc123", to: "HEAD" }
+ *   ""                    → { from: "", to: "HEAD" }
+ *
+ * Note: an empty string produces from="" which will cause `git rev-parse`
+ * to fail. Callers are responsible for validating the range before use.
  */
 export function parseRevisionRange(range: string): RevisionRange {
   const dotDot = range.indexOf("..");

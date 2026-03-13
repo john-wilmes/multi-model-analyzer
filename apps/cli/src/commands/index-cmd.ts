@@ -604,7 +604,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         await kvStore.set(`sarif:config:${repo.name}`, JSON.stringify(configResults));
 
         log(`  [${repo.name}] [config]: ${featureModel.flags.length} flags, ${featureModel.constraints.length} constraints, ${configResults.length} findings`);
-        log(`    dead=${validation.deadFlags.length} always-on=${validation.alwaysOnFlags.length} untested=${validation.untestedInteractions.length}`);
+        log(`    dead=${validation.deadFlags.length} always-on=${validation.alwaysOnFlags.length} untested=${validation.inferredUntestedPairs.length}`);
       } catch (error) {
         console.error(`  Failed to build feature model for ${repo.name}:`, error);
       }

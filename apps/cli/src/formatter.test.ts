@@ -34,7 +34,10 @@ describe("formatter", () => {
         ["alice", "95"],
         ["bob", "100"],
       ]);
-      const lines = logSpy.mock.calls.map((c) => c[0] as string);
+      // printTable emits one console.log call with the full multi-line string
+      expect(logSpy).toHaveBeenCalledOnce();
+      const output = logSpy.mock.calls[0]![0] as string;
+      const lines = output.split("\n");
       expect(lines).toHaveLength(4); // header + separator + 2 rows
       // Header
       expect(lines[0]).toContain("Name");
@@ -49,7 +52,9 @@ describe("formatter", () => {
 
     it("handles empty rows", () => {
       printTable(["A", "B"], []);
-      const lines = logSpy.mock.calls.map((c) => c[0] as string);
+      expect(logSpy).toHaveBeenCalledOnce();
+      const output = logSpy.mock.calls[0]![0] as string;
+      const lines = output.split("\n");
       expect(lines).toHaveLength(2); // header + separator only
     });
 
@@ -57,9 +62,9 @@ describe("formatter", () => {
       printTable(["X", "Long Header"], [
         ["short", "y"],
       ]);
-      const header = logSpy.mock.calls[0]![0] as string;
+      const output = logSpy.mock.calls[0]![0] as string;
       // "Long Header" is 11 chars, wider than "y"
-      expect(header).toContain("Long Header");
+      expect(output).toContain("Long Header");
     });
   });
 

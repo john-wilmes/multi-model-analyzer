@@ -57,20 +57,29 @@ export class QueryCache<T = unknown> {
     // If key already exists, delete it first to refresh position
     if (this.cache.has(key)) {
       this.cache.delete(key);
-    }
-
-    // Evict LRU if at capacity
-    if (this.cache.size >= this.maxSize) {
-      const firstKey = this.cache.keys().next().value as string;
-      this.cache.delete(firstKey);
+    } else {
+      // Only evict when inserting a NEW key that would exceed capacity.
+      if (this.cache.size >= this.maxSize) {
+        const firstKey = this.cache.keys().next().value as string;
+        this.cache.delete(firstKey);
+      }
     }
 
     this.cache.set(key, { value, createdAt: Date.now() });
   }
 
-  /** Check if a key exists (and is not expired). */
+  /**
+   * Check if a key exists and is not expired.
+   * Does NOT move the entry to MRU position — use get() when you want that.
+   */
   has(key: string): boolean {
-    return this.get(key) !== undefined;
+    const entry = this.cache.get(key);
+    if (!entry) return false;
+    if (this.ttlMs > 0 && Date.now() - entry.createdAt > this.ttlMs) {
+      this.cache.delete(key);
+      return false;
+    }
+    return true;
   }
 
   /** Remove a specific key. */

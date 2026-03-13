@@ -166,15 +166,41 @@ function checkDependencyDirection(
 /**
  * Simple glob matching supporting `*` (any non-separator) and `**` (any path).
  * Anchored: pattern must match the entire string.
+ *
+ * ReDoS safeguards:
+ * - Rejects patterns longer than 256 characters.
+ * - Rejects patterns with more than 10 wildcard segments (consecutive `**`
+ *   separated by literals can trigger catastrophic backtracking).
+ * - Caches compiled regexes to avoid repeated compilation.
  */
-export function globMatch(str: string, pattern: string): boolean {
-  // Replace ** with placeholder, then escape special regex chars, then restore
-  const escaped = pattern
-    .replace(/\*\*/g, "\0DSTAR\0")
-    .replace(/\*/g, "\0STAR\0")
-    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-    .replace(/\0DSTAR\0/g, ".*")
-    .replace(/\0STAR\0/g, "[^/]*");
+const globCache = new Map<string, RegExp>();
+const MAX_GLOB_LENGTH = 256;
+const MAX_WILDCARD_SEGMENTS = 10;
 
-  return new RegExp(`^${escaped}$`).test(str);
+export function globMatch(str: string, pattern: string): boolean {
+  if (pattern.length > MAX_GLOB_LENGTH) {
+    return false;
+  }
+
+  // Count wildcard segments: split on non-wildcard chars and count runs of *
+  const wildcardSegments = (pattern.match(/\*+/g) ?? []).length;
+  if (wildcardSegments > MAX_WILDCARD_SEGMENTS) {
+    return false;
+  }
+
+  let re = globCache.get(pattern);
+  if (!re) {
+    // Replace ** with placeholder, then escape special regex chars, then restore
+    const escaped = pattern
+      .replace(/\*\*/g, "\0DSTAR\0")
+      .replace(/\*/g, "\0STAR\0")
+      .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+      .replace(/\0DSTAR\0/g, ".*")
+      .replace(/\0STAR\0/g, "[^/]*");
+
+    re = new RegExp(`^${escaped}$`);
+    globCache.set(pattern, re);
+  }
+
+  return re.test(str);
 }

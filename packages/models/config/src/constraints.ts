@@ -79,13 +79,18 @@ function findFlagIfChains(
   return chains;
 }
 
+function escapeRegExpFlag(name: string): string {
+  return name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function findFlagReference(
   node: TreeSitterNode,
   flagNames: Set<string>,
 ): string | null {
   const text = node.text;
   for (const name of flagNames) {
-    if (text.includes(name)) return name;
+    const re = new RegExp(`\\b${escapeRegExpFlag(name)}\\b`);
+    if (re.test(text)) return name;
   }
   return null;
 }
@@ -99,7 +104,10 @@ function findValidationPatterns(
   visitAll(node, (n) => {
     // Pattern: if (flagValue < MIN || flagValue > MAX)
     if (n.type === "binary_expression") {
-      const operator = n.namedChildren.find((c) =>
+      // Operator tokens (<, >, <=, >=) are UNNAMED children in tree-sitter's
+      // TypeScript grammar. Use node.children (all children) instead of
+      // namedChildren to detect them.
+      const operator = n.children.find((c) =>
         ["<", ">", "<=", ">="].includes(c.text),
       );
       if (operator) {

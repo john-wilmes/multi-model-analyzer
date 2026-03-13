@@ -38,17 +38,31 @@ export async function generateScipIndex(
   repo: string,
   outputPath: string,
 ): Promise<ScipIndexResult> {
-  // scip-typescript generates a .scip protobuf file
-  // In POC, we assume scip-typescript is installed globally
+  // scip-typescript generates a .scip protobuf file.
+  // In POC, we assume scip-typescript is installed globally.
   try {
     await execFileAsync(
       "npx",
       ["scip-typescript", "index", "--output", outputPath],
       { cwd: repoPath, timeout: 300_000 },
     );
-  } catch {
-    // scip-typescript may not be available in POC
-    // Return empty result rather than failing
+  } catch (err) {
+    // Distinguish "tool not found" (expected in dev/CI) from real failures
+    // (bad cwd, timeout, scip-typescript indexing error).  Only swallow the
+    // former; surface the latter so callers are not silently misled.
+    const isCommandNotFound =
+      err instanceof Error &&
+      (err.message.includes("ENOENT") ||
+        err.message.includes("not found") ||
+        err.message.includes("command not found") ||
+        // execFile wraps ENOENT as a SystemError; check the code property too
+        (err as NodeJS.ErrnoException).code === "ENOENT");
+
+    if (!isCommandNotFound) {
+      throw err;
+    }
+
+    // scip-typescript not installed — return empty result for graceful degradation
     return {
       repo,
       indexPath: outputPath,
@@ -71,6 +85,7 @@ export function parseScipSymbolString(symbol: string): {
   descriptor: string;
 } {
   // SCIP symbol format: scheme ' ' package ' ' descriptor
+  // The descriptor may itself contain spaces (e.g. "some.Class method().").
   const parts = symbol.split(" ");
   return {
     scheme: parts[0] ?? "",

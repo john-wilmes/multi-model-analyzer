@@ -114,21 +114,25 @@ export async function exportCommand(
     }
   }
 
-  // 3. Create destination DB and write synchronously
+  // 3. Create destination DB and write synchronously.
+  // DROP + CREATE (not CREATE IF NOT EXISTS) so re-exports are always clean
+  // rather than appending duplicates or leaving stale rows.
   const destDb = new Database(output);
   destDb.pragma("journal_mode = WAL");
   destDb.exec(`
-    CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS edges (
+    DROP TABLE IF EXISTS kv;
+    DROP TABLE IF EXISTS edges;
+    CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    CREATE TABLE edges (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       source TEXT NOT NULL,
       target TEXT NOT NULL,
       kind TEXT NOT NULL,
       metadata TEXT
     );
-    CREATE INDEX IF NOT EXISTS idx_edges_source ON edges (source);
-    CREATE INDEX IF NOT EXISTS idx_edges_target ON edges (target);
-    CREATE INDEX IF NOT EXISTS idx_edges_kind ON edges (kind);
+    CREATE INDEX idx_edges_source ON edges (source);
+    CREATE INDEX idx_edges_target ON edges (target);
+    CREATE INDEX idx_edges_kind ON edges (kind);
   `);
 
   const insertKv = destDb.prepare(
@@ -199,12 +203,16 @@ function anonymizeKey(
   salt: string,
   tokenMap: Map<string, string>,
 ): string {
-  for (const repo of repoNames) {
-    if (key.includes(repo)) {
-      return key.replaceAll(repo, hashToken(repo, salt, tokenMap));
+  // Sort longest-first so shorter names don't mask longer ones, and apply ALL
+  // replacements rather than returning after the first match.
+  const sorted = [...repoNames].sort((a, b) => b.length - a.length);
+  let result = key;
+  for (const repo of sorted) {
+    if (result.includes(repo)) {
+      result = result.replaceAll(repo, hashToken(repo, salt, tokenMap));
     }
   }
-  return key;
+  return result;
 }
 
 function anonymizeValue(

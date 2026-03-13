@@ -66,10 +66,14 @@ export async function findCrossRepoDependencies(
 
   const dependencies: CrossRepoDependency[] = [];
   for (const [key, edges] of pairMap) {
-    const [sourceRepo, targetRepo] = key.split("->");
+    // Use indexOf to find only the first "->" so repo names containing "->"
+    // are handled correctly.
+    const arrowIdx = key.indexOf("->");
+    const sourceRepo = arrowIdx >= 0 ? key.slice(0, arrowIdx) : key;
+    const targetRepo = arrowIdx >= 0 ? key.slice(arrowIdx + 2) : "";
     dependencies.push({
-      sourceRepo: sourceRepo!,
-      targetRepo: targetRepo!,
+      sourceRepo,
+      targetRepo,
       edges,
       count: edges.length,
     });

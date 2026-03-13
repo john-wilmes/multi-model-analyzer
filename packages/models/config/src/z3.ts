@@ -18,7 +18,9 @@ export interface Z3ValidationResult {
   readonly deadFlags: readonly string[];
   readonly alwaysOnFlags: readonly string[];
   readonly impossibleCombinations: readonly string[][];
-  readonly untestedInteractions: readonly string[][];
+  /** Inferred flag pairs with no explicit test coverage. Named "inferred" to
+   * clarify this is static inference only — no runtime coverage data is used. */
+  readonly inferredUntestedPairs: readonly string[][];
 }
 
 export const CONFIG_RULES: readonly SarifReportingDescriptor[] = [
@@ -70,7 +72,7 @@ export async function validateFeatureModel(
   const deadFlags = findDeadFlags(model);
   const alwaysOnFlags = findAlwaysOnFlags(model);
   const impossibleCombinations = findImpossibleCombinations(model);
-  const untestedInteractions = findUntestedInteractions(model);
+  const inferredUntestedPairs = findInferredUntestedPairs(model);
 
   const results: SarifResult[] = [];
 
@@ -104,7 +106,7 @@ export async function validateFeatureModel(
     );
   }
 
-  for (const combo of untestedInteractions) {
+  for (const combo of inferredUntestedPairs) {
     results.push(
       createSarifResult(
         "config/untested-interaction",
@@ -120,11 +122,21 @@ export async function validateFeatureModel(
       deadFlags,
       alwaysOnFlags,
       impossibleCombinations,
-      untestedInteractions,
+      inferredUntestedPairs,
     },
   };
 }
 
+/**
+ * Heuristic dead-flag detection.
+ *
+ * A flag is considered dead when it appears in at least one "excludes"
+ * constraint AND no "requires" constraint names it as a dependency
+ * (i.e. nothing requires it to be on). This is a conservative approximation:
+ * it will miss flags that are excluded only under specific conditions, and it
+ * may produce false positives for flags that are excluded alongside others but
+ * are still reachable. A full SAT/SMT check (Z3) is needed for soundness.
+ */
 function findDeadFlags(model: FeatureModel): string[] {
   const deadFlags: string[] = [];
 
@@ -136,7 +148,8 @@ function findDeadFlags(model: FeatureModel): string[] {
       (c) => c.kind === "requires" && c.flags[1] === flag.name,
     );
 
-    // A flag is dead if it's excluded by all its dependents
+    // Heuristic: flag is likely dead if it is excluded somewhere and nothing
+    // depends on it being enabled.
     if (excludingConstraints.length > 0 && requiredBy.length === 0) {
       deadFlags.push(flag.name);
     }
@@ -145,6 +158,15 @@ function findDeadFlags(model: FeatureModel): string[] {
   return deadFlags;
 }
 
+/**
+ * Heuristic always-on detection.
+ *
+ * A flag is considered always-on when: (1) it appears as the source of at
+ * least one "requires" constraint, (2) it has no "excludes" constraints, and
+ * (3) every other flag in the model has a "requires" constraint pointing to it.
+ * This is a heuristic — it approximates the SAT condition "flag must be true
+ * in every satisfying assignment" without running a full solver.
+ */
 function findAlwaysOnFlags(model: FeatureModel): string[] {
   const alwaysOn: string[] = [];
 
@@ -157,7 +179,8 @@ function findAlwaysOnFlags(model: FeatureModel): string[] {
     );
 
     if (isRequired && hasNoExclusions) {
-      // Check if every other flag requires this one
+      // Heuristic: if every other flag in the model has a requires-constraint
+      // pointing at this flag, treat it as always-on.
       const requiringFlags = model.constraints
         .filter((c) => c.kind === "requires" && c.flags[1] === flag.name)
         .map((c) => c.flags[0]);
@@ -183,14 +206,17 @@ function findImpossibleCombinations(model: FeatureModel): string[][] {
   return impossible;
 }
 
-function findUntestedInteractions(model: FeatureModel): string[][] {
-  const interactions: string[][] = [];
-
-  // Flag pairs that have inferred relationships but no explicit test coverage
-  const inferredPairs = model.constraints
+/**
+ * Returns inferred flag pairs that have no explicit test coverage.
+ *
+ * NOTE: This function performs static inference only. It identifies constraint
+ * pairs derived from code analysis (source === "inferred") and labels them as
+ * potentially untested. No runtime coverage data is consulted. The name
+ * "inferredUntestedPairs" reflects this: the pairs are inferred, not confirmed
+ * untested by a coverage tool.
+ */
+function findInferredUntestedPairs(model: FeatureModel): string[][] {
+  return model.constraints
     .filter((c) => c.source === "inferred" && c.flags.length === 2)
     .map((c) => [...c.flags]);
-
-  interactions.push(...inferredPairs);
-  return interactions;
 }

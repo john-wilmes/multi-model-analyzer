@@ -129,8 +129,8 @@ describe("inferServices", () => {
     ]);
 
     const pkgs = new Map<string, PackageJsonInfo>([
-      ["packages/api", { name: "api", dependencies: {}, scripts: {} }],
-      ["packages/db", { name: "db", dependencies: {}, scripts: {} }],
+      ["packages/api", { name: "api", main: "dist/index.js", dependencies: {}, scripts: {} }],
+      ["packages/db", { name: "db", main: "dist/index.js", dependencies: {}, scripts: {} }],
     ]);
 
     const input: ServiceInferenceInput = {
@@ -151,7 +151,7 @@ describe("inferServices", () => {
     ]);
 
     const pkgs = new Map<string, PackageJsonInfo>([
-      ["packages/api", { name: "api", dependencies: {}, scripts: {} }],
+      ["packages/api", { name: "api", main: "dist/index.js", dependencies: {}, scripts: {} }],
     ]);
 
     const input: ServiceInferenceInput = {

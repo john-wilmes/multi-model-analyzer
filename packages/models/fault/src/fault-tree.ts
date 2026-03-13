@@ -13,6 +13,7 @@ import type {
   FaultTree,
   FaultTreeNode,
   ControlFlowGraph,
+  ControlFlowNode,
   SarifResult,
   SarifReportingDescriptor,
   SarifCodeFlow,
@@ -68,51 +69,69 @@ export function buildFaultTree(
 }
 
 function buildChildNodes(steps: readonly TraceStep[]): FaultTreeNode[] {
-  const conditions = steps.filter((s) => s.kind === "condition");
-  const entries = steps.filter((s) => s.kind === "entry");
-
-  if (conditions.length === 0 && entries.length === 0) {
+  if (steps.length === 0) {
     return [];
   }
 
-  const entryNodes: FaultTreeNode[] = entries.map((e) => ({
-    id: `entry-${e.nodeId}`,
-    label: `Entry: ${e.description}`,
-    kind: "undeveloped" as const,
-    location: e.location,
-    children: [] as FaultTreeNode[],
-  }));
+  // Materialize all step kinds into fault tree nodes.
+  const allNodes: FaultTreeNode[] = steps.map((s) => {
+    switch (s.kind) {
+      case "condition":
+        return {
+          id: `basic-${s.nodeId}`,
+          label: s.description,
+          kind: "basic-event" as const,
+          location: s.location,
+          children: [] as FaultTreeNode[],
+        };
+      case "entry":
+        return {
+          id: `entry-${s.nodeId}`,
+          label: `Entry: ${s.description}`,
+          kind: "undeveloped" as const,
+          location: s.location,
+          children: [] as FaultTreeNode[],
+        };
+      case "error-source":
+        return {
+          id: `source-${s.nodeId}`,
+          label: `Error source: ${s.description}`,
+          kind: "basic-event" as const,
+          location: s.location,
+          children: [] as FaultTreeNode[],
+        };
+      case "call":
+        return {
+          id: `call-${s.nodeId}`,
+          label: `Call: ${s.description}`,
+          kind: "undeveloped" as const,
+          location: s.location,
+          children: [] as FaultTreeNode[],
+        };
+    }
+  });
 
-  // If multiple conditions, they form an OR gate (any path can trigger the error)
-  if (conditions.length > 1) {
+  const conditionNodes = allNodes.filter((n) => n.id.startsWith("basic-"));
+
+  // Multiple conditions on the backward trace represent alternative paths that
+  // can each independently trigger the error — they form an OR gate.
+  // Sequential conditions along a single path would require an AND gate, but
+  // the backward DFS explores all predecessors so each condition node here
+  // represents a distinct path to the error, making OR correct.
+  if (conditionNodes.length > 1) {
+    const nonConditions = allNodes.filter((n) => !n.id.startsWith("basic-"));
     return [
       {
-        id: `gate-or-${conditions[0]!.nodeId}`,
+        id: `gate-or-${steps[0]!.nodeId}`,
         label: "Any of these conditions",
-        kind: "or-gate",
-        children: conditions.map((c) => ({
-          id: `basic-${c.nodeId}`,
-          label: c.description,
-          kind: "basic-event" as const,
-          location: c.location,
-          children: [],
-        })),
+        kind: "or-gate" as const,
+        children: conditionNodes,
       },
-      ...entryNodes,
+      ...nonConditions,
     ];
   }
 
-  // Single condition path
-  return [
-    ...conditions.map((c) => ({
-      id: `basic-${c.nodeId}`,
-      label: c.description,
-      kind: "basic-event" as const,
-      location: c.location,
-      children: [] as FaultTreeNode[],
-    })),
-    ...entryNodes,
-  ];
+  return allNodes;
 }
 
 export function analyzeGaps(
@@ -125,17 +144,18 @@ export function analyzeGaps(
     // Check for catch blocks with no logging
     const catchNodes = cfg.nodes.filter((n) => n.kind === "catch");
     for (const catchNode of catchNodes) {
-      const successors = cfg.edges
-        .filter((e) => e.from === catchNode.id)
-        .map((e) => cfg.nodes.find((n) => n.id === e.to));
+      // Traverse all reachable nodes within the catch handler (not just direct
+      // successors) so that handlers that perform cleanup before logging are
+      // not falsely flagged.
+      const reachable = reachableNodes(catchNode.id, cfg);
 
       const loggingPattern = /\b(log(ger)?|error|warn(ing)?|console)\s*[.(]/i;
-      const hasLogging = successors.some(
-        (n) => n && loggingPattern.test(n.label),
+      const hasLogging = reachable.some(
+        (n) => loggingPattern.test(n.label),
       );
 
-      const hasRethrow = successors.some(
-        (n) => n && n.kind === "throw",
+      const hasRethrow = reachable.some(
+        (n) => n.kind === "throw",
       );
 
       if (!hasLogging && !hasRethrow) {
@@ -188,6 +208,38 @@ export function faultTreeToCodeFlow(
     message: { text: tree.topEvent.label },
     threadFlows: [threadFlow],
   };
+}
+
+/**
+ * Return all CFG nodes reachable from `startId` via forward edges,
+ * excluding the start node itself.
+ */
+function reachableNodes(
+  startId: string,
+  cfg: ControlFlowGraph,
+): ControlFlowNode[] {
+  const visited = new Set<string>();
+  const queue = [startId];
+  const result: ControlFlowNode[] = [];
+
+  while (queue.length > 0) {
+    const id = queue.pop()!;
+    if (visited.has(id)) continue;
+    visited.add(id);
+
+    if (id !== startId) {
+      const node = cfg.nodes.find((n) => n.id === id);
+      if (node) result.push(node);
+    }
+
+    for (const edge of cfg.edges) {
+      if (edge.from === id && !visited.has(edge.to)) {
+        queue.push(edge.to);
+      }
+    }
+  }
+
+  return result;
 }
 
 function flattenTree(node: FaultTreeNode): FaultTreeNode[] {

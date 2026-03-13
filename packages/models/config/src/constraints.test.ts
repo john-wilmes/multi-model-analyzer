@@ -12,12 +12,13 @@
  *   the inner if_statement that begins the else-if branch). This is the actual
  *   implementation behaviour, not a bug in the tests.
  *
- * - Range detection: findValidationPatterns searches node.namedChildren for
- *   the comparison operator. In tree-sitter's TypeScript grammar the operator
- *   token (<, >, <=, >=) is an UNNAMED child of binary_expression, so the
- *   namedChildren search never matches and range constraints are never emitted.
- *   Tests below document this limitation accurately rather than asserting
- *   behaviour the implementation cannot currently produce.
+ * - Flag matching: uses word-boundary regex to avoid substring false positives
+ *   (e.g. FEATURE_A must not match inside FEATURE_AB).
+ *
+ * - Range detection: findValidationPatterns uses node.children (all children,
+ *   including unnamed tokens) to detect comparison operators. In tree-sitter's
+ *   TypeScript grammar, <, >, <=, >= are UNNAMED children of binary_expression,
+ *   so node.children is required; namedChildren would miss them.
  */
 
 import { describe, it, expect, beforeAll } from "vitest";
@@ -327,19 +328,14 @@ describe("extractConstraintsFromCode", () => {
   // -------------------------------------------------------------------------
   // Range / validation pattern detection
   //
-  // NOTE: The implementation checks node.namedChildren for the comparison
-  // operator token. In tree-sitter's TypeScript grammar, <, >, <=, >= are
-  // UNNAMED children of binary_expression, so the operator search always
-  // fails and range constraints are never emitted.
-  //
-  // The tests below document this limitation by asserting the actual (zero)
-  // output. If the implementation is fixed to check all children (not just
-  // namedChildren), these expectations should be updated to assert the
-  // correct positive behaviour.
+  // The implementation uses node.children (all children, including unnamed
+  // tokens) to detect comparison operators. In tree-sitter's TypeScript
+  // grammar, <, >, <=, >= are UNNAMED children of binary_expression, so
+  // node.children is required (namedChildren would miss them).
   // -------------------------------------------------------------------------
 
-  describe("range validation pattern detection (implementation limitation)", () => {
-    it("returns no range constraints for less-than comparison (operator is unnamed node)", () => {
+  describe("range validation pattern detection", () => {
+    it("detects range constraint for less-than comparison", () => {
       const files = makeFiles({
         "src/validate.ts": `
           if (FEATURE_RATE_LIMIT < 0) {
@@ -350,12 +346,12 @@ describe("extractConstraintsFromCode", () => {
 
       const result = extractConstraintsFromCode(files, makeFlags("FEATURE_RATE_LIMIT"));
 
-      // The operator < is an unnamed child; namedChildren search misses it.
       const range = result.filter((c) => c.constraint.kind === "range");
-      expect(range).toHaveLength(0);
+      expect(range).toHaveLength(1);
+      expect(range[0]!.flagName).toBe("FEATURE_RATE_LIMIT");
     });
 
-    it("returns no range constraints for greater-than comparison", () => {
+    it("detects range constraint for greater-than comparison", () => {
       const files = makeFiles({
         "src/validate.ts": `
           if (FEATURE_TIMEOUT > 60000) {
@@ -367,10 +363,11 @@ describe("extractConstraintsFromCode", () => {
       const result = extractConstraintsFromCode(files, makeFlags("FEATURE_TIMEOUT"));
 
       const range = result.filter((c) => c.constraint.kind === "range");
-      expect(range).toHaveLength(0);
+      expect(range).toHaveLength(1);
+      expect(range[0]!.flagName).toBe("FEATURE_TIMEOUT");
     });
 
-    it("returns no range constraints for less-than-or-equal comparison", () => {
+    it("detects range constraint for less-than-or-equal comparison", () => {
       const files = makeFiles({
         "src/check.ts": `
           if (FEATURE_CONCURRENCY <= 0) {
@@ -382,10 +379,11 @@ describe("extractConstraintsFromCode", () => {
       const result = extractConstraintsFromCode(files, makeFlags("FEATURE_CONCURRENCY"));
 
       const range = result.filter((c) => c.constraint.kind === "range");
-      expect(range).toHaveLength(0);
+      expect(range).toHaveLength(1);
+      expect(range[0]!.flagName).toBe("FEATURE_CONCURRENCY");
     });
 
-    it("returns no range constraints for greater-than-or-equal comparison", () => {
+    it("detects range constraint for greater-than-or-equal comparison", () => {
       const files = makeFiles({
         "src/check.ts": `
           if (FEATURE_RETRY_COUNT >= 100) {
@@ -397,10 +395,11 @@ describe("extractConstraintsFromCode", () => {
       const result = extractConstraintsFromCode(files, makeFlags("FEATURE_RETRY_COUNT"));
 
       const range = result.filter((c) => c.constraint.kind === "range");
-      expect(range).toHaveLength(0);
+      expect(range).toHaveLength(1);
+      expect(range[0]!.flagName).toBe("FEATURE_RETRY_COUNT");
     });
 
-    it("returns empty results when code only has range checks (no mutex patterns)", () => {
+    it("detects range constraints when code has both range checks and no mutex patterns", () => {
       const files = makeFiles({
         "src/validate.ts": `
           if (FEATURE_RATE_LIMIT < 0 || FEATURE_RATE_LIMIT > 1000) {
@@ -411,11 +410,13 @@ describe("extractConstraintsFromCode", () => {
 
       const result = extractConstraintsFromCode(files, makeFlags("FEATURE_RATE_LIMIT"));
 
-      // No mutex (single flag, no else-if chain). No range (operator unnamed).
-      expect(result).toHaveLength(0);
+      // Two range constraints (one per binary_expression), no mutex.
+      const range = result.filter((c) => c.constraint.kind === "range");
+      expect(range.length).toBeGreaterThanOrEqual(1);
+      expect(result.filter((c) => c.constraint.kind === "mutex")).toHaveLength(0);
     });
 
-    it("does not produce range for equality operator either", () => {
+    it("does not produce range for equality operator", () => {
       const files = makeFiles({
         "src/check.ts": `
           if (FEATURE_MODE === "dark") {
@@ -547,11 +548,13 @@ describe("extractConstraintsFromCode", () => {
         makeFlags("FEATURE_A", "FEATURE_AB", "FEATURE_C"),
       );
 
-      // FEATURE_AB contains "FEATURE_A" as a substring, so either name could
-      // match. The implementation iterates the Set and returns the first match.
-      // What matters is that at least one mutex chain is detected.
+      // Word-boundary matching ensures FEATURE_A does not match inside FEATURE_AB.
+      // Only the exact name FEATURE_AB should be detected in the first branch.
       const mutex = result.filter((c) => c.constraint.kind === "mutex");
       expect(mutex).toHaveLength(1);
+      expect(mutex[0]!.constraint.flags).toContain("FEATURE_AB");
+      expect(mutex[0]!.constraint.flags).toContain("FEATURE_C");
+      expect(mutex[0]!.constraint.flags).not.toContain("FEATURE_A");
     });
 
     it("does not detect range when flag name is longer than text in expression", () => {

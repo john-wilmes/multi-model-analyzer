@@ -41,11 +41,14 @@ export function buildControlFlowGraph(
   nodes.push({ id: entryId, kind: "entry", label: "entry", location });
   nodes.push({ id: exitId, kind: "exit", label: "exit", location });
 
-  // Find the function body (statement_block) rather than iterating the
-  // function node's top-level children (identifier, params, etc.)
-  const body = functionNode.namedChildren.find(
-    (ch) => ch.type === "statement_block",
-  );
+  // Find the function body. For function declarations/expressions/methods the
+  // body is a statement_block; for arrow functions it may be a statement_block
+  // OR a bare expression (expression body form: `() => expr`).  Using the
+  // named field "body" picks up the correct child for all three forms in
+  // tree-sitter-typescript.
+  const body =
+    functionNode.childForFieldName("body") ??
+    functionNode.namedChildren.find((ch) => ch.type === "statement_block");
 
   const lastNodeIds = buildCfgFromBlock(
     body ?? functionNode,
@@ -186,8 +189,9 @@ function buildIfCfg(
   }
 
   if (alternative) {
-    const elseBody = alternative.childForFieldName("body")
-      ?? alternative.namedChildren.find(
+    const elseBody =
+      alternative.childForFieldName("body") ??
+      alternative.namedChildren.find(
         (ch) => ch.type === "statement_block" || ch.type === "if_statement",
       );
     if (elseBody) {
@@ -232,17 +236,38 @@ function buildTryCfg(
   location: LogicalLocation,
   counter: CfgIdCounter,
 ): string[] {
-  const result: string[] = [];
-
   const tryBlock = node.namedChildren.find((ch) => ch.type === "statement_block");
   const catchClause = node.namedChildren.find((ch) => ch.type === "catch_clause");
   const finallyClause = node.namedChildren.find((ch) => ch.type === "finally_clause");
+
+  // When a finally clause is present, all exits from the try/catch scope —
+  // including return and throw statements — must flow through finally before
+  // reaching the real function exit.  Insert a synthetic "finally entry" node
+  // and use it as the exitId surrogate for the try/catch sub-graphs so that
+  // return/throw nodes inside try/catch wire here instead of directly to the
+  // real exitId.
+  let innerExitId = exitId;
+  let finallyEntryId: string | undefined;
+
+  if (finallyClause) {
+    finallyEntryId = newNodeId(counter);
+    nodes.push({
+      id: finallyEntryId,
+      kind: "statement",
+      label: "finally",
+      location,
+      line: finallyClause.startPosition.row + 1,
+    });
+    innerExitId = finallyEntryId;
+  }
+
+  const result: string[] = [];
 
   if (tryBlock) {
     const tryExits = buildCfgFromBlock(
       tryBlock,
       [tryNodeId],
-      exitId,
+      innerExitId,
       nodes,
       edges,
       location,
@@ -253,7 +278,13 @@ function buildTryCfg(
 
   if (catchClause) {
     const catchId = newNodeId(counter);
-    nodes.push({ id: catchId, kind: "catch", label: "catch", location, line: catchClause.startPosition.row + 1 });
+    nodes.push({
+      id: catchId,
+      kind: "catch",
+      label: "catch",
+      location,
+      line: catchClause.startPosition.row + 1,
+    });
     edges.push({ from: tryNodeId, to: catchId, condition: "exception" });
 
     const catchBlock = catchClause.namedChildren.find(
@@ -263,7 +294,7 @@ function buildTryCfg(
       const catchExits = buildCfgFromBlock(
         catchBlock,
         [catchId],
-        exitId,
+        innerExitId,
         nodes,
         edges,
         location,
@@ -273,14 +304,20 @@ function buildTryCfg(
     }
   }
 
-  if (finallyClause) {
+  if (finallyClause && finallyEntryId !== undefined) {
     const finallyBlock = finallyClause.namedChildren.find(
       (ch) => ch.type === "statement_block",
     );
     if (finallyBlock) {
+      // Wire fall-through predecessors (try/catch normal exits) to finally entry.
+      // return/throw nodes inside try/catch are already wired to finallyEntryId
+      // via innerExitId above.
+      for (const predId of result) {
+        edges.push({ from: predId, to: finallyEntryId });
+      }
       const finallyExits = buildCfgFromBlock(
         finallyBlock,
-        result,
+        [finallyEntryId],
         exitId,
         nodes,
         edges,
@@ -303,9 +340,31 @@ function buildLoopCfg(
   location: LogicalLocation,
   counter: CfgIdCounter,
 ): string[] {
-  const body = node.childForFieldName("body")
-    ?? node.namedChildren.find((ch) => ch.type === "statement_block");
+  const body =
+    node.childForFieldName("body") ??
+    node.namedChildren.find((ch) => ch.type === "statement_block");
 
+  if (node.type === "do_statement") {
+    // do-while: body executes unconditionally first, then the condition is
+    // checked.  loopNodeId represents the condition node at the bottom of the
+    // loop.  The body runs with loopNodeId as its entry predecessor; after the
+    // body completes it loops back to loopNodeId (re-check condition).  The
+    // exit edge (condition false) falls through from loopNodeId.
+    if (body) {
+      let bodyExits: string[];
+      if (body.type === "statement_block") {
+        bodyExits = buildCfgFromBlock(body, [loopNodeId], exitId, nodes, edges, location, counter);
+      } else {
+        bodyExits = buildCfgFromStatement(body, [loopNodeId], exitId, nodes, edges, location, counter);
+      }
+      for (const bodyExit of bodyExits) {
+        edges.push({ from: bodyExit, to: loopNodeId });
+      }
+    }
+    return [loopNodeId];
+  }
+
+  // while / for / for-in: condition checked first (loopNodeId), then body
   if (body) {
     let bodyExits: string[];
     if (body.type === "statement_block") {

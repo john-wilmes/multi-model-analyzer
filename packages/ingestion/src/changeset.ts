@@ -62,8 +62,8 @@ function inferFileKind(filePath: string): FileKind {
   if (/\.(js|jsx|mjs|cjs)$/.test(filePath)) return "javascript";
   if (filePath.endsWith(".json")) return "json";
   if (filePath.endsWith(".yml") || filePath.endsWith(".yaml")) return "yaml";
-  if (/[Dd]ockerfile/.test(filePath)) return "dockerfile";
-  if (filePath.includes("k8s") || filePath.includes("kubernetes")) return "kubernetes";
+  if (/(^|\/)([Dd]ockerfile|DOCKERFILE)(\/|$|\.)/.test(filePath)) return "dockerfile";
+  if (/(^|\/)(?:k8s|kubernetes)(\/|$)/.test(filePath)) return "kubernetes";
   if (filePath.endsWith(".md")) return "markdown";
   return "unknown";
 }
