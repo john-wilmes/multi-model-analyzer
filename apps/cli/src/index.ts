@@ -25,6 +25,7 @@ import { reportCommand } from "./commands/report-cmd.js";
 import { practicesCommand } from "./commands/practices-cmd.js";
 import { exportCommand } from "./commands/export-cmd.js";
 import { mergeCommand } from "./commands/merge-cmd.js";
+import { importCommand } from "./commands/import-cmd.js";
 import { validateCommand } from "./commands/validate-cmd.js";
 import { printJson, printTable, printSarif, validateFormat, validateReportFormat } from "./formatter.js";
 import { parseWatchInterval, watchLoop } from "./watch.js";
@@ -34,6 +35,7 @@ interface CliConfig {
   readonly mirrorDir: string;
   readonly dbPath?: string;
   readonly rules?: readonly RawArchRule[];
+  readonly baselinePath?: string;
 }
 
 async function main(): Promise<void> {
@@ -56,6 +58,8 @@ async function main(): Promise<void> {
       version: { type: "boolean", default: false },
       watch: { type: "boolean", short: "w", default: false },
       "watch-interval": { type: "string", default: "30" },
+      raw: { type: "boolean", default: false },
+      baseline: { type: "string" },
     },
   });
 
@@ -222,6 +226,7 @@ async function main(): Promise<void> {
         graphStore: stores.graphStore,
         output: resolve(outputPath),
         salt: values.salt ?? "",
+        raw: values.raw ?? false,
       });
     } finally {
       stores.close();
@@ -242,6 +247,46 @@ async function main(): Promise<void> {
     } catch (err) {
       console.error(`merge failed: ${err instanceof Error ? err.message : String(err)}`);
       process.exit(1);
+    }
+    return;
+  }
+
+  // import command: import a raw export baseline into local DB
+  if (command === "import") {
+    const inputPath = positionals[1];
+    if (!inputPath) {
+      console.error("Usage: mma import <file.db> [--db path]");
+      process.exit(1);
+    }
+
+    mkdirSync(dirname(dbPath), { recursive: true });
+    const stores = createSqliteStores({ dbPath });
+    try {
+      // Optionally load config for repo mismatch warnings
+      let configRepos: string[] | undefined;
+      try {
+        const configPath = resolve(values.config);
+        const configRaw = await readFile(configPath, "utf-8");
+        const config = JSON.parse(configRaw) as CliConfig;
+        configRepos = config.repos.map((r) => r.name);
+      } catch {
+        // No config available — skip mismatch warnings
+      }
+
+      await importCommand({
+        kvStore: stores.kvStore,
+        graphStore: stores.graphStore,
+        input: resolve(inputPath),
+        configRepos,
+        verbose,
+      });
+    } catch (err) {
+      console.error(
+        `import failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      process.exit(1);
+    } finally {
+      stores.close();
     }
     return;
   }
@@ -365,6 +410,41 @@ async function main(): Promise<void> {
   const stores: SqliteStores = createSqliteStores({ dbPath });
   const { graphStore, searchStore, kvStore } = stores;
 
+  // Auto-import baseline on fresh DB
+  if (command === "index") {
+    const baselinePath = values.baseline
+      ? resolve(values.baseline)
+      : config.baselinePath
+        ? resolve(dirname(configPath), config.baselinePath)
+        : undefined;
+
+    if (baselinePath) {
+      // Check if DB already contains data
+      const existingKeys = await kvStore.keys();
+      const hasPriorData = existingKeys.length > 0;
+
+      if (!hasPriorData) {
+        if (!existsSync(baselinePath)) {
+          console.warn(`Warning: baseline not found: ${baselinePath} — indexing from scratch`);
+        } else {
+          try {
+            await importCommand({
+              kvStore,
+              graphStore,
+              input: baselinePath,
+              configRepos: config.repos.map((r) => r.name),
+              verbose,
+            });
+          } catch (err) {
+            console.warn(
+              `Warning: baseline import failed: ${err instanceof Error ? err.message : String(err)} — indexing from scratch`,
+            );
+          }
+        }
+      }
+    }
+  }
+
   try {
     switch (command) {
       case "index": {
@@ -444,16 +524,17 @@ function printUsage(): void {
 Multi-Model Analyzer (mma)
 
 Usage:
-  mma index [-c config.json] [-v] [--affected] [--format json|table|sarif]
-            [--watch [-w] [--watch-interval N]]
+  mma index [-c config.json] [-v] [--affected] [--baseline file.db]
+            [--format json|table|sarif] [--watch [-w] [--watch-interval N]]
                                                 Index repositories (default: table)
   mma query [-c config.json] "..." [--format json|table|sarif]
                                                 Query the index (default: table)
   mma affected <rev-range> [--db path] [--format json|table|sarif]
                                                 Show blast radius (default: table)
   mma serve [--db path/to/mma.db]               Start MCP server (stdio)
-  mma export [--db path] [-o file.db] [--salt hex]
-                                                Export anonymized SQLite DB
+  mma export [--db path] [-o file.db] [--salt hex] [--raw]
+                                                Export SQLite DB (default: anonymized)
+  mma import <file.db> [--db path] [-v]         Import raw export baseline
   mma merge file1.db file2.db ... [-o merged.db]
                                                 Merge anonymized export DBs
   mma validate [--db path] [--mirrors dir] [--sample-size 50] [--seed 42]
@@ -475,6 +556,8 @@ Options:
   -o, --output    Output file path (default: report.json)
   --format        Output format (varies by command, see above)
   --include-sarif Include redacted SARIF in report
+  --raw           Export without anonymization (for baseline sharing)
+  --baseline      Path to raw export DB; auto-imports on fresh DB before indexing
   --salt          Hex salt for redaction hashing
   --note          Free-text note to include in report
   --mirrors       Path to bare repo mirrors (for fault validation)

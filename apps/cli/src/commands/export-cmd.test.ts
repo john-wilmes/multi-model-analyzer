@@ -282,12 +282,13 @@ describe("exportCommand", () => {
       salt: "s",
     });
 
-    expect(result.kvCount).toBe(0);
+    expect(result.kvCount).toBe(1); // manifest only
     expect(result.edgeCount).toBe(0);
 
     const db = new Database(outputPath, { readonly: true });
+    // Only the manifest row should exist — no user data.
     const kvCount = (
-      db.prepare("SELECT count(*) as cnt FROM kv").get() as { cnt: number }
+      db.prepare("SELECT count(*) as cnt FROM kv WHERE key != 'mma:manifest'").get() as { cnt: number }
     ).cnt;
     const edgeCount = (
       db.prepare("SELECT count(*) as cnt FROM edges").get() as { cnt: number }
@@ -321,6 +322,142 @@ describe("exportCommand", () => {
       db.prepare("SELECT count(*) as cnt FROM edges").get() as { cnt: number }
     ).cnt;
     expect(edgeCount).toBe(4);
+
+    db.close();
+  });
+
+  it("--raw includes symbols and pipelineComplete keys", async () => {
+    await seedRepo(kvStore, graphStore, "acme-corp");
+    await exportCommand({
+      kvStore,
+      graphStore,
+      output: outputPath,
+      salt: "test-salt",
+      raw: true,
+    });
+
+    const db = new Database(outputPath, { readonly: true });
+    const keys = (
+      db.prepare("SELECT key FROM kv").all() as Array<{ key: string }>
+    ).map((r) => r.key);
+
+    // Raw mode should include symbols and pipelineComplete keys
+    expect(keys.some((k) => k.startsWith("symbols:"))).toBe(true);
+    expect(keys.some((k) => k.startsWith("pipelineComplete:"))).toBe(true);
+
+    db.close();
+  });
+
+  it("--raw preserves repo names verbatim", async () => {
+    await seedRepo(kvStore, graphStore, "acme-corp");
+    await exportCommand({
+      kvStore,
+      graphStore,
+      output: outputPath,
+      salt: "test-salt",
+      raw: true,
+    });
+
+    const db = new Database(outputPath, { readonly: true });
+    const rows = db
+      .prepare("SELECT key, value FROM kv")
+      .all() as Array<{ key: string; value: string }>;
+
+    // At least some keys contain the real repo name
+    const keysWithRepo = rows.filter((r) => r.key.includes("acme-corp"));
+    expect(keysWithRepo.length).toBeGreaterThan(0);
+
+    // At least some values contain the real repo name
+    const allValues = rows.map((r) => r.value).join(" ");
+    expect(allValues).toContain("acme-corp");
+
+    db.close();
+  });
+
+  it("--raw preserves edge source/target verbatim", async () => {
+    await seedRepo(kvStore, graphStore, "acme-corp");
+    await exportCommand({
+      kvStore,
+      graphStore,
+      output: outputPath,
+      salt: "test-salt",
+      raw: true,
+    });
+
+    const db = new Database(outputPath, { readonly: true });
+    const edges = db
+      .prepare("SELECT source, target FROM edges")
+      .all() as Array<{ source: string; target: string }>;
+
+    expect(edges.length).toBeGreaterThan(0);
+
+    // All edges should contain the real repo name path (not [REDACTED:...])
+    for (const edge of edges) {
+      expect(edge.source).toContain("acme-corp");
+      expect(edge.target).toContain("acme-corp");
+      expect(edge.source).not.toMatch(/^\[REDACTED:[0-9a-f]+\]$/);
+      expect(edge.target).not.toMatch(/^\[REDACTED:[0-9a-f]+\]$/);
+    }
+
+    db.close();
+  });
+
+  it("--raw writes mma:manifest with mode=raw and repos list", async () => {
+    await seedRepo(kvStore, graphStore, "acme-corp");
+    await exportCommand({
+      kvStore,
+      graphStore,
+      output: outputPath,
+      salt: "test-salt",
+      raw: true,
+    });
+
+    const db = new Database(outputPath, { readonly: true });
+    const manifestRow = db
+      .prepare("SELECT value FROM kv WHERE key = ?")
+      .get("mma:manifest") as { value: string } | undefined;
+
+    expect(manifestRow).toBeDefined();
+
+    const manifest = JSON.parse(manifestRow!.value) as {
+      schemaVersion: number;
+      mode: string;
+      repos: Array<{ name: string; commit: string }>;
+    };
+
+    expect(manifest.schemaVersion).toBe(1);
+    expect(manifest.mode).toBe("raw");
+    expect(Array.isArray(manifest.repos)).toBe(true);
+    expect(manifest.repos.length).toBeGreaterThan(0);
+    expect(manifest.repos.some((r) => r.name === "acme-corp")).toBe(true);
+
+    db.close();
+  });
+
+  it("anonymized export also writes mma:manifest with mode=anonymized", async () => {
+    await seedRepo(kvStore, graphStore, "acme-corp");
+    await exportCommand({
+      kvStore,
+      graphStore,
+      output: outputPath,
+      salt: "test-salt",
+    });
+
+    const db = new Database(outputPath, { readonly: true });
+    const manifestRow = db
+      .prepare("SELECT value FROM kv WHERE key = ?")
+      .get("mma:manifest") as { value: string } | undefined;
+
+    expect(manifestRow).toBeDefined();
+
+    const manifest = JSON.parse(manifestRow!.value) as {
+      schemaVersion: number;
+      mode: string;
+      repos: Array<{ name: string; commit: string }>;
+    };
+
+    expect(manifest.schemaVersion).toBe(1);
+    expect(manifest.mode).toBe("anonymized");
 
     db.close();
   });
