@@ -25,6 +25,7 @@ import { reportCommand } from "./commands/report-cmd.js";
 import { practicesCommand } from "./commands/practices-cmd.js";
 import { exportCommand } from "./commands/export-cmd.js";
 import { mergeCommand } from "./commands/merge-cmd.js";
+import { validateCommand } from "./commands/validate-cmd.js";
 import { printJson, printTable, printSarif, validateFormat, validateReportFormat } from "./formatter.js";
 import { parseWatchInterval, watchLoop } from "./watch.js";
 
@@ -49,6 +50,9 @@ async function main(): Promise<void> {
       "include-sarif": { type: "boolean", default: false },
       salt: { type: "string", default: "" },
       note: { type: "string" },
+      mirrors: { type: "string" },
+      "sample-size": { type: "string", default: "50" },
+      seed: { type: "string", default: "42" },
       version: { type: "boolean", default: false },
       watch: { type: "boolean", short: "w", default: false },
       "watch-interval": { type: "string", default: "30" },
@@ -242,6 +246,35 @@ async function main(): Promise<void> {
     return;
   }
 
+  // validate command: statistical validation of SARIF findings
+  if (command === "validate") {
+    if (!existsSync(dbPath)) {
+      console.error(`Database not found: ${dbPath}`);
+      console.error("Run 'mma index' first to create the analysis database.");
+      process.exit(1);
+    }
+    const stores = createSqliteStores({ dbPath, readonly: true });
+    try {
+      const valFormat = values.format as "json" | "table" | "markdown" | undefined;
+      if (valFormat && !["json", "table", "markdown"].includes(valFormat)) {
+        console.error(`Invalid format: "${values.format}". Must be one of: json, table, markdown`);
+        process.exit(1);
+      }
+      const result = await validateCommand({
+        kvStore: stores.kvStore,
+        graphStore: stores.graphStore,
+        mirrorsDir: values.mirrors,
+        sampleSize: parseInt(values["sample-size"] ?? "50", 10),
+        seed: parseInt(values.seed ?? "42", 10),
+        format: valFormat ?? "table",
+        output: values.output,
+      });
+      process.exit(result.summary.fail > 0 ? 1 : 0);
+    } finally {
+      stores.close();
+    }
+  }
+
   // report command bypasses config -- only needs the DB (read-only)
   if (command === "report") {
     if (!existsSync(dbPath)) {
@@ -413,6 +446,9 @@ Usage:
                                                 Export anonymized SQLite DB
   mma merge file1.db file2.db ... [-o merged.db]
                                                 Merge anonymized export DBs
+  mma validate [--db path] [--mirrors dir] [--sample-size 50] [--seed 42]
+               [--format json|table|markdown] [-o file]
+                                                Validate SARIF findings quality
   mma report [--db path] [-o file] [--format json|table|sarif|markdown|both]
              [--include-sarif] [--salt hex] [--note "text"]
                                                 Generate anonymized report (default: json)
@@ -431,6 +467,9 @@ Options:
   --include-sarif Include redacted SARIF in report
   --salt          Hex salt for redaction hashing
   --note          Free-text note to include in report
+  --mirrors       Path to bare repo mirrors (for fault validation)
+  --sample-size   Findings to sample per check (default: 50)
+  --seed          PRNG seed for reproducibility (default: 42)
   -h, --help      Show this help message
   --version       Show version number
 `);

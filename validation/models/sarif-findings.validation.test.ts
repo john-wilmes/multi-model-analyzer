@@ -11,151 +11,30 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { resolve } from "node:path";
 import { existsSync } from "node:fs";
 import type { KVStore, GraphStore } from "@mma/storage";
-import type { GraphEdge } from "@mma/core";
 import { openValidationDb, closeValidationDb } from "../helpers/db.js";
 import { ValidationReporter } from "../helpers/reporter.js";
 import { computePageRank } from "@mma/query";
 import { getFileContent, getHeadCommit } from "@mma/ingestion";
+import {
+  mulberry32,
+  sampleN,
+  type SarifFinding,
+  getAllFindings,
+  flattenFindings,
+  fqn,
+  type ModuleInstability,
+  computeInstabilityFromEdges,
+  getImportEdges,
+  getInstability,
+} from "../../apps/cli/src/commands/validate-cmd.js";
 
 const SAMPLE_SIZE = 50;
 const SEED = 42;
 const PROJECT_ROOT = resolve(import.meta.dirname, "../..");
 const MIRRORS_DIR = resolve(PROJECT_ROOT, "data/mirrors");
 
-// ─── Seeded PRNG (mulberry32) ──────────────────────────────
-
-function mulberry32(seed: number): () => number {
-  return () => {
-    seed |= 0;
-    seed = (seed + 0x6d2b79f5) | 0;
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-function sampleN<T>(arr: readonly T[], n: number, rng: () => number): T[] {
-  if (arr.length <= n) return [...arr];
-  const copy = [...arr];
-  for (let i = copy.length - 1; i > 0; i--) {
-    const j = Math.floor(rng() * (i + 1));
-    [copy[i], copy[j]] = [copy[j], copy[i]];
-  }
-  return copy.slice(0, n);
-}
-
-// ─── SARIF helpers ─────────────────────────────────────────
-
-interface SarifFinding {
-  ruleId: string;
-  level: string;
-  message: { text: string };
-  locations?: Array<{
-    logicalLocations?: Array<{
-      fullyQualifiedName?: string;
-      kind?: string;
-      properties?: Record<string, unknown>;
-    }>;
-  }>;
-  properties?: Record<string, unknown>;
-}
-
-async function getAllFindings(
-  kvStore: KVStore,
-  sarifKey: string,
-): Promise<Map<string, SarifFinding[]>> {
-  const byRepo = new Map<string, SarifFinding[]>();
-  const keys = await kvStore.keys(`sarif:${sarifKey}:`);
-  for (const key of keys) {
-    const repo = key.slice(`sarif:${sarifKey}:`.length);
-    const raw = await kvStore.get(key);
-    if (raw) {
-      byRepo.set(repo, JSON.parse(raw) as SarifFinding[]);
-    }
-  }
-  return byRepo;
-}
-
-function flattenFindings(
-  byRepo: Map<string, SarifFinding[]>,
-): Array<{ repo: string; finding: SarifFinding }> {
-  const flat: Array<{ repo: string; finding: SarifFinding }> = [];
-  for (const [repo, findings] of byRepo) {
-    for (const finding of findings) {
-      flat.push({ repo, finding });
-    }
-  }
-  return flat;
-}
-
-function fqn(finding: SarifFinding): string {
-  return finding.locations?.[0]?.logicalLocations?.[0]?.fullyQualifiedName ?? "";
-}
-
-// ─── Independent instability computation ───────────────────
-
-interface ModuleInstability {
-  ca: number;
-  ce: number;
-  instability: number;
-}
-
-function computeInstabilityFromEdges(
-  edges: readonly GraphEdge[],
-): Map<string, ModuleInstability> {
-  const caCount = new Map<string, Set<string>>();
-  const ceCount = new Map<string, Set<string>>();
-  const modules = new Set<string>();
-
-  for (const edge of edges) {
-    if (edge.kind !== "imports") continue;
-
-    let ce = ceCount.get(edge.source);
-    if (!ce) { ce = new Set(); ceCount.set(edge.source, ce); }
-    ce.add(edge.target);
-
-    let ca = caCount.get(edge.target);
-    if (!ca) { ca = new Set(); caCount.set(edge.target, ca); }
-    ca.add(edge.source);
-
-    modules.add(edge.source);
-    modules.add(edge.target);
-  }
-
-  const result = new Map<string, ModuleInstability>();
-  for (const mod of modules) {
-    const ca = caCount.get(mod)?.size ?? 0;
-    const ce = ceCount.get(mod)?.size ?? 0;
-    const instability = ca + ce === 0 ? 0 : ce / (ca + ce);
-    result.set(mod, { ca, ce, instability });
-  }
-  return result;
-}
-
 function bareRepoPath(repo: string): string {
   return resolve(MIRRORS_DIR, `${repo}.git`);
-}
-
-// Cache for expensive per-repo computations
-const edgesCache = new Map<string, GraphEdge[]>();
-const instabilityCache = new Map<string, Map<string, ModuleInstability>>();
-
-async function getImportEdges(graphStore: GraphStore, repo: string): Promise<GraphEdge[]> {
-  let cached = edgesCache.get(repo);
-  if (!cached) {
-    cached = await graphStore.getEdgesByKind("imports", repo);
-    edgesCache.set(repo, cached);
-  }
-  return cached;
-}
-
-function getInstability(edges: readonly GraphEdge[], repo: string): Map<string, ModuleInstability> {
-  let cached = instabilityCache.get(repo);
-  if (!cached) {
-    cached = computeInstabilityFromEdges(edges);
-    instabilityCache.set(repo, cached);
-  }
-  return cached;
 }
 
 // ─── Main test suite ───────────────────────────────────────
