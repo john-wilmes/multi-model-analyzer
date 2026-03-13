@@ -1,0 +1,555 @@
+/**
+ * Cross-repo service topology detection.
+ *
+ * Detects inter-service communication patterns from tree-sitter ASTs:
+ * - Queue producers: queue.add(), addBulk(), @InjectQueue
+ * - Queue consumers: @Process(), @Processor(), extends *WorkerService, initWorker()
+ * - HTTP clients: fetch(), axios/got calls, HttpService injection
+ *
+ * Produces "service-call" graph edges with protocol metadata.
+ */
+
+import type { GraphEdge } from "@mma/core";
+import type { TreeSitterNode, TreeSitterTree } from "@mma/parsing";
+
+export interface ServiceTopologyInput {
+  readonly repo: string;
+  readonly trees: ReadonlyMap<string, TreeSitterTree>;
+  readonly imports: ReadonlyMap<string, readonly string[]>;
+}
+
+export interface ServiceCallEdge {
+  readonly sourceFile: string;
+  readonly targetService: string;
+  readonly protocol: "queue" | "http" | "websocket";
+  readonly detail: string;
+}
+
+/**
+ * Extract service topology edges from tree-sitter ASTs.
+ * Returns GraphEdge[] with kind "service-call".
+ */
+export function extractServiceTopology(
+  input: ServiceTopologyInput,
+): GraphEdge[] {
+  const edges: GraphEdge[] = [];
+
+  for (const [filePath, tree] of input.trees) {
+    const fileImports = input.imports.get(filePath) ?? [];
+
+    // Detect queue producers
+    const queueProducers = findQueueProducers(tree.rootNode, filePath);
+    for (const producer of queueProducers) {
+      edges.push({
+        source: filePath,
+        target: producer.queueName,
+        kind: "service-call",
+        metadata: {
+          repo: input.repo,
+          protocol: "queue",
+          role: "producer",
+          detail: producer.detail,
+        },
+      });
+    }
+
+    // Detect queue consumers
+    const queueConsumers = findQueueConsumers(tree.rootNode, filePath);
+    for (const consumer of queueConsumers) {
+      edges.push({
+        source: filePath,
+        target: consumer.queueName,
+        kind: "service-call",
+        metadata: {
+          repo: input.repo,
+          protocol: "queue",
+          role: "consumer",
+          detail: consumer.detail,
+        },
+      });
+    }
+
+    // Detect HTTP client calls
+    const httpCalls = findHttpCalls(tree.rootNode, filePath, fileImports);
+    for (const call of httpCalls) {
+      edges.push({
+        source: filePath,
+        target: call.target,
+        kind: "service-call",
+        metadata: {
+          repo: input.repo,
+          protocol: "http",
+          role: "client",
+          detail: call.detail,
+        },
+      });
+    }
+
+    // Detect WebSocket patterns
+    const wsCalls = findWebSocketCalls(tree.rootNode, filePath, fileImports);
+    for (const ws of wsCalls) {
+      edges.push({
+        source: filePath,
+        target: ws.target,
+        kind: "service-call",
+        metadata: {
+          repo: input.repo,
+          protocol: "websocket",
+          role: ws.role,
+          detail: ws.detail,
+        },
+      });
+    }
+  }
+
+  return edges;
+}
+
+interface QueueRef {
+  readonly queueName: string;
+  readonly detail: string;
+}
+
+interface HttpRef {
+  readonly target: string;
+  readonly detail: string;
+}
+
+// Queue name patterns from BullMQ / Bull / NestJS decorators
+const QUEUE_SERVICE_PATTERN =
+  /^(Standard|Workflow|WebSocket|Subscriber|InboundParse|ActiveJobsMetric)QueueService$/;
+const QUEUE_ADD_METHODS = new Set(["add", "addBulk", "addToQueue"]);
+const WORKER_SERVICE_PATTERN = /^(Standard|Workflow)Worker(Service)?$/;
+
+/**
+ * Find queue producer patterns:
+ * - Constructor injection of *QueueService + method calls to .add()/.addBulk()
+ * - Direct queue.add() calls
+ * - @InjectQueue('name') decorators
+ */
+function findQueueProducers(
+  rootNode: TreeSitterNode,
+  _filePath: string,
+): QueueRef[] {
+  const results: QueueRef[] = [];
+  // Map from field name -> queue name (derived from injected type)
+  const queueFields = new Map<string, string>();
+
+  // Pass 1: Collect constructor injections so queueFields is populated
+  // before we look for .add() calls (constructor may appear after methods).
+  visitNodes(rootNode, (node) => {
+    if (node.type === "method_definition") {
+      const nameNode = node.childForFieldName("name");
+      if (nameNode?.text === "constructor") {
+        const params = node.childForFieldName("parameters");
+        if (params) {
+          for (let i = 0; i < params.namedChildCount; i++) {
+            const param = params.namedChild(i);
+            const typeAnnotation = findTypeAnnotation(param);
+            if (typeAnnotation && QUEUE_SERVICE_PATTERN.test(typeAnnotation)) {
+              const paramName = findParamName(param);
+              if (paramName) {
+                const queueName = typeAnnotation
+                  .replace("QueueService", "")
+                  .toLowerCase();
+                queueFields.set(paramName, queueName);
+              }
+            }
+          }
+        }
+      }
+    }
+  });
+
+  // Pass 2: Find .add()/.addBulk() calls and @InjectQueue decorators.
+  visitNodes(rootNode, (node) => {
+    // In BullMQ, queue.add(jobName, data) -- first arg is the job name, not queue name.
+    // The queue name comes from the injected service type.
+    if (
+      node.type === "call_expression" &&
+      node.childForFieldName("function")?.type === "member_expression"
+    ) {
+      const memberExpr = node.childForFieldName("function")!;
+      const method = memberExpr.childForFieldName("property")?.text;
+      if (method && QUEUE_ADD_METHODS.has(method)) {
+        const object = memberExpr.childForFieldName("object");
+        const objectText = object?.text ?? "";
+        const objectKey = objectText.startsWith("this.")
+          ? objectText.slice(5)
+          : objectText;
+        // Check if object is a known queue field or matches queue pattern
+        if (
+          queueFields.has(objectKey) ||
+          objectKey.endsWith("Queue") ||
+          objectKey.endsWith("queue")
+        ) {
+          const args = node.childForFieldName("arguments");
+          const jobName = extractFirstStringArg(args);
+          const queueName = queueFields.get(objectKey) ?? objectKey;
+          results.push({
+            queueName,
+            detail: jobName
+              ? `${objectText}.${method}('${jobName}')`
+              : `${objectText}.${method}()`,
+          });
+        }
+      }
+    }
+
+    // @InjectQueue('name') decorator
+    if (node.type === "decorator") {
+      const expr = node.namedChild(0);
+      if (
+        expr?.type === "call_expression" &&
+        expr.childForFieldName("function")?.text === "InjectQueue"
+      ) {
+        const args = expr.childForFieldName("arguments");
+        const queueName = extractFirstStringArg(args);
+        if (queueName) {
+          results.push({ queueName, detail: "@InjectQueue" });
+        }
+      }
+    }
+  });
+
+  return results;
+}
+
+/**
+ * Find queue consumer patterns:
+ * - @Process() / @Processor() decorators
+ * - Classes extending *WorkerService
+ * - initWorker() / createWorker() calls
+ */
+function findQueueConsumers(
+  rootNode: TreeSitterNode,
+  _filePath: string,
+): QueueRef[] {
+  const results: QueueRef[] = [];
+
+  visitNodes(rootNode, (node) => {
+    // Strategy 1: @Processor('queueName') binds a class to a queue;
+    // @Process('jobName') filters a handler within that queue (not a queue name).
+    if (node.type === "decorator") {
+      const expr = node.namedChild(0);
+      if (expr?.type === "call_expression") {
+        const funcName = expr.childForFieldName("function")?.text;
+        if (funcName === "Processor") {
+          const args = expr.childForFieldName("arguments");
+          const queueName = extractFirstStringArg(args) ?? "unknown";
+          results.push({
+            queueName,
+            detail: `@Processor('${queueName}')`,
+          });
+        } else if (funcName === "Process") {
+          const args = expr.childForFieldName("arguments");
+          const jobName = extractFirstStringArg(args);
+          results.push({
+            queueName: "unknown",
+            detail: jobName ? `@Process('${jobName}')` : "@Process()",
+          });
+        }
+      }
+    }
+
+    // Strategy 2: class ... extends *WorkerService (strip generics for matching)
+    if (node.type === "class_declaration" || node.type === "class") {
+      const heritage = findHeritageClause(node);
+      const heritageBase = heritage?.replace(/<.*>$/, "");
+      if (heritageBase && WORKER_SERVICE_PATTERN.test(heritageBase)) {
+        const queueName = heritageBase
+          .replace("WorkerService", "")
+          .replace("Worker", "")
+          .toLowerCase();
+        results.push({
+          queueName: queueName || "worker",
+          detail: `extends ${heritage}`,
+        });
+      }
+    }
+
+    // Strategy 3: initWorker() / createWorker() calls
+    if (node.type === "call_expression") {
+      const func = node.childForFieldName("function");
+      if (func?.type === "member_expression") {
+        const method = func.childForFieldName("property")?.text;
+        if (method === "initWorker" || method === "createWorker") {
+          const args = node.childForFieldName("arguments");
+          const queueName = extractFirstStringArg(args) ?? "worker";
+          results.push({
+            queueName,
+            detail: `${method}()`,
+          });
+        }
+      }
+    }
+  });
+
+  return results;
+}
+
+/**
+ * Find HTTP client call patterns:
+ * - fetch() calls
+ * - axios.get/post/put/delete() calls
+ * - got.get/post() calls
+ * - HttpService injection (NestJS)
+ */
+function findHttpCalls(
+  rootNode: TreeSitterNode,
+  _filePath: string,
+  fileImports: readonly string[],
+): HttpRef[] {
+  const results: HttpRef[] = [];
+  const usesAxios = fileImports.some(
+    (imp) => imp === "axios" || imp.startsWith("axios/"),
+  );
+  const usesGot = fileImports.some(
+    (imp) => imp === "got" || imp.startsWith("got/"),
+  );
+  const usesHttpService = fileImports.some(
+    (imp) => imp === "@nestjs/axios",
+  );
+
+  const httpMethods = new Set([
+    "get",
+    "post",
+    "put",
+    "patch",
+    "delete",
+    "head",
+    "options",
+    "request",
+  ]);
+
+  visitNodes(rootNode, (node) => {
+    if (node.type !== "call_expression") return;
+
+    const func = node.childForFieldName("function");
+    if (!func) return;
+
+    // fetch() calls
+    if (func.text === "fetch" || func.text === "globalThis.fetch") {
+      const args = node.childForFieldName("arguments");
+      const url = extractFirstStringArg(args);
+      results.push({
+        target: url ?? "external-api",
+        detail: "fetch()",
+      });
+      return;
+    }
+
+    // Member expression calls: axios.get(), got.post(), httpService.get(), etc.
+    if (func.type === "member_expression") {
+      const object = func.childForFieldName("object");
+      const method = func.childForFieldName("property")?.text;
+
+      if (!method || !httpMethods.has(method)) return;
+
+      const objectText = object?.text ?? "";
+
+      // axios/got calls (fetch is a function, not an object -- handled above)
+      if (
+        (usesAxios && objectText === "axios") ||
+        (usesGot && objectText === "got")
+      ) {
+        const args = node.childForFieldName("arguments");
+        const url = extractFirstStringArg(args);
+        results.push({
+          target: url ?? "external-api",
+          detail: `${objectText}.${method}()`,
+        });
+        return;
+      }
+
+      // HttpService calls (NestJS)
+      if (
+        usesHttpService &&
+        (objectText === "httpService" ||
+          objectText === "this.httpService" ||
+          objectText.endsWith("HttpService"))
+      ) {
+        const args = node.childForFieldName("arguments");
+        const url = extractFirstStringArg(args);
+        results.push({
+          target: url ?? "external-api",
+          detail: `HttpService.${method}()`,
+        });
+      }
+    }
+  });
+
+  return results;
+}
+
+interface WebSocketRef {
+  readonly target: string;
+  readonly role: "server" | "client";
+  readonly detail: string;
+}
+
+/**
+ * Find WebSocket patterns:
+ * - @WebSocketGateway() decorators (NestJS server)
+ * - @SubscribeMessage() decorators (NestJS server)
+ * - socket.emit()/socket.on() with socket.io-client imports (client)
+ */
+function findWebSocketCalls(
+  rootNode: TreeSitterNode,
+  _filePath: string,
+  fileImports: readonly string[],
+): WebSocketRef[] {
+  const results: WebSocketRef[] = [];
+  const usesSocketClient = fileImports.some(
+    (imp) => imp === "socket.io-client" || imp.startsWith("socket.io-client/"),
+  );
+  const usesNestWs = fileImports.some(
+    (imp) => imp === "@nestjs/websockets",
+  );
+
+  visitNodes(rootNode, (node) => {
+    // @WebSocketGateway() decorator (NestJS server)
+    if (node.type === "decorator" && usesNestWs) {
+      const expr = node.namedChild(0);
+      if (expr?.type === "call_expression") {
+        const funcName = expr.childForFieldName("function")?.text;
+        if (funcName === "WebSocketGateway") {
+          const args = expr.childForFieldName("arguments");
+          const port = extractFirstStringArg(args);
+          results.push({
+            target: port ? `ws://localhost:${port}` : "websocket-gateway",
+            role: "server",
+            detail: port ? `@WebSocketGateway(${port})` : "@WebSocketGateway()",
+          });
+        }
+      }
+    }
+
+    // @SubscribeMessage('event') decorator (NestJS server)
+    if (node.type === "decorator" && usesNestWs) {
+      const expr = node.namedChild(0);
+      if (expr?.type === "call_expression") {
+        const funcName = expr.childForFieldName("function")?.text;
+        if (funcName === "SubscribeMessage") {
+          const args = expr.childForFieldName("arguments");
+          const event = extractFirstStringArg(args);
+          results.push({
+            target: event ?? "websocket-event",
+            role: "server",
+            detail: event ? `@SubscribeMessage('${event}')` : "@SubscribeMessage()",
+          });
+        }
+      }
+    }
+
+    // socket.emit()/socket.on() with socket.io-client
+    if (
+      node.type === "call_expression" &&
+      usesSocketClient &&
+      node.childForFieldName("function")?.type === "member_expression"
+    ) {
+      const memberExpr = node.childForFieldName("function")!;
+      const method = memberExpr.childForFieldName("property")?.text;
+      if (method === "emit" || method === "on") {
+        const objectText = memberExpr.childForFieldName("object")?.text ?? "";
+        // Only match socket-like objects (not arbitrary .emit calls)
+        if (/socket/i.test(objectText) || objectText === "io") {
+          const args = node.childForFieldName("arguments");
+          const event = extractFirstStringArg(args);
+          results.push({
+            target: event ?? "websocket-event",
+            role: "client",
+            detail: event
+              ? `${objectText}.${method}('${event}')`
+              : `${objectText}.${method}()`,
+          });
+        }
+      }
+    }
+  });
+
+  return results;
+}
+
+// --- AST helpers ---
+
+function visitNodes(
+  node: TreeSitterNode,
+  callback: (node: TreeSitterNode) => void,
+): void {
+  callback(node);
+  for (let i = 0; i < node.namedChildCount; i++) {
+    visitNodes(node.namedChild(i)!, callback);
+  }
+}
+
+function findTypeAnnotation(param: TreeSitterNode | null): string | null {
+  if (!param) return null;
+  for (let i = 0; i < param.namedChildCount; i++) {
+    const child = param.namedChild(i)!;
+    if (child.type === "type_annotation") {
+      // The type is the last named child of the annotation
+      const type = child.namedChild(child.namedChildCount - 1);
+      return type?.text ?? null;
+    }
+  }
+  return null;
+}
+
+function findParamName(param: TreeSitterNode | null): string | null {
+  if (!param) return null;
+  // For patterns like "private readonly fieldName: Type"
+  // The identifier is typically the first child
+  for (let i = 0; i < param.namedChildCount; i++) {
+    const child = param.namedChild(i)!;
+    if (child.type === "identifier") return child.text;
+  }
+  // Try the pattern node
+  const pattern = param.childForFieldName("pattern");
+  if (pattern) return pattern.text;
+  return null;
+}
+
+function findHeritageClause(classNode: TreeSitterNode): string | null {
+  for (let i = 0; i < classNode.namedChildCount; i++) {
+    const child = classNode.namedChild(i)!;
+    if (child.type === "class_heritage") {
+      // Find the extends clause
+      for (let j = 0; j < child.namedChildCount; j++) {
+        const clause = child.namedChild(j)!;
+        if (clause.type === "extends_clause") {
+          const value = clause.namedChild(0);
+          return value?.text ?? null;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function extractFirstStringArg(
+  argsNode: TreeSitterNode | null,
+): string | null {
+  if (!argsNode) return null;
+  for (let i = 0; i < argsNode.namedChildCount; i++) {
+    const arg = argsNode.namedChild(i)!;
+    if (arg.type === "number") {
+      return arg.text;
+    }
+    if (arg.type === "string" || arg.type === "template_string") {
+      // Strip quotes
+      const text = arg.text;
+      if (
+        (text.startsWith("'") && text.endsWith("'")) ||
+        (text.startsWith('"') && text.endsWith('"'))
+      ) {
+        return text.slice(1, -1);
+      }
+      if (text.startsWith("`") && text.endsWith("`")) {
+        return text.slice(1, -1);
+      }
+      return text;
+    }
+  }
+  return null;
+}
