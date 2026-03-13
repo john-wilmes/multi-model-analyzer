@@ -282,11 +282,11 @@ describe("exportCommand", () => {
       salt: "s",
     });
 
-    expect(result.kvCount).toBe(0);
+    expect(result.kvCount).toBe(1); // manifest only
     expect(result.edgeCount).toBe(0);
 
     const db = new Database(outputPath, { readonly: true });
-    // The manifest row is always written; result.kvCount excludes it.
+    // Only the manifest row should exist — no user data.
     const kvCount = (
       db.prepare("SELECT count(*) as cnt FROM kv WHERE key != 'mma:manifest'").get() as { cnt: number }
     ).cnt;

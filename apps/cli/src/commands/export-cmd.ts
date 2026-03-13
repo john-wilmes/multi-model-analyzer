@@ -195,11 +195,12 @@ export async function exportCommand(
   destDb.exec("VACUUM");
   destDb.close();
 
+  const kvCount = kvPairs.length + 1; // +1 for manifest
   const mode = raw ? "raw" : "anonymized";
   console.log(
-    `Exported ${kvPairs.length} KV entries and ${edgeRows.length} edges to ${output} (${mode})`,
+    `Exported ${kvCount} KV entries and ${edgeRows.length} edges to ${output} (${mode})`,
   );
-  return { kvCount: kvPairs.length, edgeCount: edgeRows.length };
+  return { kvCount, edgeCount: edgeRows.length };
 }
 
 // ---------------------------------------------------------------------------
