@@ -24,7 +24,7 @@ import type {
   CallGraph,
   ArchitecturalRule,
 } from "@mma/core";
-import { detectChanges, classifyFiles } from "@mma/ingestion";
+import { detectChanges, classifyFiles, getFileContent } from "@mma/ingestion";
 import { parseFiles } from "@mma/parsing";
 import type { TreeSitterTree } from "@mma/parsing";
 import { extractDependencyGraph, buildControlFlowGraph, createCfgIdCounter, extractCallEdgesFromTreeSitter, computeModuleMetrics, summarizeRepoMetrics, detectDeadExports, detectInstabilityViolations } from "@mma/structural";
@@ -280,8 +280,19 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     log(`  [${repo.name}] Parsing files...`);
     const phase3Start = performance.now();
     try {
+      // Detect bare repos (no working tree) so we can read content via git show.
+      // A bare repo path ends with ".git" or git rev-parse reports it is bare.
+      const isBare = repo.localPath.endsWith(".git");
+      const repoChangeSetForParse = changeSets.find(cs => cs.repo === repo.name);
+      const contentProvider =
+        isBare && repoChangeSetForParse
+          ? (filePath: string) =>
+              getFileContent(repo.localPath, repoChangeSetForParse.commitHash, filePath)
+          : undefined;
+
       const result = await parseFiles(classified, repo.name, repo.localPath, {
         enableTsMorph: options.enableTsMorph,
+        contentProvider,
         onProgress: verbose
           ? (info) => {
               if (info.current === 1 || info.current % 100 === 0 || info.current === info.total) {

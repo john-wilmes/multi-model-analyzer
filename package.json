@@ -1,8 +1,15 @@
 {
   "name": "multi-model-analyzer",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
+  "bin": {
+    "mma": "apps/cli/dist/index.js"
+  },
+  "files": [
+    "apps/cli/dist",
+    "packages/*/dist",
+    "packages/models/*/dist"
+  ],
   "engines": {
     "node": ">=22.0.0"
   },
@@ -32,7 +39,8 @@
     "validate:models": "vitest run --config validation/vitest.validation.ts",
     "clean": "tsc --build --clean",
     "setup": "bash scripts/setup.sh",
-    "prepare": "husky"
+    "prepare": "husky",
+    "prepublishOnly": "npm run build && npm run test"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

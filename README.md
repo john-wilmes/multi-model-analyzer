@@ -1,3 +1,5 @@
+[![CI](https://github.com/john-wilmes/multi-model-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/john-wilmes/multi-model-analyzer/actions/workflows/ci.yml)
+
 # Multi-Model Analyzer
 
 Static analysis system for large TypeScript/Node.js codebases. Extracts structural information, infers architecture, identifies configuration risks, builds fault trees, and generates documentation -- with minimal LLM usage.
@@ -179,6 +181,10 @@ See [docs/roadmap.md](docs/roadmap.md) for planned features informed by analysis
 ## Findings Reference
 
 See [docs/findings-guide.md](docs/findings-guide.md) for detailed explanations of all SARIF diagnostic rules, metrics, and model outputs.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
 
 ## Development
 

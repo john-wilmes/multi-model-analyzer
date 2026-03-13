@@ -8,7 +8,7 @@ dist/
 data/
 
 # Config with local paths
-mma.config.json
+mma.config*.json
 
 # OS files
 .DS_Store

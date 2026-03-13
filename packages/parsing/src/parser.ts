@@ -28,6 +28,7 @@ export interface ParseOptions {
   readonly enableTsMorph?: boolean;
   readonly tsconfigPath?: string;
   readonly onProgress?: (info: ProgressInfo) => void;
+  readonly contentProvider?: (filePath: string) => Promise<string>;
 }
 
 export interface ProgressInfo {
@@ -81,8 +82,9 @@ export async function parseFiles(
       progress?.({ phase: "tree-sitter", current: i + 1, total: parseableFiles.length, filePath: file.path });
 
       try {
-        const absPath = join(rootDir, file.path);
-        const content = await readFile(absPath, "utf-8");
+        const content = options?.contentProvider
+          ? await options.contentProvider(file.path)
+          : await readFile(join(rootDir, file.path), "utf-8");
         const tree = parseSource(content, file.path);
         treeSitterTrees.set(file.path, tree);
 
