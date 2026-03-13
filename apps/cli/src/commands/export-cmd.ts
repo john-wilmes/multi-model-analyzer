@@ -16,6 +16,14 @@ export interface ExportOptions {
   readonly graphStore: GraphStore;
   readonly output: string;
   readonly salt: string;
+  readonly raw?: boolean;
+}
+
+export interface ExportManifest {
+  readonly schemaVersion: number;
+  readonly exportedAt: string;
+  readonly mode: "raw" | "anonymized";
+  readonly repos: ReadonlyArray<{ name: string; commit: string }>;
 }
 
 /** KV key prefixes to skip (too granular / no analytical value). */
@@ -44,7 +52,7 @@ const SERVICE_NAME_RE =
 export async function exportCommand(
   options: ExportOptions,
 ): Promise<{ kvCount: number; edgeCount: number }> {
-  const { kvStore, graphStore, output, salt } = options;
+  const { kvStore, graphStore, output, salt, raw } = options;
   const tokenMap = new Map<string, string>();
 
   // 1. Discover repos
@@ -55,34 +63,38 @@ export async function exportCommand(
   const allKeys = await kvStore.keys();
 
   for (const key of allKeys) {
-    if (SKIP_PREFIXES.some((p) => key.startsWith(p))) continue;
+    if (!raw && SKIP_PREFIXES.some((p) => key.startsWith(p))) continue;
 
     const value = await kvStore.get(key);
     if (value === undefined) continue;
 
-    const anonKey = anonymizeKey(key, repoNames, salt, tokenMap);
-    let anonValue: string;
-
-    if (key === "sarif:latest") {
-      let sarif: SarifLog;
-      try {
-        sarif = JSON.parse(value) as SarifLog;
-      } catch {
-        continue; // Skip corrupted SARIF data
-      }
-      anonValue = JSON.stringify(
-        redactSarifLog(sarif, {
-          salt,
-          redactFilePaths: true,
-          preserveRuleIds: true,
-          preserveStatistics: true,
-        }),
-      );
+    if (raw) {
+      kvPairs.push([key, value]);
     } else {
-      anonValue = anonymizeValue(value, repoNames, salt, tokenMap);
-    }
+      const anonKey = anonymizeKey(key, repoNames, salt, tokenMap);
+      let anonValue: string;
 
-    kvPairs.push([anonKey, anonValue]);
+      if (key === "sarif:latest") {
+        let sarif: SarifLog;
+        try {
+          sarif = JSON.parse(value) as SarifLog;
+        } catch {
+          continue; // Skip corrupted SARIF data
+        }
+        anonValue = JSON.stringify(
+          redactSarifLog(sarif, {
+            salt,
+            redactFilePaths: true,
+            preserveRuleIds: true,
+            preserveStatistics: true,
+          }),
+        );
+      } else {
+        anonValue = anonymizeValue(value, repoNames, salt, tokenMap);
+      }
+
+      kvPairs.push([anonKey, anonValue]);
+    }
   }
 
   // Collect edges
@@ -98,18 +110,27 @@ export async function exportCommand(
     for (const repo of repoNames) {
       const edges = await graphStore.getEdgesByKind(kind, repo);
       for (const edge of edges) {
-        const md: Record<string, unknown> = edge.metadata
-          ? { ...edge.metadata }
-          : {};
-        if (typeof md.repo === "string") {
-          md.repo = hashToken(md.repo, salt, tokenMap);
+        if (raw) {
+          edgeRows.push({
+            source: edge.source,
+            target: edge.target,
+            kind,
+            metadata: edge.metadata ? JSON.stringify(edge.metadata) : "{}",
+          });
+        } else {
+          const md: Record<string, unknown> = edge.metadata
+            ? { ...edge.metadata }
+            : {};
+          if (typeof md.repo === "string") {
+            md.repo = hashToken(md.repo, salt, tokenMap);
+          }
+          edgeRows.push({
+            source: hashToken(edge.source, salt, tokenMap),
+            target: hashToken(edge.target, salt, tokenMap),
+            kind,
+            metadata: JSON.stringify(md),
+          });
         }
-        edgeRows.push({
-          source: hashToken(edge.source, salt, tokenMap),
-          target: hashToken(edge.target, salt, tokenMap),
-          kind,
-          metadata: JSON.stringify(md),
-        });
       }
     }
   }
@@ -149,14 +170,34 @@ export async function exportCommand(
     for (const row of edgeRows) {
       insertEdge.run(row.source, row.target, row.kind, row.metadata);
     }
+
+    // Write manifest
+    const repoCommits: Array<{ name: string; commit: string }> = [];
+    for (const repo of repoNames) {
+      const commitPair = kvPairs.find(([k]) =>
+        raw ? k === `commit:${repo}` : k.startsWith("commit:"),
+      );
+      // In anonymized mode, hash the repo name so it doesn't appear in the
+      // exported DB in cleartext (import will reject anonymized exports anyway).
+      const repoName = raw ? repo : hashToken(repo, salt, tokenMap);
+      repoCommits.push({ name: repoName, commit: commitPair?.[1] ?? "" });
+    }
+    const manifest: ExportManifest = {
+      schemaVersion: 1,
+      exportedAt: new Date().toISOString(),
+      mode: raw ? "raw" : "anonymized",
+      repos: repoCommits,
+    };
+    insertKv.run("mma:manifest", JSON.stringify(manifest));
   })();
 
   // 4. VACUUM and close
   destDb.exec("VACUUM");
   destDb.close();
 
+  const mode = raw ? "raw" : "anonymized";
   console.log(
-    `Exported ${kvPairs.length} KV entries and ${edgeRows.length} edges to ${output}`,
+    `Exported ${kvPairs.length} KV entries and ${edgeRows.length} edges to ${output} (${mode})`,
   );
   return { kvCount: kvPairs.length, edgeCount: edgeRows.length };
 }
@@ -165,7 +206,7 @@ export async function exportCommand(
 // Repo discovery (same logic as report-cmd)
 // ---------------------------------------------------------------------------
 
-async function discoverRepos(kvStore: KVStore): Promise<string[]> {
+export async function discoverRepos(kvStore: KVStore): Promise<string[]> {
   const repoSet = new Set<string>();
 
   const prefixes = [
