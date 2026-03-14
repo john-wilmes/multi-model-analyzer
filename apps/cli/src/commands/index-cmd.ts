@@ -231,6 +231,10 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
   const flagsByRepo = new Map<string, FlagInventory>();
   const logIndexByRepo = new Map<string, LogTemplateIndex>();
   const namingByRepo = new Map<string, MethodPurposeMap>();
+  const completedRepos = new Set<string>();
+  let totalFiles = 0;
+  let phase6bTotalMs = 0;
+  let phase6cTotalMs = 0;
 
   // Detect repos that need recovery: commit hash matches (no file changes detected)
   // but pipelineComplete flag is missing (Phase 5+ failed on previous run).
@@ -727,173 +731,173 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       }
       log(`  [${repo.name}] Released tree-sitter ASTs`);
     }
-  }
 
-  // Phase 6b: Summarization (tier-1 + tier-2)
-  log("Phase 6b: Generating summaries...");
-  const phase6bStart = performance.now();
-  const summariesByRepo = new Map<string, Map<string, Summary>>();
-
-  for (const repo of repos) {
-    const parsedFiles = parsedFilesByRepo.get(repo.name);
-    const namingResult = namingByRepo.get(repo.name);
+    // --- Phase 6b: Summarization (tier-1 + tier-2) ---
+    let summaryMap: Map<string, Summary> | undefined;
     if (!parsedFiles) {
-      log(`  ${repo.name}: skipping summarization (no parsed files)`);
-      continue;
-    }
+      log(`  [${repo.name}] Skipping summarization (no parsed files)`);
+    } else {
+      const phase6bRepoStart = performance.now();
+      try {
+        summaryMap = new Map<string, Summary>();
+        const namingResult = namingByRepo.get(repo.name);
 
-    try {
-      const summaryMap = new Map<string, Summary>();
-
-      // Tier 1: template-based summaries from AST (batched parallel I/O, cached by contentHash)
-      let tier1ReadErrors = 0;
-      let tier1CacheHits = 0;
-      const BATCH_SIZE = 20;
-      for (let batchStart = 0; batchStart < parsedFiles.length; batchStart += BATCH_SIZE) {
-        const batch = parsedFiles.slice(batchStart, batchStart + BATCH_SIZE);
-        const results = await Promise.all(
-          batch.map(async (pf) => {
-            const cacheKey = `summary:t1:${repo.name}:${pf.path}:${pf.contentHash}`;
-            const cached = await kvStore.get(cacheKey);
-            if (cached) {
-              tier1CacheHits++;
+        // Tier 1: template-based summaries from AST (batched parallel I/O, cached by contentHash)
+        let tier1ReadErrors = 0;
+        let tier1CacheHits = 0;
+        const BATCH_SIZE = 20;
+        for (let batchStart = 0; batchStart < parsedFiles.length; batchStart += BATCH_SIZE) {
+          const batch = parsedFiles.slice(batchStart, batchStart + BATCH_SIZE);
+          const results = await Promise.all(
+            batch.map(async (pf) => {
+              const cacheKey = `summary:t1:${repo.name}:${pf.path}:${pf.contentHash}`;
+              const cached = await kvStore.get(cacheKey);
+              if (cached) {
+                tier1CacheHits++;
+                try {
+                  return JSON.parse(cached) as Summary[];
+                } catch {
+                  // Corrupted cache entry; re-generate below
+                }
+              }
               try {
-                return JSON.parse(cached) as Summary[];
+                const isBare = await checkBareRepo(repo.localPath);
+                const sourceText = isBare
+                  ? await getFileContent(repo.localPath, await resolveCommitForBare(repo.localPath, changeSets, repo.name), pf.path)
+                  : await readFile(join(repo.localPath, pf.path), "utf-8");
+                const summaries = tier1Summarize(pf.symbols, pf.path, sourceText);
+                if (summaries.length > 0) {
+                  await kvStore.set(cacheKey, JSON.stringify(summaries));
+                }
+                return summaries;
               } catch {
-                // Corrupted cache entry; re-generate below
+                tier1ReadErrors++;
+                return [];
               }
+            }),
+          );
+          for (const tier1 of results) {
+            for (const s of tier1) {
+              summaryMap.set(s.entityId, s);
             }
-            try {
-              const isBare = await checkBareRepo(repo.localPath);
-              const sourceText = isBare
-                ? await getFileContent(repo.localPath, await resolveCommitForBare(repo.localPath, changeSets, repo.name), pf.path)
-                : await readFile(join(repo.localPath, pf.path), "utf-8");
-              const summaries = tier1Summarize(pf.symbols, pf.path, sourceText);
-              if (summaries.length > 0) {
-                await kvStore.set(cacheKey, JSON.stringify(summaries));
-              }
-              return summaries;
-            } catch {
-              tier1ReadErrors++;
-              return [];
-            }
-          }),
-        );
-        for (const tier1 of results) {
-          for (const s of tier1) {
+          }
+          const processed = Math.min(batchStart + BATCH_SIZE, parsedFiles.length);
+          if (batchStart === 0 || processed % 1000 < BATCH_SIZE || processed === parsedFiles.length) {
+            log(`    [tier-1] ${processed}/${parsedFiles.length}`);
+          }
+        }
+        if (tier1CacheHits > 0) {
+          log(`    [tier-1] ${tier1CacheHits} files served from cache`);
+        }
+        if (tier1ReadErrors > 0) {
+          log(`    warning: ${tier1ReadErrors} files could not be read for tier-1 summarization`);
+        }
+
+        const tier1Count = summaryMap.size;
+
+        // Tier 2: naming-based summaries (overwrites tier 1 for same entityId)
+        let tier2Total = 0;
+        let tier2Upgraded = 0;
+        if (namingResult) {
+          const tier2 = tier2Summarize(namingResult.methods);
+          tier2Total = tier2.length;
+          for (const s of tier2) {
+            if (summaryMap.has(s.entityId)) tier2Upgraded++;
             summaryMap.set(s.entityId, s);
           }
         }
-        const processed = Math.min(batchStart + BATCH_SIZE, parsedFiles.length);
-        if (batchStart === 0 || processed % 1000 < BATCH_SIZE || processed === parsedFiles.length) {
-          log(`    [tier-1] ${processed}/${parsedFiles.length}`);
-        }
-      }
-      if (tier1CacheHits > 0) {
-        log(`    [tier-1] ${tier1CacheHits} files served from cache`);
-      }
-      if (tier1ReadErrors > 0) {
-        log(`    warning: ${tier1ReadErrors} files could not be read for tier-1 summarization`);
-      }
 
-      const tier1Count = summaryMap.size;
-
-      // Tier 2: naming-based summaries (overwrites tier 1 for same entityId)
-      let tier2Total = 0;
-      let tier2Upgraded = 0;
-      if (namingResult) {
-        const tier2 = tier2Summarize(namingResult.methods);
-        tier2Total = tier2.length;
-        for (const s of tier2) {
-          if (summaryMap.has(s.entityId)) tier2Upgraded++;
-          summaryMap.set(s.entityId, s);
-        }
-      }
-
-      // Tier 4: Sonnet for service-level summaries
-      let tier4Count = 0;
-      if (options.anthropicApiKey) {
-        const services = servicesByRepo.get(repo.name);
-        if (services && services.length > 0) {
-          const inputs: ServiceSummaryInput[] = services.map((svc) => ({
-            entityId: `service:${svc.name}`,
-            serviceName: svc.name,
-            methodSummaries: [...summaryMap.values()]
-              .filter((s) => s.entityId.startsWith(svc.rootPath))
-              .slice(0, 20)
-              .map((s) => s.description),
-            dependencies: [...svc.dependencies],
-            entryPoints: [...svc.entryPoints],
-          }));
-          log(`    Tier 4 (Sonnet): summarizing ${inputs.length} services`);
-          const tier4Result = await tier4BatchSummarize(inputs, {
-            ...SONNET_DEFAULTS,
-            apiKey: options.anthropicApiKey,
-            kvStore,
-            maxApiCalls: options.maxApiCalls,
-          });
-          for (const s of tier4Result.summaries) {
-            if (s.confidence > 0) {
-              summaryMap.set(s.entityId, s);
-              tier4Count++;
+        // Tier 4: Sonnet for service-level summaries
+        let tier4Count = 0;
+        if (options.anthropicApiKey) {
+          const services6b = servicesByRepo.get(repo.name);
+          if (services6b && services6b.length > 0) {
+            const inputs: ServiceSummaryInput[] = services6b.map((svc) => ({
+              entityId: `service:${svc.name}`,
+              serviceName: svc.name,
+              methodSummaries: [...summaryMap!.values()]
+                .filter((s) => s.entityId.startsWith(svc.rootPath))
+                .slice(0, 20)
+                .map((s) => s.description),
+              dependencies: [...svc.dependencies],
+              entryPoints: [...svc.entryPoints],
+            }));
+            log(`    Tier 4 (Sonnet): summarizing ${inputs.length} services`);
+            const tier4Result = await tier4BatchSummarize(inputs, {
+              ...SONNET_DEFAULTS,
+              apiKey: options.anthropicApiKey,
+              kvStore,
+              maxApiCalls: options.maxApiCalls,
+            });
+            for (const s of tier4Result.summaries) {
+              if (s.confidence > 0) {
+                summaryMap.set(s.entityId, s);
+                tier4Count++;
+              }
+            }
+            if (tier4Result.cacheHits > 0) {
+              log(`    Tier 4: ${tier4Result.cacheHits} cache hits, ${tier4Result.apiCallsMade} API calls`);
             }
           }
-          if (tier4Result.cacheHits > 0) {
-            log(`    Tier 4: ${tier4Result.cacheHits} cache hits, ${tier4Result.apiCallsMade} API calls`);
-          }
         }
+
+        // Index summaries in search store for query support
+        const searchDocs = [...summaryMap.values()].map((s) => ({
+          id: s.entityId,
+          content: `${s.entityId} ${s.description}`,
+          metadata: { tier: String(s.tier), repo: repo.name },
+        }));
+        await options.searchStore.index(searchDocs);
+
+        const tierBreakdown = [
+          `${tier1Count} tier-1`,
+          `${tier2Total} tier-2 (${tier2Upgraded} upgraded)`,
+          tier4Count > 0 ? `${tier4Count} tier-4` : null,
+        ].filter(Boolean).join(", ");
+        log(`  [${repo.name}] Summaries: ${tierBreakdown}, ${summaryMap.size} total`);
+      } catch (error) {
+        console.error(`  Failed to generate summaries for ${repo.name}:`, error);
       }
-
-      summariesByRepo.set(repo.name, summaryMap);
-
-      // Index summaries in search store for query support
-      const searchDocs = [...summaryMap.values()].map((s) => ({
-        id: s.entityId,
-        content: `${s.entityId} ${s.description}`,
-        metadata: { tier: String(s.tier), repo: repo.name },
-      }));
-      await options.searchStore.index(searchDocs);
-
-      const tierBreakdown = [
-        `${tier1Count} tier-1`,
-        `${tier2Total} tier-2 (${tier2Upgraded} upgraded)`,
-        tier4Count > 0 ? `${tier4Count} tier-4` : null,
-      ].filter(Boolean).join(", ");
-      log(`  ${repo.name}: ${tierBreakdown}, ${summaryMap.size} total`);
-    } catch (error) {
-      console.error(`  Failed to generate summaries for ${repo.name}:`, error);
+      phase6bTotalMs += Math.round(performance.now() - phase6bRepoStart);
     }
-  }
-  log(`  Phase 6b: ${Math.round(performance.now() - phase6bStart)}ms`);
 
-  // Phase 6c: Functional model (needs summaries from 6b, no trees needed)
-  log("Phase 6c: Building functional models...");
-  const phase6cStart = performance.now();
-
-  for (const repo of repos) {
-    const services = servicesByRepo.get(repo.name);
-    const summaryMap = summariesByRepo.get(repo.name);
-    const logIndex = logIndexByRepo.get(repo.name);
-
-    if (!services || services.length === 0) {
-      log(`  ${repo.name} [functional]: skipped (${!services ? "no services" : "0 services inferred"})`);
-      continue;
+    // --- Phase 6c: Functional model ---
+    {
+      const services6c = servicesByRepo.get(repo.name);
+      if (!services6c || services6c.length === 0) {
+        log(`  [${repo.name}] [functional]: skipped (${!services6c ? "no services" : "0 services inferred"})`);
+      } else {
+        const phase6cRepoStart = performance.now();
+        try {
+          const svcSummaries = summaryMap ?? new Map<string, Summary>();
+          const svcLogIndex = logIndex ?? { repo: repo.name, templates: [] };
+          const catalog = buildServiceCatalog(services6c, svcSummaries, svcLogIndex);
+          const docs = generateDocumentation(catalog, svcSummaries);
+          await kvStore.set(`docs:functional:${repo.name}`, docs);
+          log(`  [${repo.name}] [functional]: ${catalog.length} catalog entries, ${docs.length} chars of documentation`);
+        } catch (error) {
+          console.error(`  Failed to build service catalog for ${repo.name}:`, error);
+        }
+        phase6cTotalMs += Math.round(performance.now() - phase6cRepoStart);
+      }
     }
-    try {
-      const svcSummaries = summaryMap ?? new Map<string, Summary>();
-      const svcLogIndex = logIndex ?? { repo: repo.name, templates: [] };
 
-      const catalog = buildServiceCatalog(services, svcSummaries, svcLogIndex);
-      const docs = generateDocumentation(catalog, svcSummaries);
-      await kvStore.set(`docs:functional:${repo.name}`, docs);
+    // Track completion and release per-repo heap data
+    completedRepos.add(repo.name);
+    await kvStore.set(`pipelineComplete:${repo.name}`, "true");
+    totalFiles += parsedFiles?.length ?? 0;
 
-      log(`  ${repo.name} [functional]: ${catalog.length} catalog entries, ${docs.length} chars of documentation`);
-    } catch (error) {
-      console.error(`  Failed to build service catalog for ${repo.name}:`, error);
-    }
+    parsedFilesByRepo.delete(repo.name);
+    depGraphByRepo.delete(repo.name);
+    servicesByRepo.delete(repo.name);
+    patternsByRepo.delete(repo.name);
+    flagsByRepo.delete(repo.name);
+    logIndexByRepo.delete(repo.name);
+    namingByRepo.delete(repo.name);
   }
 
-  log(`  Phase 6c: ${Math.round(performance.now() - phase6cStart)}ms`);
+  log(`  Phase 6b total: ${phase6bTotalMs}ms`);
+  log(`  Phase 6c total: ${phase6cTotalMs}ms`);
 
   // Aggregate all per-repo SARIF into a combined latest result
   tracer.startPhase("SARIF Aggregation");
@@ -950,15 +954,6 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     log(`  Aggregated ${finalResults.length} SARIF results into sarif:latest`);
   }
 
-  // Mark repos that completed the full pipeline (Phases 3-6c).
-  // Commit hash was already saved after Phase 4b; pipelineComplete prevents
-  // unnecessary recovery on the next run.
-  for (const repo of repos) {
-    if (parsedFilesByRepo.has(repo.name)) {
-      await kvStore.set(`pipelineComplete:${repo.name}`, "true");
-    }
-  }
-
   tracer.record("sarifResults", allSarifResults.length);
   tracer.endPhase();
 
@@ -973,8 +968,6 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
   const hadChanges = changeSets.some(
     (cs) => cs.addedFiles.length > 0 || cs.modifiedFiles.length > 0 || cs.deletedFiles.length > 0,
   );
-
-  const totalFiles = [...parsedFilesByRepo.values()].reduce((sum, files) => sum + files.length, 0);
 
   log("Indexing complete.");
   return {
