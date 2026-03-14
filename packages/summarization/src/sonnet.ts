@@ -62,7 +62,9 @@ export async function summarizeWithSonnet(
       description: response.trim(),
       confidence: 0.95,
     };
-  } catch {
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`[tier4] Sonnet failed for ${input.serviceName} (${input.entityId}): ${msg}`);
     return {
       entityId: input.entityId,
       tier: 4,

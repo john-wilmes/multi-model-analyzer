@@ -13,9 +13,10 @@ export async function detectChanges(
 ): Promise<ChangeSet> {
   const repoPath = await cloneOrFetch(repo.url, repo.name, {
     mirrorDir: options.mirrorDir,
+    branch: repo.branch,
   });
 
-  const currentCommit = await getHeadCommit(repoPath);
+  const currentCommit = await getHeadCommit(repoPath, repo.branch);
   const previousCommit = options.previousCommits.get(repo.name) ?? null;
 
   const { added, modified, deleted } = await diffFiles(

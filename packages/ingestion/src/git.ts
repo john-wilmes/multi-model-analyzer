@@ -13,7 +13,7 @@ export interface GitOptions {
 export async function cloneOrFetch(
   repoUrl: string,
   repoName: string,
-  options: GitOptions,
+  options: GitOptions & { branch?: string },
 ): Promise<string> {
   const repoPath = join(options.mirrorDir, `${repoName}.git`);
   const timeout = options.timeout ?? 120_000;
@@ -25,9 +25,10 @@ export async function cloneOrFetch(
     });
   } else {
     await mkdir(options.mirrorDir, { recursive: true });
-    await execFileAsync("git", ["clone", "--bare", repoUrl, repoPath], {
-      timeout,
-    });
+    const cloneArgs = ["clone", "--bare"];
+    if (options.branch) cloneArgs.push("-b", options.branch);
+    cloneArgs.push(repoUrl, repoPath);
+    await execFileAsync("git", cloneArgs, { timeout });
   }
 
   return repoPath;
@@ -46,10 +47,11 @@ export async function isBareRepo(repoPath: string): Promise<boolean> {
   }
 }
 
-export async function getHeadCommit(repoPath: string): Promise<string> {
+export async function getHeadCommit(repoPath: string, branch?: string): Promise<string> {
+  const ref = branch ?? "HEAD";
   const { stdout } = await execFileAsync(
     "git",
-    ["rev-parse", "HEAD"],
+    ["rev-parse", ref],
     { cwd: repoPath },
   );
   return stdout.trim();

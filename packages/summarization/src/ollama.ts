@@ -108,13 +108,20 @@ export async function isOllamaAvailable(
   }
 }
 
-export function tier3Summarize(
+export async function tier3Summarize(
   entities: readonly { entityId: string; sourceCode: string; context: string }[],
   options?: Partial<OllamaOptions>,
+  concurrency = 5,
 ): Promise<Summary[]> {
-  return Promise.all(
-    entities.map((e) =>
-      summarizeWithOllama(e.entityId, e.sourceCode, e.context, options),
-    ),
-  );
+  const results: Summary[] = [];
+  for (let i = 0; i < entities.length; i += concurrency) {
+    const batch = entities.slice(i, i + concurrency);
+    const batchResults = await Promise.all(
+      batch.map((e) =>
+        summarizeWithOllama(e.entityId, e.sourceCode, e.context, options),
+      ),
+    );
+    results.push(...batchResults);
+  }
+  return results;
 }

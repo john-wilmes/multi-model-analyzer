@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { fetchFindings, fetchGraph } from '../api/client.ts';
+import { fetchFindings, fetchDependencies } from '../api/client.ts';
 
 interface LogicalLocation {
   fullyQualifiedName?: string;
@@ -21,10 +21,9 @@ interface Finding {
   locations?: SarifLocation[];
 }
 
-interface Edge {
-  source?: string;
-  target?: string;
-  kind?: string;
+interface DepEntry {
+  path: string;
+  depth: number;
 }
 
 interface ModuleMetricsData {
@@ -55,7 +54,8 @@ export default function ModuleDetail() {
   const module = modulePath ?? '';
 
   const [findings, setFindings] = useState<Finding[]>([]);
-  const [edges, setEdges] = useState<Edge[]>([]);
+  const [outgoing, setOutgoing] = useState<DepEntry[]>([]);
+  const [incoming, setIncoming] = useState<DepEntry[]>([]);
   const [metricsData, setMetricsData] = useState<ModuleMetricsData | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -63,9 +63,9 @@ export default function ModuleDetail() {
     if (!repo || !module) return;
     Promise.all([
       fetchFindings({ repo, limit: '50' }),
-      fetchGraph(repo, 'imports'),
+      fetchDependencies(`${repo}:${module}`, 3) as Promise<{ dependencies: DepEntry[]; dependents: DepEntry[] }>,
     ])
-      .then(([findingsData, graphData]) => {
+      .then(([findingsData, depData]) => {
         // Filter findings to only those affecting this module
         const allFindings = (findingsData.results ?? []) as Finding[];
         const moduleFindings = allFindings.filter((f) => {
@@ -78,16 +78,12 @@ export default function ModuleDetail() {
           );
         });
         setFindings(moduleFindings);
-        setEdges((graphData.edges ?? []) as Edge[]);
-        // Derive simple metrics from edges
-        const outgoing = (graphData.edges as Edge[]).filter(
-          (e) => e.source === module,
-        );
-        const incoming = (graphData.edges as Edge[]).filter(
-          (e) => e.target === module,
-        );
-        const Ce = outgoing.length;
-        const Ca = incoming.length;
+        const deps = depData.dependencies ?? [];
+        const depnts = depData.dependents ?? [];
+        setOutgoing(deps);
+        setIncoming(depnts);
+        const Ce = deps.length;
+        const Ca = depnts.length;
         const instability = Ce + Ca > 0 ? Ce / (Ce + Ca) : 0;
         setMetricsData({ instability, afferentCoupling: Ca, efferentCoupling: Ce });
       })
@@ -96,9 +92,6 @@ export default function ModuleDetail() {
   }, [repo, module]);
 
   if (loading) return <p className="text-slate-500">Loading...</p>;
-
-  const outgoing = edges.filter((e) => e.source === module);
-  const incoming = edges.filter((e) => e.target === module);
 
   const distance =
     metricsData?.instability !== undefined &&
@@ -189,13 +182,13 @@ export default function ModuleDetail() {
             <p className="text-slate-500 text-sm">No outgoing dependencies.</p>
           ) : (
             <ul className="space-y-1">
-              {outgoing.map((e, i) => (
+              {outgoing.map((d, i) => (
                 <li key={i} className="text-sm">
                   <Link
-                    to={`/repo/${encodeURIComponent(repo)}/module/${encodeURIComponent(e.target ?? '')}`}
+                    to={`/repo/${encodeURIComponent(repo)}/module/${encodeURIComponent(d.path)}`}
                     className="text-blue-600 hover:underline font-mono text-xs"
                   >
-                    {e.target ?? '-'}
+                    {d.path}
                   </Link>
                 </li>
               ))}
@@ -211,13 +204,13 @@ export default function ModuleDetail() {
             <p className="text-slate-500 text-sm">No incoming dependencies.</p>
           ) : (
             <ul className="space-y-1">
-              {incoming.map((e, i) => (
+              {incoming.map((d, i) => (
                 <li key={i} className="text-sm">
                   <Link
-                    to={`/repo/${encodeURIComponent(repo)}/module/${encodeURIComponent(e.source ?? '')}`}
+                    to={`/repo/${encodeURIComponent(repo)}/module/${encodeURIComponent(d.path)}`}
                     className="text-blue-600 hover:underline font-mono text-xs"
                   >
-                    {e.source ?? '-'}
+                    {d.path}
                   </Link>
                 </li>
               ))}

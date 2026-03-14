@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { fetchFindings, fetchRepos } from '../api/client.ts';
 
@@ -40,6 +40,14 @@ export default function FindingsTable() {
   const severities = searchParams.getAll('severity');
   const rule = searchParams.get('rule') ?? '';
   const page = parseInt(searchParams.get('page') ?? '0', 10);
+
+  const [ruleInput, setRuleInput] = useState(rule);
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => {
+    debounceRef.current = setTimeout(() => setParam('rule', ruleInput), 300);
+    return () => clearTimeout(debounceRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ruleInput]);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -149,8 +157,8 @@ export default function FindingsTable() {
           <label className="block text-xs text-slate-500 mb-1">Rule ID</label>
           <input
             type="text"
-            value={rule}
-            onChange={(e) => setParam('rule', e.target.value)}
+            value={ruleInput}
+            onChange={(e) => setRuleInput(e.target.value)}
             placeholder="e.g. MMA001"
             className="border rounded px-2 py-1 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 w-36"
           />
