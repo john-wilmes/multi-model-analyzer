@@ -19,10 +19,24 @@ export interface Stores {
   readonly kvStore: KVStore;
 }
 
-type ToolResult = { content: Array<{ type: "text"; text: string }> };
+type ContentItem =
+  | { type: "text"; text: string }
+  | { type: "resource_link"; uri: string; name: string; description?: string };
+type ToolResult = { content: ContentItem[] };
 
-function jsonResult(data: unknown): ToolResult {
-  return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+function jsonResult(data: unknown, resourceLinks?: Array<{ uri: string; name: string; description?: string }>): ToolResult {
+  const content: ContentItem[] = [{ type: "text" as const, text: JSON.stringify(data, null, 2) }];
+  if (resourceLinks) {
+    for (const link of resourceLinks) {
+      content.push({ type: "resource_link" as const, ...link });
+    }
+  }
+  return { content };
+}
+
+function paginated<T>(items: readonly T[], offset: number, limit: number): { total: number; returned: number; offset: number; hasMore: boolean; results: T[] } {
+  const page = items.slice(offset, offset + limit);
+  return { total: items.length, returned: page.length, offset, hasMore: offset + limit < items.length, results: page };
 }
 
 export function registerTools(server: McpServer, stores: Stores): void {
@@ -55,18 +69,17 @@ export function registerTools(server: McpServer, stores: Stores): void {
       query: z.string().describe("Search terms"),
       repo: z.string().optional().describe("Filter to a specific repository name"),
       limit: z.number().optional().describe("Max results to return (default 10)"),
+      offset: z.number().optional().describe("Number of results to skip for pagination (default 0)"),
     },
-  }, async ({ query, repo, limit }) => {
-    const result = await executeSearchQuery(query, searchStore, limit ?? 10);
+  }, async ({ query, repo, limit, offset }) => {
+    // Fetch enough results to paginate from
+    const cap = (limit ?? 10) + (offset ?? 0);
+    const result = await executeSearchQuery(query, searchStore, cap);
     const hits = repo
       ? result.results.filter((h) => h.metadata?.["repo"] === repo)
       : result.results;
-    return jsonResult({
-      description: repo
-        ? `${hits.length} results (filtered to repo: ${repo})`
-        : result.description,
-      results: hits,
-    });
+    const page = paginated(hits, offset ?? 0, limit ?? 10);
+    return jsonResult(page);
   });
 
   // 3. Who calls a symbol
@@ -128,8 +141,9 @@ export function registerTools(server: McpServer, stores: Stores): void {
       repo: z.string().optional().describe("Filter to a specific repository name"),
       level: z.enum(["error", "warning", "note"]).optional().describe("Filter by severity level"),
       limit: z.number().optional().describe("Max results to return (default 50)"),
+      offset: z.number().optional().describe("Number of results to skip for pagination (default 0)"),
     },
-  }, async ({ query, repo, level, limit }) => {
+  }, async ({ query, repo, level, limit, offset }) => {
     const sarifJson = await kvStore.get("sarif:latest");
     if (!sarifJson) {
       return jsonResult({ error: "No analysis results available. Run 'mma index' first.", results: [] });
@@ -162,12 +176,11 @@ export function registerTools(server: McpServer, stores: Stores): void {
       }),
     );
 
-    const cap = limit ?? 50;
-    return jsonResult({
-      total: matching.length,
-      returned: Math.min(matching.length, cap),
-      results: matching.slice(0, cap),
-    });
+    const page = paginated(matching, offset ?? 0, limit ?? 50);
+    const links = repo
+      ? [{ uri: `mma://repo/${repo}/findings`, name: `${repo} findings`, description: "Full findings for this repository" }]
+      : undefined;
+    return jsonResult(page, links);
   });
   // 8. Module instability metrics
   server.registerTool("get_metrics", {
@@ -175,9 +188,27 @@ export function registerTools(server: McpServer, stores: Stores): void {
     inputSchema: {
       repo: z.string().optional().describe("Filter to a specific repository name"),
       module: z.string().optional().describe("Filter to a specific module (file path)"),
+      limit: z.number().optional().describe("Max repos or modules to return (default all)"),
+      offset: z.number().optional().describe("Number of results to skip for pagination (default 0)"),
     },
-  }, async ({ repo, module }) => {
-    return jsonResult(await getMetrics(kvStore, module, repo));
+  }, async ({ repo, module, limit, offset }) => {
+    const data = await getMetrics(kvStore, module, repo);
+    if (module && Array.isArray((data as Record<string, unknown>).modules)) {
+      const modules = (data as { modules: unknown[] }).modules;
+      const page = paginated(modules, offset ?? 0, limit ?? modules.length);
+      return jsonResult({ moduleFilter: module, ...page });
+    }
+    if (Array.isArray((data as Record<string, unknown>).repos)) {
+      const repos = (data as { repos: unknown[] }).repos;
+      if (limit || offset) {
+        const page = paginated(repos, offset ?? 0, limit ?? repos.length);
+        return jsonResult({ ...page });
+      }
+    }
+    const links = repo
+      ? [{ uri: `mma://repo/${repo}/metrics`, name: `${repo} metrics`, description: "Full metrics for this repository" }]
+      : undefined;
+    return jsonResult(data, links);
   });
 
   // 9. Blast radius analysis
