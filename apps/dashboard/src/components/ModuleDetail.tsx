@@ -62,7 +62,7 @@ export default function ModuleDetail() {
   useEffect(() => {
     if (!repo || !module) return;
     Promise.all([
-      fetchFindings({ repo, limit: '50' }),
+      fetchFindings({ repo, limit: '500' }),
       fetchDependencies(`${repo}:${module}`, 3) as Promise<{ dependencies: DepEntry[]; dependents: DepEntry[] }>,
     ])
       .then(([findingsData, depData]) => {
@@ -73,7 +73,13 @@ export default function ModuleDetail() {
           return f.locations.some((loc) =>
             loc.logicalLocations?.some((ll) => {
               const fqn = ll.fullyQualifiedName ?? '';
-              return fqn === module || fqn.startsWith(module + '/');
+              const repoPrefixed = `${repo}/${module}`;
+              return (
+                fqn === module ||
+                fqn.startsWith(module + '/') ||
+                fqn === repoPrefixed ||
+                fqn.startsWith(repoPrefixed + '/')
+              );
             }),
           );
         });

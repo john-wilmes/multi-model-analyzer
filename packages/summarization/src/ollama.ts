@@ -113,9 +113,10 @@ export async function tier3Summarize(
   options?: Partial<OllamaOptions>,
   concurrency = 5,
 ): Promise<Summary[]> {
+  const step = Math.max(1, Math.floor(concurrency));
   const results: Summary[] = [];
-  for (let i = 0; i < entities.length; i += concurrency) {
-    const batch = entities.slice(i, i + concurrency);
+  for (let i = 0; i < entities.length; i += step) {
+    const batch = entities.slice(i, i + step);
     const batchResults = await Promise.all(
       batch.map((e) =>
         summarizeWithOllama(e.entityId, e.sourceCode, e.context, options),

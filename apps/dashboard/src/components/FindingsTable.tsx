@@ -44,10 +44,19 @@ export default function FindingsTable() {
   const [ruleInput, setRuleInput] = useState(rule);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => {
-    debounceRef.current = setTimeout(() => setParam('rule', ruleInput), 300);
+    setRuleInput(rule);
+  }, [rule]);
+  useEffect(() => {
+    if (ruleInput === rule) return;
+    debounceRef.current = setTimeout(() => {
+      const next = new URLSearchParams(searchParams);
+      if (ruleInput) next.set('rule', ruleInput);
+      else next.delete('rule');
+      next.delete('page');
+      setSearchParams(next);
+    }, 300);
     return () => clearTimeout(debounceRef.current);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ruleInput]);
+  }, [ruleInput, rule, searchParams, setSearchParams]);
 
   const load = useCallback(() => {
     setLoading(true);
