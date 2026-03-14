@@ -89,7 +89,7 @@ export default function Overview() {
         // Store aggregate counts for potential use
         void totalErrors; void totalWarnings; void totalNotes;
       })
-      .catch(() => {})
+      .catch((err: unknown) => console.error("Failed to fetch overview data:", err))
       .finally(() => setLoading(false));
   }, []);
 

@@ -88,7 +88,7 @@ function sendJson(res: ServerResponse, data: unknown, status = 200): void {
   res.writeHead(status, {
     "Content-Type": "application/json",
     "Content-Length": Buffer.byteLength(body),
-    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Origin": "http://localhost",
   });
   res.end(body);
 }
@@ -335,7 +335,7 @@ export async function dashboardCommand(options: DashboardOptions): Promise<void>
       const path = url.split("?")[0]!;
 
       if (req.method === "OPTIONS") {
-        res.writeHead(204, { "Access-Control-Allow-Origin": "*" });
+        res.writeHead(204, { "Access-Control-Allow-Origin": "http://localhost" });
         res.end();
         return;
       }

@@ -1,33 +1,36 @@
 const BASE = '';
 
+async function fetchJson<T>(url: string): Promise<T> {
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`API error: ${res.status} ${res.statusText} (${url})`);
+  }
+  return res.json() as Promise<T>;
+}
+
 export async function fetchRepos(): Promise<{ repos: string[] }> {
-  const res = await fetch(`${BASE}/api/repos`);
-  return res.json();
+  return fetchJson(`${BASE}/api/repos`);
 }
 
 export async function fetchMetrics(repo: string): Promise<unknown[]> {
-  const res = await fetch(`${BASE}/api/metrics/${encodeURIComponent(repo)}`);
-  return res.json();
+  return fetchJson(`${BASE}/api/metrics/${encodeURIComponent(repo)}`);
 }
 
 export async function fetchMetricsSummary(): Promise<Record<string, unknown>> {
-  const res = await fetch(`${BASE}/api/metrics-summary`);
-  return res.json();
+  return fetchJson(`${BASE}/api/metrics-summary`);
 }
 
 export async function fetchFindings(
   params: Record<string, string>,
 ): Promise<{ results: unknown[]; total: number }> {
   const qs = new URLSearchParams(params);
-  const res = await fetch(`${BASE}/api/findings?${qs}`);
-  return res.json();
+  return fetchJson(`${BASE}/api/findings?${qs}`);
 }
 
 export async function fetchFindingsByRule(
   ruleId: string,
 ): Promise<{ results: unknown[]; total: number }> {
-  const res = await fetch(`${BASE}/api/findings/${encodeURIComponent(ruleId)}`);
-  return res.json();
+  return fetchJson(`${BASE}/api/findings/${encodeURIComponent(ruleId)}`);
 }
 
 export async function fetchGraph(
@@ -35,8 +38,7 @@ export async function fetchGraph(
   kind?: string,
 ): Promise<{ edges: unknown[] }> {
   const url = `${BASE}/api/graph/${encodeURIComponent(repo)}${kind ? `?kind=${kind}` : ''}`;
-  const res = await fetch(url);
-  return res.json();
+  return fetchJson(url);
 }
 
 export async function fetchDependencies(
@@ -44,18 +46,15 @@ export async function fetchDependencies(
   depth?: number,
 ): Promise<unknown> {
   const qs = depth ? `?depth=${depth}` : '';
-  const res = await fetch(
+  return fetchJson(
     `${BASE}/api/dependencies/${encodeURIComponent(module)}${qs}`,
   );
-  return res.json();
 }
 
 export async function fetchPractices(): Promise<unknown> {
-  const res = await fetch(`${BASE}/api/practices`);
-  return res.json();
+  return fetchJson(`${BASE}/api/practices`);
 }
 
 export async function fetchPatterns(repo: string): Promise<unknown> {
-  const res = await fetch(`${BASE}/api/patterns/${encodeURIComponent(repo)}`);
-  return res.json();
+  return fetchJson(`${BASE}/api/patterns/${encodeURIComponent(repo)}`);
 }

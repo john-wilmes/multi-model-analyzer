@@ -68,7 +68,7 @@ export default function ModuleDetail() {
         const instability = Ce + Ca > 0 ? Ce / (Ce + Ca) : 0;
         setMetricsData({ instability, afferentCoupling: Ca, efferentCoupling: Ce });
       })
-      .catch(() => {})
+      .catch((err: unknown) => console.error("Failed to fetch module data:", err))
       .finally(() => setLoading(false));
   }, [repo, module]);
 

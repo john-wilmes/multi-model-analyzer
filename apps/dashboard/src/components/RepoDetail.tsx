@@ -47,7 +47,7 @@ export default function RepoDetail() {
         setMetrics(ms);
         setFindings((findingsData.results ?? []) as Finding[]);
       })
-      .catch(() => {})
+      .catch((err: unknown) => console.error("Failed to fetch repo data:", err))
       .finally(() => setLoading(false));
   }, [repo]);
 

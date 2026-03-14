@@ -56,7 +56,7 @@ export default function FindingsTable() {
         setFindings((data.results ?? []) as Finding[]);
         setTotal(data.total ?? 0);
       })
-      .catch(() => {})
+      .catch((err: unknown) => console.error("Failed to fetch findings:", err))
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [repo, rule, page, severities.join(',')]);
@@ -64,7 +64,7 @@ export default function FindingsTable() {
   useEffect(() => {
     fetchRepos()
       .then((d) => setRepos(d.repos))
-      .catch(() => {});
+      .catch((err: unknown) => console.error("Failed to fetch repos:", err));
   }, []);
 
   useEffect(() => {
