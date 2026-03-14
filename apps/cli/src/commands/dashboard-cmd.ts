@@ -207,9 +207,10 @@ async function handleApi(
     if (query.repo) {
       filtered = filtered.filter((r) =>
         r.locations?.some((loc) =>
-          loc.logicalLocations?.some((ll) =>
-            ll.fullyQualifiedName?.startsWith(query.repo!) ||
-            ll.name?.startsWith(query.repo!),
+          loc.logicalLocations?.some(
+            (ll) =>
+              ll.properties?.repo === query.repo ||
+              ll.fullyQualifiedName?.startsWith(query.repo + "/"),
           ),
         ),
       );
