@@ -234,11 +234,8 @@ async function handleApi(
   if (graphMatch) {
     const repo = decodeURIComponent(graphMatch[1]!);
     const kind = query.kind ?? "imports";
-    const edges = await graphStore.getEdgesByKind(kind as Parameters<typeof graphStore.getEdgesByKind>[0]);
-    const filtered = edges.filter(
-      (e) => e.source.startsWith(repo) || e.target.startsWith(repo),
-    );
-    return sendJson(res, { edges: filtered });
+    const edges = await graphStore.getEdgesByKind(kind as Parameters<typeof graphStore.getEdgesByKind>[0], repo);
+    return sendJson(res, { edges });
   }
 
   // GET /api/dependencies/:module?depth=3
@@ -247,7 +244,12 @@ async function handleApi(
     const root = decodeURIComponent(depsMatch[1]!);
     const maxDepth = parseInt(query.depth ?? "3", 10) || 3;
 
-    const allEdges = await graphStore.getEdgesByKind("imports");
+    // root may be "repo:module" or just "module"
+    const colonIdx = root.indexOf(":");
+    const repo = colonIdx >= 0 ? root.slice(0, colonIdx) : undefined;
+    const modulePath = colonIdx >= 0 ? root.slice(colonIdx + 1) : root;
+
+    const allEdges = await graphStore.getEdgesByKind("imports", repo);
 
     // Build forward (dependencies) and reverse (dependents) maps
     const fwd = new Map<string, string[]>();
@@ -282,8 +284,8 @@ async function handleApi(
 
     return sendJson(res, {
       root,
-      dependencies: bfs(root, fwd),
-      dependents: bfs(root, rev),
+      dependencies: bfs(modulePath, fwd),
+      dependents: bfs(modulePath, rev),
     });
   }
 
