@@ -9,6 +9,7 @@ import type Database from "better-sqlite3";
 import type { KVStore } from "./kv.js";
 
 export class SqliteKVStore implements KVStore {
+  private readonly db: Database.Database;
   private readonly stmtGet: Database.Statement;
   private readonly stmtSet: Database.Statement;
   private readonly stmtDelete: Database.Statement;
@@ -21,6 +22,7 @@ export class SqliteKVStore implements KVStore {
   private readonly stmtIsEmpty: Database.Statement;
 
   constructor(db: Database.Database) {
+    this.db = db;
     this.stmtGet = db.prepare("SELECT value FROM kv WHERE key = ?");
     this.stmtSet = db.prepare(
       "INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -89,6 +91,15 @@ export class SqliteKVStore implements KVStore {
       result.set(row.key, row.value);
     }
     return result;
+  }
+
+  async setMany(entries: ReadonlyArray<readonly [string, string]>): Promise<void> {
+    const runInTransaction = this.db.transaction((items: ReadonlyArray<readonly [string, string]>) => {
+      for (const [key, value] of items) {
+        this.stmtSet.run(key, value);
+      }
+    });
+    runInTransaction(entries);
   }
 
   async isEmpty(): Promise<boolean> {

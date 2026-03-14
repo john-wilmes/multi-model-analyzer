@@ -19,6 +19,8 @@ export interface KVStore {
   /** Returns true if the store contains no keys. */
   isEmpty(): Promise<boolean>;
   clear(): Promise<void>;
+  /** Batch write: sets multiple key-value pairs in a single transaction. */
+  setMany(entries: ReadonlyArray<readonly [key: string, value: string]>): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -70,6 +72,12 @@ export class InMemoryKVStore implements KVStore {
       }
     }
     return result;
+  }
+
+  async setMany(entries: ReadonlyArray<readonly [string, string]>): Promise<void> {
+    for (const [key, value] of entries) {
+      this.store.set(key, value);
+    }
   }
 
   async isEmpty(): Promise<boolean> {

@@ -287,7 +287,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
 
     // Recovery repos skip Phases 3-4b (already have parsedFiles + graph edges)
     if (recoveryRepos.has(repo.name)) {
-      log(`  [${repo.name}] Skipping Phases 3-4b (recovery mode)`);
+      log(`  [${repo.name}] Skipping Phases 3-4b (recovery mode, 4c/4d will still run)`);
     } else {
     let classified = classifiedByRepo.get(repo.name);
     if (!classified || classified.length === 0) continue;
@@ -342,12 +342,11 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
 
       // Persist parsed symbols to KV for failure recovery.
       // If Phase 5+ fails, the next run can load these instead of re-parsing.
-      for (const pf of result.parsedFiles) {
-        await kvStore.set(
-          `symbols:${repo.name}:${pf.path}`,
-          JSON.stringify({ symbols: pf.symbols, contentHash: pf.contentHash, kind: pf.kind }),
-        );
-      }
+      const symbolEntries: Array<readonly [string, string]> = result.parsedFiles.map((pf) => [
+        `symbols:${repo.name}:${pf.path}`,
+        JSON.stringify({ symbols: pf.symbols, contentHash: pf.contentHash, kind: pf.kind }),
+      ] as const);
+      await kvStore.setMany(symbolEntries);
       log(`  [${repo.name}] Phase 3: ${Math.round(performance.now() - phase3Start)}ms`);
     } catch (error) {
       console.error(`  Failed to parse ${repo.name}:`, error);
@@ -412,7 +411,17 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       }
     }
 
+    // Save commit hash after graph extraction completes (Phases 3-4b done).
+    // Clear pipelineComplete so a Phase 5+ failure triggers recovery next run.
+    const repoChangeSet = changeSets.find(cs => cs.repo === repo.name);
+    if (repoChangeSet) {
+      await kvStore.delete(`pipelineComplete:${repo.name}`);
+      await kvStore.set(`commit:${repo.name}`, repoChangeSet.commitHash);
+    }
+    } // end of normal (non-recovery) Phases 3-4d block
+
     // --- Phase 4c: Module instability metrics ---
+    // Runs for both normal and recovery repos (only needs parsedFiles + depGraph)
     {
       const pf4c = parsedFilesByRepo.get(repo.name);
       const dg4c = depGraphByRepo.get(repo.name);
@@ -438,6 +447,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     }
 
     // --- Phase 4d: Dead export detection ---
+    // Runs for both normal and recovery repos (only needs parsedFiles + depGraph)
     {
       const pf4d = parsedFilesByRepo.get(repo.name);
       const dg4d = depGraphByRepo.get(repo.name);
@@ -454,15 +464,6 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         }
       }
     }
-
-    // Save commit hash after graph extraction completes (Phases 3-4b done).
-    // Clear pipelineComplete so a Phase 5+ failure triggers recovery next run.
-    const repoChangeSet = changeSets.find(cs => cs.repo === repo.name);
-    if (repoChangeSet) {
-      await kvStore.delete(`pipelineComplete:${repo.name}`);
-      await kvStore.set(`commit:${repo.name}`, repoChangeSet.commitHash);
-    }
-    } // end of normal (non-recovery) Phases 3-4b block
 
     // --- Phase 5: Heuristic analysis ---
     const depGraph = depGraphByRepo.get(repo.name);
