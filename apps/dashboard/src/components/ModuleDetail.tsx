@@ -2,11 +2,23 @@ import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { fetchFindings, fetchGraph } from '../api/client.ts';
 
+interface LogicalLocation {
+  fullyQualifiedName?: string;
+  name?: string;
+  kind?: string;
+  properties?: Record<string, unknown>;
+}
+
+interface SarifLocation {
+  logicalLocations?: LogicalLocation[];
+}
+
 interface Finding {
   ruleId?: string;
   level?: string;
   message?: string;
   location?: string;
+  locations?: SarifLocation[];
 }
 
 interface Edge {
@@ -54,7 +66,18 @@ export default function ModuleDetail() {
       fetchGraph(repo, 'imports'),
     ])
       .then(([findingsData, graphData]) => {
-        setFindings((findingsData.results ?? []) as Finding[]);
+        // Filter findings to only those affecting this module
+        const allFindings = (findingsData.results ?? []) as Finding[];
+        const moduleFindings = allFindings.filter((f) => {
+          if (!f.locations) return false;
+          return f.locations.some((loc) =>
+            loc.logicalLocations?.some((ll) => {
+              const fqn = ll.fullyQualifiedName ?? '';
+              return fqn === module || fqn.startsWith(module + '/');
+            }),
+          );
+        });
+        setFindings(moduleFindings);
         setEdges((graphData.edges ?? []) as Edge[]);
         // Derive simple metrics from edges
         const outgoing = (graphData.edges as Edge[]).filter(

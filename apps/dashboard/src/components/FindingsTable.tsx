@@ -43,15 +43,14 @@ export default function FindingsTable() {
 
   const load = useCallback(() => {
     setLoading(true);
-    const params: Record<string, string> = {
-      offset: String(page * PAGE_SIZE),
-      limit: String(PAGE_SIZE),
-    };
-    if (repo) params.repo = repo;
-    if (rule) params.rule = rule;
-    if (severities.length === 1) params.level = severities[0]!;
+    const qs = new URLSearchParams();
+    qs.set('offset', String(page * PAGE_SIZE));
+    qs.set('limit', String(PAGE_SIZE));
+    if (repo) qs.set('repo', repo);
+    if (rule) qs.set('rule', rule);
+    severities.forEach((s) => qs.append('level', s));
 
-    fetchFindings(params)
+    fetchFindings(qs)
       .then((data) => {
         setFindings((data.results ?? []) as Finding[]);
         setTotal(data.total ?? 0);

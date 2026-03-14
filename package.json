@@ -32,7 +32,7 @@
     "apps/dashboard"
   ],
   "scripts": {
-    "build": "tsc --build",
+    "build": "tsc --build && npm run build:dashboard",
     "build:dashboard": "npm run build -w apps/dashboard",
     "type-check": "tsc --build --noEmit",
     "lint": "eslint packages/ apps/",

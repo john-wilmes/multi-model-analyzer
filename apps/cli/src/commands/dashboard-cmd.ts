@@ -71,15 +71,25 @@ async function discoverRepos(kvStore: KVStore): Promise<string[]> {
   return [...repoSet].sort();
 }
 
-function parseQuery(url: string): Record<string, string> {
+interface ParsedQuery {
+  single: Record<string, string>;
+  multi: Record<string, string[]>;
+}
+
+function parseQuery(url: string): ParsedQuery {
   const idx = url.indexOf("?");
-  if (idx === -1) return {};
-  const params: Record<string, string> = {};
+  const result: ParsedQuery = { single: {}, multi: {} };
+  if (idx === -1) return result;
   for (const part of url.slice(idx + 1).split("&")) {
     const [k, v] = part.split("=");
-    if (k) params[decodeURIComponent(k)] = v ? decodeURIComponent(v) : "";
+    if (!k) continue;
+    const key = decodeURIComponent(k);
+    const val = v ? decodeURIComponent(v) : "";
+    if (!(key in result.single)) result.single[key] = val;
+    if (!result.multi[key]) result.multi[key] = [];
+    result.multi[key].push(val);
   }
-  return params;
+  return result;
 }
 
 function sendJson(res: ServerResponse, data: unknown, status = 200): void {
@@ -195,28 +205,31 @@ async function handleApi(
       ? decodeURIComponent(path.slice("/api/findings/".length))
       : undefined;
 
-    const limit = Math.min(parseInt(query.limit ?? "50", 10) || 50, 500);
-    const offset = parseInt(query.offset ?? "0", 10) || 0;
+    const limit = Math.min(parseInt(query.single["limit"] ?? "50", 10) || 50, 500);
+    const offset = parseInt(query.single["offset"] ?? "0", 10) || 0;
 
     // Use per-repo SARIF keys when repo filter is present (avoids parsing monolithic blob)
+    const levelParam = query.multi["level"];
+    const levelFilter = levelParam && levelParam.length > 0 ? (levelParam.length === 1 ? levelParam[0] : levelParam) : undefined;
     const { results: paginated, total: rawTotal } = await getSarifResultsPaginated(kvStore, {
-      repo: query.repo,
-      ruleId: ruleIdFromPath ?? query.rule,
-      level: query.level,
+      repo: query.single["repo"],
+      ruleId: ruleIdFromPath ?? query.single["rule"],
+      level: levelFilter,
       limit,
       offset,
     });
 
     // Additional fullyQualifiedName filter for backward compat
     let results = paginated;
-    if (query.repo && !ruleIdFromPath) {
+    if (query.single["repo"] && !ruleIdFromPath) {
+      const repoFilter = query.single["repo"];
       results = results.filter((r) => {
         const locs = r.locations as Array<{ logicalLocations?: Array<{ properties?: Record<string, unknown>; fullyQualifiedName?: string }> }> | undefined;
         return !locs || locs.some((loc) =>
           loc.logicalLocations?.some(
             (ll) =>
-              ll.properties?.["repo"] === query.repo ||
-              ll.fullyQualifiedName?.startsWith(query.repo + "/"),
+              ll.properties?.["repo"] === repoFilter ||
+              ll.fullyQualifiedName?.startsWith(repoFilter + "/"),
           ),
         );
       });
@@ -229,8 +242,8 @@ async function handleApi(
   const graphMatch = path.match(/^\/api\/graph\/(.+)$/);
   if (graphMatch) {
     const repo = decodeURIComponent(graphMatch[1]!);
-    const kind = query.kind ?? "imports";
-    const limit = Math.min(Math.max(parseInt(query.limit ?? "1000", 10) || 1000, 1), 10000);
+    const kind = query.single["kind"] ?? "imports";
+    const limit = Math.min(Math.max(parseInt(query.single["limit"] ?? "1000", 10) || 1000, 1), 10000);
     const edges = await graphStore.getEdgesByKind(kind as Parameters<typeof graphStore.getEdgesByKind>[0], repo, { limit });
     return sendJson(res, { edges, limit });
   }
@@ -239,7 +252,7 @@ async function handleApi(
   const depsMatch = path.match(/^\/api\/dependencies\/(.+)$/);
   if (depsMatch) {
     const root = decodeURIComponent(depsMatch[1]!);
-    const maxDepth = parseInt(query.depth ?? "3", 10) || 3;
+    const maxDepth = parseInt(query.single["depth"] ?? "3", 10) || 3;
 
     // root may be "repo:module" or just "module"
     const colonIdx = root.indexOf(":");

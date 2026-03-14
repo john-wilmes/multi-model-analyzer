@@ -121,3 +121,5 @@ export {
 
 export type { PhaseResult } from "./tracer.js";
 export { traceSync, traceAsync, runHeuristic } from "./tracer.js";
+
+export { classifyFileKind } from "./classify.js";
