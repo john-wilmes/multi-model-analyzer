@@ -46,71 +46,82 @@ export async function executeArchitectureQuery(
   _kvStore: KVStore,
   repoFilter?: string,
 ): Promise<ArchitectureQueryResult> {
-  // Get all edges, grouped by repo
-  const allImports = await graphStore.getEdgesByKind("imports");
-  const allCalls = await graphStore.getEdgesByKind("calls");
-  const allServiceCalls = await graphStore.getEdgesByKind("service-call");
+  // Get aggregate counts per repo without loading all edges into memory
+  const importCounts = await graphStore.getEdgeCountsByKindAndRepo("imports");
+  const callCounts = await graphStore.getEdgeCountsByKindAndRepo("calls");
+  const serviceCallCounts = await graphStore.getEdgeCountsByKindAndRepo("service-call");
 
-  // Build repo summaries
-  const repoMap = new Map<
-    string,
-    {
-      imports: number;
-      calls: number;
-      crossRepo: number;
-      serviceCalls: number;
-      role: RepoSummary["role"];
+  // Discover all repos from the count maps
+  const allRepoNames = new Set<string>([
+    ...importCounts.keys(),
+    ...callCounts.keys(),
+    ...serviceCallCounts.keys(),
+  ]);
+
+  // Determine which repos we need to load edges for (cross-repo + role inference + topology)
+  const reposToProcess = repoFilter
+    ? [...allRepoNames].filter((r) => r === repoFilter)
+    : [...allRepoNames];
+
+  // Build repo summaries and collect cross-repo edges + service topology per repo
+  const repoMap = new Map<string, {
+    imports: number; calls: number; crossRepo: number;
+    serviceCalls: number; role: RepoSummary["role"];
+  }>();
+  const crossEdgeMap = new Map<string, number>();
+  const serviceTopology: ServiceLink[] = [];
+
+  for (const repoName of reposToProcess) {
+    const entry = {
+      imports: importCounts.get(repoName) ?? 0,
+      calls: callCounts.get(repoName) ?? 0,
+      crossRepo: 0,
+      serviceCalls: serviceCallCounts.get(repoName) ?? 0,
+      role: "unknown" as RepoSummary["role"],
+    };
+
+    // Load imports for this repo to compute cross-repo edges and role
+    const repoImports = await graphStore.getEdgesByKind("imports", repoName);
+    for (const edge of repoImports) {
+      if (edge.target.startsWith("@") && !edge.target.startsWith("@/")) {
+        entry.crossRepo++;
+        const parts = edge.target.split("/");
+        const pkg = parts[0]!.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0]!;
+        const key = `${repoName}->${pkg}`;
+        crossEdgeMap.set(key, (crossEdgeMap.get(key) ?? 0) + 1);
+      }
     }
-  >();
 
-  function ensureRepo(name: string) {
-    if (!repoMap.has(name)) {
-      repoMap.set(name, {
-        imports: 0,
-        calls: 0,
-        crossRepo: 0,
-        serviceCalls: 0,
-        role: "unknown",
+    // Load service-calls for this repo for topology + role inference
+    const repoServiceCalls = await graphStore.getEdgesByKind("service-call", repoName);
+    for (const edge of repoServiceCalls) {
+      serviceTopology.push({
+        sourceRepo: repoName,
+        sourceFile: edge.source,
+        target: edge.target,
+        protocol: (edge.metadata?.protocol as string) ?? "unknown",
+        role: (edge.metadata?.role as string) ?? "unknown",
+        detail: (edge.metadata?.detail as string) ?? "",
       });
     }
-    return repoMap.get(name)!;
+
+    // Infer role from per-repo edges (no global scan needed)
+    entry.role = inferRepoRoleFromEdges(repoName, repoImports, repoServiceCalls, allRepoNames);
+    repoMap.set(repoName, entry);
   }
 
-  for (const edge of allImports) {
-    const repo = (edge.metadata?.repo as string) ?? "unknown";
-    const entry = ensureRepo(repo);
-    entry.imports++;
-    if (edge.target.startsWith("@") && !edge.target.startsWith("@/")) {
-      entry.crossRepo++;
-    }
-  }
-
-  for (const edge of allCalls) {
-    const repo = (edge.metadata?.repo as string) ?? "unknown";
-    ensureRepo(repo).calls++;
-  }
-
-  for (const edge of allServiceCalls) {
-    const repo = (edge.metadata?.repo as string) ?? "unknown";
-    ensureRepo(repo).serviceCalls++;
-  }
-
-  // Infer repo roles from heuristics
-  for (const [name, entry] of repoMap) {
-    entry.role = inferRepoRole(name, allImports, allServiceCalls);
-  }
-
-  // Build cross-repo edges (which repo imports which packages)
-  const crossEdgeMap = new Map<string, number>();
-  for (const edge of allImports) {
-    const repo = (edge.metadata?.repo as string) ?? "unknown";
-    if (repoFilter && repo !== repoFilter) continue;
-    if (edge.target.startsWith("@") && !edge.target.startsWith("@/")) {
-      // Normalize to base package (e.g., @novu/shared/utils -> @novu/shared)
-      const parts = edge.target.split("/");
-      const pkg = parts[0]!.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0]!;
-      const key = `${repo}->${pkg}`;
-      crossEdgeMap.set(key, (crossEdgeMap.get(key) ?? 0) + 1);
+  // If no repoFilter, also add repos we didn't process (they have zero edges in filter scope)
+  if (!repoFilter) {
+    for (const name of allRepoNames) {
+      if (!repoMap.has(name)) {
+        repoMap.set(name, {
+          imports: importCounts.get(name) ?? 0,
+          calls: callCounts.get(name) ?? 0,
+          crossRepo: 0,
+          serviceCalls: serviceCallCounts.get(name) ?? 0,
+          role: "unknown",
+        });
+      }
     }
   }
 
@@ -125,25 +136,9 @@ export async function executeArchitectureQuery(
   }
   crossRepoEdges.sort((a, b) => b.count - a.count);
 
-  // Build service topology links
-  const serviceTopology: ServiceLink[] = [];
-  for (const edge of allServiceCalls) {
-    const repo = (edge.metadata?.repo as string) ?? "unknown";
-    if (repoFilter && repo !== repoFilter) continue;
-    serviceTopology.push({
-      sourceRepo: repo,
-      sourceFile: edge.source,
-      target: edge.target,
-      protocol: (edge.metadata?.protocol as string) ?? "unknown",
-      role: (edge.metadata?.role as string) ?? "unknown",
-      detail: (edge.metadata?.detail as string) ?? "",
-    });
-  }
-
   // Build repos array
   const repos: RepoSummary[] = [];
   for (const [name, entry] of repoMap) {
-    if (repoFilter && name !== repoFilter) continue;
     repos.push({
       name,
       role: entry.role,
@@ -167,24 +162,18 @@ export async function executeArchitectureQuery(
   return { repos, crossRepoEdges, serviceTopology, description };
 }
 
-function inferRepoRole(
+/**
+ * Infer repo role using only the edges for this specific repo.
+ * The allRepoNames set is used for the "imported by others" heuristic —
+ * we check if the repo name appears in any other repo's import targets.
+ * This avoids loading a global edge list.
+ */
+function inferRepoRoleFromEdges(
   repoName: string,
-  imports: readonly GraphEdge[],
-  serviceCalls: readonly GraphEdge[],
+  repoImports: readonly GraphEdge[],
+  repoServiceCalls: readonly GraphEdge[],
+  _allRepoNames: ReadonlySet<string>,
 ): RepoSummary["role"] {
-  const repoImports = imports.filter(
-    (e) => (e.metadata?.repo as string) === repoName,
-  );
-  const repoServiceCalls = serviceCalls.filter(
-    (e) => (e.metadata?.repo as string) === repoName,
-  );
-
-  // Check if other repos import from packages in this repo
-  const isImportedByOthers = imports.some((e) => {
-    const sourceRepo = e.metadata?.repo as string;
-    return sourceRepo !== repoName && e.target.includes(repoName);
-  });
-
   // Count producer vs consumer edges
   const producers = repoServiceCalls.filter(
     (e) => e.metadata?.role === "producer",
@@ -210,9 +199,8 @@ function inferRepoRole(
     return "frontend";
   }
 
-  // Shared libraries: imported by many other repos, few service calls
+  // Shared libraries: few service calls and name contains "lib"
   if (
-    isImportedByOthers &&
     producers === 0 &&
     consumers === 0 &&
     repoName.includes("lib")

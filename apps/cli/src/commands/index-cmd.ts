@@ -903,18 +903,25 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
   // Aggregate all per-repo SARIF into a combined latest result
   tracer.startPhase("SARIF Aggregation");
   const allSarifResults: import("@mma/core").SarifResult[] = [];
+  const sarifRepoNames: string[] = [];
   for (const repo of repos) {
+    const repoResults: import("@mma/core").SarifResult[] = [];
     for (const key of ["config", "fault", "deadExports", "arch", "instability", "blastRadius"] as const) {
       const json = await kvStore.get(`sarif:${key}:${repo.name}`);
       if (json) {
         try {
           const results = JSON.parse(json) as import("@mma/core").SarifResult[];
-          allSarifResults.push(...results);
+          repoResults.push(...results);
         } catch {
           log(`    warning: could not parse sarif:${key}:${repo.name}`);
         }
       }
     }
+    if (repoResults.length > 0) {
+      await kvStore.set(`sarif:repo:${repo.name}`, JSON.stringify(repoResults));
+      sarifRepoNames.push(repo.name);
+    }
+    allSarifResults.push(...repoResults);
   }
   // Compare against previous baseline for incremental adoption
   // (must run even when allSarifResults is empty to track "absent" results)
@@ -954,6 +961,13 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     await kvStore.set("sarif:latest", JSON.stringify(sarifLog));
     log(`  Aggregated ${finalResults.length} SARIF results into sarif:latest`);
   }
+
+  // Write per-repo index for decomposed reads (always, even when empty)
+  await kvStore.set("sarif:latest:index", JSON.stringify({
+    repos: sarifRepoNames,
+    totalResults: finalResults.length,
+    timestamp: new Date().toISOString(),
+  }));
 
   tracer.record("sarifResults", allSarifResults.length);
   tracer.endPhase();

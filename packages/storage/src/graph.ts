@@ -14,11 +14,17 @@ export interface TraversalOptions {
   readonly repo?: string;
 }
 
+export interface EdgeQueryOptions {
+  readonly limit?: number;
+}
+
 export interface GraphStore {
   addEdges(edges: readonly GraphEdge[]): Promise<void>;
   getEdgesFrom(source: string, repo?: string): Promise<GraphEdge[]>;
   getEdgesTo(target: string, repo?: string): Promise<GraphEdge[]>;
-  getEdgesByKind(kind: EdgeKind, repo?: string): Promise<GraphEdge[]>;
+  getEdgesByKind(kind: EdgeKind, repo?: string, options?: EdgeQueryOptions): Promise<GraphEdge[]>;
+  /** Aggregate edge counts grouped by repo for a given kind, without loading edges into memory. */
+  getEdgeCountsByKindAndRepo(kind: EdgeKind): Promise<Map<string, number>>;
   traverseBFS(start: string, options: number | TraversalOptions): Promise<GraphEdge[]>;
   clear(repo?: string): Promise<void>;
   close(): Promise<void>;
@@ -51,10 +57,21 @@ export class InMemoryGraphStore implements GraphStore {
     );
   }
 
-  async getEdgesByKind(kind: EdgeKind, repo?: string): Promise<GraphEdge[]> {
-    return this.edges.filter((e) =>
+  async getEdgesByKind(kind: EdgeKind, repo?: string, options?: EdgeQueryOptions): Promise<GraphEdge[]> {
+    const filtered = this.edges.filter((e) =>
       e.kind === kind && (!repo || e.metadata?.["repo"] === repo),
     );
+    return options?.limit ? filtered.slice(0, options.limit) : filtered;
+  }
+
+  async getEdgeCountsByKindAndRepo(kind: EdgeKind): Promise<Map<string, number>> {
+    const counts = new Map<string, number>();
+    for (const e of this.edges) {
+      if (e.kind !== kind) continue;
+      const repo = (e.metadata?.["repo"] as string) ?? "unknown";
+      counts.set(repo, (counts.get(repo) ?? 0) + 1);
+    }
+    return counts;
   }
 
   async traverseBFS(start: string, options: number | TraversalOptions): Promise<GraphEdge[]> {

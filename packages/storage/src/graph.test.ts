@@ -87,6 +87,68 @@ describe("InMemoryGraphStore", () => {
     });
   });
 
+  describe("getEdgesByKind with limit", () => {
+    it("returns all edges when no limit", async () => {
+      await store.addEdges([
+        edge("a", "b", "imports", "r1"),
+        edge("c", "d", "imports", "r1"),
+        edge("e", "f", "imports", "r1"),
+      ]);
+
+      const result = await store.getEdgesByKind("imports", undefined, {});
+      expect(result).toHaveLength(3);
+    });
+
+    it("respects limit parameter", async () => {
+      await store.addEdges([
+        edge("a", "b", "imports", "r1"),
+        edge("c", "d", "imports", "r1"),
+        edge("e", "f", "imports", "r1"),
+      ]);
+
+      const result = await store.getEdgesByKind("imports", undefined, { limit: 2 });
+      expect(result).toHaveLength(2);
+    });
+
+    it("combines repo filter with limit", async () => {
+      await store.addEdges([
+        edge("a", "b", "imports", "r1"),
+        edge("c", "d", "imports", "r1"),
+        edge("e", "f", "imports", "r2"),
+      ]);
+
+      const result = await store.getEdgesByKind("imports", "r1", { limit: 1 });
+      expect(result).toHaveLength(1);
+    });
+  });
+
+  describe("getEdgeCountsByKindAndRepo", () => {
+    it("returns counts grouped by repo", async () => {
+      await store.addEdges([
+        edge("a", "b", "imports", "r1"),
+        edge("c", "d", "imports", "r1"),
+        edge("e", "f", "imports", "r2"),
+        edge("g", "h", "calls", "r1"),
+      ]);
+
+      const counts = await store.getEdgeCountsByKindAndRepo("imports");
+      expect(counts.get("r1")).toBe(2);
+      expect(counts.get("r2")).toBe(1);
+    });
+
+    it("returns empty map when no edges of kind", async () => {
+      await store.addEdges([edge("a", "b", "calls", "r1")]);
+      const counts = await store.getEdgeCountsByKindAndRepo("imports");
+      expect(counts.size).toBe(0);
+    });
+
+    it("uses 'unknown' for edges without repo metadata", async () => {
+      await store.addEdges([{ source: "a", target: "b", kind: "imports" as any }]);
+      const counts = await store.getEdgeCountsByKindAndRepo("imports");
+      expect(counts.get("unknown")).toBe(1);
+    });
+  });
+
   describe("traverseBFS", () => {
     it("traverses a linear chain", async () => {
       await store.addEdges([

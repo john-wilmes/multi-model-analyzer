@@ -7,7 +7,7 @@
 
 import type Database from "better-sqlite3";
 import type { GraphEdge, EdgeKind } from "@mma/core";
-import type { GraphStore, TraversalOptions } from "./graph.js";
+import type { GraphStore, TraversalOptions, EdgeQueryOptions } from "./graph.js";
 
 export class SqliteGraphStore implements GraphStore {
   private readonly stmtInsert: Database.Statement;
@@ -17,6 +17,9 @@ export class SqliteGraphStore implements GraphStore {
   private readonly stmtByTargetAndRepo: Database.Statement;
   private readonly stmtByKind: Database.Statement;
   private readonly stmtByKindAndRepo: Database.Statement;
+  private readonly stmtByKindLimited: Database.Statement;
+  private readonly stmtByKindAndRepoLimited: Database.Statement;
+  private readonly stmtCountByKindAndRepo: Database.Statement;
   private readonly stmtClearAll: Database.Statement;
   private readonly stmtClearRepo: Database.Statement;
   private readonly stmtBfsNoRepo: Database.Statement;
@@ -46,6 +49,15 @@ export class SqliteGraphStore implements GraphStore {
     );
     this.stmtByKindAndRepo = db.prepare(
       "SELECT source, target, kind, metadata FROM edges WHERE kind = ? AND json_extract(metadata, '$.repo') = ?",
+    );
+    this.stmtByKindLimited = db.prepare(
+      "SELECT source, target, kind, metadata FROM edges WHERE kind = ? LIMIT ?",
+    );
+    this.stmtByKindAndRepoLimited = db.prepare(
+      "SELECT source, target, kind, metadata FROM edges WHERE kind = ? AND json_extract(metadata, '$.repo') = ? LIMIT ?",
+    );
+    this.stmtCountByKindAndRepo = db.prepare(
+      "SELECT json_extract(metadata, '$.repo') as repo, COUNT(*) as cnt FROM edges WHERE kind = ? GROUP BY json_extract(metadata, '$.repo')",
     );
     this.stmtClearAll = db.prepare("DELETE FROM edges");
     this.stmtClearRepo = db.prepare(
@@ -117,11 +129,27 @@ export class SqliteGraphStore implements GraphStore {
     return rows.map(toGraphEdge);
   }
 
-  async getEdgesByKind(kind: EdgeKind, repo?: string): Promise<GraphEdge[]> {
-    const rows = repo
-      ? this.stmtByKindAndRepo.all(kind, repo) as RawEdgeRow[]
-      : this.stmtByKind.all(kind) as RawEdgeRow[];
+  async getEdgesByKind(kind: EdgeKind, repo?: string, options?: EdgeQueryOptions): Promise<GraphEdge[]> {
+    let rows: RawEdgeRow[];
+    if (options?.limit) {
+      rows = repo
+        ? this.stmtByKindAndRepoLimited.all(kind, repo, options.limit) as RawEdgeRow[]
+        : this.stmtByKindLimited.all(kind, options.limit) as RawEdgeRow[];
+    } else {
+      rows = repo
+        ? this.stmtByKindAndRepo.all(kind, repo) as RawEdgeRow[]
+        : this.stmtByKind.all(kind) as RawEdgeRow[];
+    }
     return rows.map(toGraphEdge);
+  }
+
+  async getEdgeCountsByKindAndRepo(kind: EdgeKind): Promise<Map<string, number>> {
+    const rows = this.stmtCountByKindAndRepo.all(kind) as Array<{ repo: string | null; cnt: number }>;
+    const counts = new Map<string, number>();
+    for (const row of rows) {
+      counts.set(row.repo ?? "unknown", row.cnt);
+    }
+    return counts;
   }
 
   async traverseBFS(start: string, options: number | TraversalOptions): Promise<GraphEdge[]> {

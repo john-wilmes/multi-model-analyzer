@@ -1,4 +1,4 @@
-export type { GraphStore, GraphStoreOptions, TraversalOptions } from "./graph.js";
+export type { GraphStore, GraphStoreOptions, TraversalOptions, EdgeQueryOptions } from "./graph.js";
 export { InMemoryGraphStore } from "./graph.js";
 
 export type { SearchDocument, SearchResult, SearchStore } from "./search.js";
@@ -12,3 +12,6 @@ export { SqliteSearchStore } from "./sqlite-search.js";
 export { SqliteKVStore } from "./sqlite-kv.js";
 export type { SqliteStores, SqliteStoreOptions } from "./sqlite-common.js";
 export { createSqliteStores } from "./sqlite-common.js";
+
+export { getSarifResultsForRepo, getSarifResultsPaginated } from "./sarif-helpers.js";
+export type { SarifLatestIndex, PaginatedSarifResults } from "./sarif-helpers.js";

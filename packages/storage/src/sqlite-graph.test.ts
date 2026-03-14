@@ -128,6 +128,53 @@ describe("SqliteGraphStore", () => {
     });
   });
 
+  describe("getEdgesByKind with limit", () => {
+    it("respects limit parameter", async () => {
+      await graphStore.addEdges([
+        edge("a", "b", "imports", "r1"),
+        edge("c", "d", "imports", "r1"),
+        edge("e", "f", "imports", "r1"),
+      ]);
+
+      const result = await graphStore.getEdgesByKind("imports", undefined, { limit: 2 });
+      expect(result).toHaveLength(2);
+    });
+
+    it("combines repo filter with limit", async () => {
+      await graphStore.addEdges([
+        edge("a", "b", "imports", "r1"),
+        edge("c", "d", "imports", "r1"),
+        edge("e", "f", "imports", "r2"),
+      ]);
+
+      const result = await graphStore.getEdgesByKind("imports", "r1", { limit: 1 });
+      expect(result).toHaveLength(1);
+    });
+  });
+
+  describe("getEdgeCountsByKindAndRepo", () => {
+    it("returns counts grouped by repo via SQL aggregation", async () => {
+      await graphStore.addEdges([
+        edge("a", "b", "imports", "r1"),
+        edge("c", "d", "imports", "r1"),
+        edge("e", "f", "imports", "r2"),
+        edge("g", "h", "calls", "r1"),
+      ]);
+
+      const counts = await graphStore.getEdgeCountsByKindAndRepo("imports");
+      expect(counts.get("r1")).toBe(2);
+      expect(counts.get("r2")).toBe(1);
+      // calls should not be counted
+      expect(counts.has("r1")).toBe(true);
+    });
+
+    it("returns empty map for non-existent kind", async () => {
+      await graphStore.addEdges([edge("a", "b", "calls", "r1")]);
+      const counts = await graphStore.getEdgeCountsByKindAndRepo("imports");
+      expect(counts.size).toBe(0);
+    });
+  });
+
   describe("traverseBFS", () => {
     it("traverses a linear chain via recursive CTE", async () => {
       await graphStore.addEdges([

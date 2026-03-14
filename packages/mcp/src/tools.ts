@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { GraphStore, SearchStore, KVStore } from "@mma/storage";
+import { getSarifResultsPaginated } from "@mma/storage";
 import type { DetectedPattern, FaultTree, SarifLog } from "@mma/core";
 import {
   routeQuery,
@@ -144,37 +145,34 @@ export function registerTools(server: McpServer, stores: Stores): void {
       offset: z.number().optional().describe("Number of results to skip for pagination (default 0)"),
     },
   }, async ({ query, repo, level, limit, offset }) => {
-    const sarifJson = await kvStore.get("sarif:latest");
-    if (!sarifJson) {
-      return jsonResult({ error: "No analysis results available. Run 'mma index' first.", results: [] });
-    }
+    // Use per-repo SARIF keys when available (avoids parsing monolithic blob)
+    const { results: allResults, total } = await getSarifResultsPaginated(kvStore, {
+      repo,
+      level,
+      limit: 10000, // Get all for keyword filtering, then paginate
+      offset: 0,
+    });
 
-    let sarif: SarifLog;
-    try {
-      sarif = JSON.parse(sarifJson) as SarifLog;
-    } catch {
-      return jsonResult({ error: "Stored SARIF data is corrupted. Re-run 'mma index' to regenerate.", results: [] });
+    if (total === 0 && !repo && !level) {
+      // Check if any data exists at all
+      const hasData = await kvStore.has("sarif:latest") || await kvStore.has("sarif:latest:index");
+      if (!hasData) {
+        return jsonResult({ error: "No analysis results available. Run 'mma index' first.", results: [] });
+      }
     }
 
     const keywords = query
       ? query.toLowerCase().split(/\s+/).filter((w) => w.length > 1)
       : [];
 
-    const matching = sarif.runs.flatMap((r) =>
-      r.results.filter((res) => {
-        if (repo) {
-          const locRepo = res.locations?.[0]?.logicalLocations?.[0]?.properties?.["repo"];
-          if (locRepo !== repo) return false;
-        }
-        if (level && res.level !== level) return false;
-        if (keywords.length > 0) {
-          const text = `${res.ruleId} ${res.message.text}`.toLowerCase();
-          const hits = keywords.filter((kw) => text.includes(kw)).length;
-          if (hits < Math.max(1, Math.ceil(keywords.length / 2))) return false;
-        }
-        return true;
-      }),
-    );
+    let matching = allResults;
+    if (keywords.length > 0) {
+      matching = allResults.filter((res) => {
+        const text = `${res.ruleId} ${res.message.text}`.toLowerCase();
+        const hits = keywords.filter((kw) => text.includes(kw)).length;
+        return hits >= Math.max(1, Math.ceil(keywords.length / 2));
+      });
+    }
 
     const page = paginated(matching, offset ?? 0, limit ?? 50);
     const links = repo

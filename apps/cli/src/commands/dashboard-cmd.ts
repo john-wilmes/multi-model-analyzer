@@ -13,10 +13,9 @@ import { join, extname, resolve } from "node:path";
 import type {
   ModuleMetrics,
   RepoMetricsSummary,
-  SarifLog,
-  SarifResult,
 } from "@mma/core";
 import type { KVStore, GraphStore } from "@mma/storage";
+import { getSarifResultsPaginated } from "@mma/storage";
 import { practicesCommand } from "./practices-cmd.js";
 
 // ---------------------------------------------------------------------------
@@ -192,57 +191,48 @@ async function handleApi(
   // GET /api/findings?repo=X&level=Y&rule=Z&limit=50&offset=0
   // GET /api/findings/:ruleId
   if (path === "/api/findings" || path.startsWith("/api/findings/")) {
-    const sarifJson = await kvStore.get("sarif:latest");
-    let allResults: SarifResult[] = [];
-    if (sarifJson) {
-      try {
-        const log = JSON.parse(sarifJson) as SarifLog;
-        allResults = [...(log.runs[0]?.results ?? [])];
-      } catch { /* skip */ }
-    }
-
-    // Filter by ruleId from path segment
     const ruleIdFromPath = path.startsWith("/api/findings/")
       ? decodeURIComponent(path.slice("/api/findings/".length))
       : undefined;
 
-    let filtered = allResults;
-    if (ruleIdFromPath) {
-      filtered = filtered.filter((r) => r.ruleId === ruleIdFromPath);
-    }
-    if (query.repo) {
-      filtered = filtered.filter((r) =>
-        r.locations?.some((loc) =>
-          loc.logicalLocations?.some(
-            (ll) =>
-              ll.properties?.repo === query.repo ||
-              ll.fullyQualifiedName?.startsWith(query.repo + "/"),
-          ),
-        ),
-      );
-    }
-    if (query.level) {
-      filtered = filtered.filter((r) => r.level === query.level);
-    }
-    if (query.rule && !ruleIdFromPath) {
-      filtered = filtered.filter((r) => r.ruleId === query.rule);
-    }
-
-    const total = filtered.length;
     const limit = Math.min(parseInt(query.limit ?? "50", 10) || 50, 500);
     const offset = parseInt(query.offset ?? "0", 10) || 0;
-    const results = filtered.slice(offset, offset + limit);
 
-    return sendJson(res, { results, total });
+    // Use per-repo SARIF keys when repo filter is present (avoids parsing monolithic blob)
+    const { results: paginated, total: rawTotal } = await getSarifResultsPaginated(kvStore, {
+      repo: query.repo,
+      ruleId: ruleIdFromPath ?? query.rule,
+      level: query.level,
+      limit,
+      offset,
+    });
+
+    // Additional fullyQualifiedName filter for backward compat
+    let results = paginated;
+    if (query.repo && !ruleIdFromPath) {
+      results = results.filter((r) => {
+        const locs = r.locations as Array<{ logicalLocations?: Array<{ properties?: Record<string, unknown>; fullyQualifiedName?: string }> }> | undefined;
+        return !locs || locs.some((loc) =>
+          loc.logicalLocations?.some(
+            (ll) =>
+              ll.properties?.["repo"] === query.repo ||
+              ll.fullyQualifiedName?.startsWith(query.repo + "/"),
+          ),
+        );
+      });
+    }
+
+    return sendJson(res, { results, total: rawTotal });
   }
 
-  // GET /api/graph/:repo?kind=imports
+  // GET /api/graph/:repo?kind=imports&limit=1000
   const graphMatch = path.match(/^\/api\/graph\/(.+)$/);
   if (graphMatch) {
     const repo = decodeURIComponent(graphMatch[1]!);
     const kind = query.kind ?? "imports";
-    const edges = await graphStore.getEdgesByKind(kind as Parameters<typeof graphStore.getEdgesByKind>[0], repo);
-    return sendJson(res, { edges });
+    const limit = Math.min(Math.max(parseInt(query.limit ?? "1000", 10) || 1000, 1), 10000);
+    const edges = await graphStore.getEdgesByKind(kind as Parameters<typeof graphStore.getEdgesByKind>[0], repo, { limit });
+    return sendJson(res, { edges, limit });
   }
 
   // GET /api/dependencies/:module?depth=3
