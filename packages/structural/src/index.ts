@@ -9,6 +9,7 @@ export type { CallGraphOptions, TsNode } from "./callgraph.js";
 
 export {
   extractDependencyGraph,
+  findCircularDependencies,
   findDependentsOf,
   findDependenciesOf,
   resolveImportSpecifier,

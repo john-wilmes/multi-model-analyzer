@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { findDependentsOf, findDependenciesOf, resolveImportSpecifier } from "./dependencies.js";
+import { findDependentsOf, findDependenciesOf, findCircularDependencies, resolveImportSpecifier } from "./dependencies.js";
 import type { DependencyGraph } from "@mma/core";
 
 function makeGraph(
@@ -170,6 +170,87 @@ describe("findDependentsOf / findDependenciesOf edge cases", () => {
     const graph = makeGraph([]);
     expect(findDependentsOf(graph, "any.ts")).toEqual([]);
     expect(findDependenciesOf(graph, "any.ts")).toEqual([]);
+  });
+});
+
+function makeEdges(
+  pairs: Array<[string, string]>,
+): Array<{ source: string; target: string; kind: "imports"; metadata: Record<string, string> }> {
+  return pairs.map(([s, t]) => ({ source: s, target: t, kind: "imports" as const, metadata: {} }));
+}
+
+describe("findCircularDependencies", () => {
+  it("detects a simple two-node cycle", () => {
+    const cycles = findCircularDependencies(makeEdges([["a", "b"], ["b", "a"]]));
+    expect(cycles.length).toBeGreaterThanOrEqual(1);
+    // At least one cycle should contain both a and b
+    const hasCycle = cycles.some((c) => c.includes("a") && c.includes("b"));
+    expect(hasCycle).toBe(true);
+  });
+
+  it("detects a three-node cycle", () => {
+    const cycles = findCircularDependencies(makeEdges([["a", "b"], ["b", "c"], ["c", "a"]]));
+    expect(cycles.length).toBeGreaterThanOrEqual(1);
+    const hasCycle = cycles.some((c) => c.length === 3 && c.includes("a") && c.includes("b") && c.includes("c"));
+    expect(hasCycle).toBe(true);
+  });
+
+  it("returns empty for acyclic graph", () => {
+    const cycles = findCircularDependencies(makeEdges([["a", "b"], ["b", "c"], ["a", "c"]]));
+    expect(cycles).toEqual([]);
+  });
+
+  it("detects self-loop", () => {
+    const cycles = findCircularDependencies(makeEdges([["a", "a"]]));
+    expect(cycles.length).toBeGreaterThanOrEqual(1);
+    expect(cycles.some((c) => c.includes("a"))).toBe(true);
+  });
+
+  it("detects cycles in disconnected components", () => {
+    // Component 1: a -> b -> a
+    // Component 2: c -> d -> c
+    // No edges between components
+    const cycles = findCircularDependencies(makeEdges([
+      ["a", "b"], ["b", "a"],
+      ["c", "d"], ["d", "c"],
+    ]));
+    expect(cycles.length).toBeGreaterThanOrEqual(2);
+    const hasAB = cycles.some((c) => c.includes("a") && c.includes("b"));
+    const hasCD = cycles.some((c) => c.includes("c") && c.includes("d"));
+    expect(hasAB).toBe(true);
+    expect(hasCD).toBe(true);
+  });
+
+  it("detects cycle reachable through non-cyclic prefix", () => {
+    // x -> a -> b -> a (x is not in the cycle, but leads to it)
+    const cycles = findCircularDependencies(makeEdges([["x", "a"], ["a", "b"], ["b", "a"]]));
+    expect(cycles.length).toBeGreaterThanOrEqual(1);
+    const hasCycle = cycles.some((c) => c.includes("a") && c.includes("b") && !c.includes("x"));
+    expect(hasCycle).toBe(true);
+  });
+
+  it("detects multiple cycles sharing nodes", () => {
+    // Cycle 1: a -> b -> c -> a
+    // Cycle 2: b -> c -> d -> b
+    const cycles = findCircularDependencies(makeEdges([
+      ["a", "b"], ["b", "c"], ["c", "a"], ["c", "d"], ["d", "b"],
+    ]));
+    expect(cycles.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("handles empty edge list", () => {
+    expect(findCircularDependencies([])).toEqual([]);
+  });
+
+  it("finds cycle when cross-component edge connects to visited node", () => {
+    // A -> C (cross-component), B -> C -> B (cycle in component 2)
+    // A is processed first, visits C. Then B starts DFS and should still find B->C->B.
+    const cycles = findCircularDependencies(makeEdges([
+      ["a", "c"], ["b", "c"], ["c", "b"],
+    ]));
+    expect(cycles.length).toBeGreaterThanOrEqual(1);
+    const hasCycle = cycles.some((c) => c.includes("b") && c.includes("c"));
+    expect(hasCycle).toBe(true);
   });
 });
 

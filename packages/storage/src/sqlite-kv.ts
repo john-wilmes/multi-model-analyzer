@@ -8,6 +8,14 @@
 import type Database from "better-sqlite3";
 import type { KVStore } from "./kv.js";
 
+/** Compute the exclusive upper bound for a prefix range scan, handling surrogate pairs. */
+function prefixUpperBound(prefix: string): string {
+  const chars = Array.from(prefix);
+  const last = chars[chars.length - 1]!;
+  chars[chars.length - 1] = String.fromCodePoint(last.codePointAt(0)! + 1);
+  return chars.join("");
+}
+
 export class SqliteKVStore implements KVStore {
   private readonly db: Database.Database;
   private readonly stmtGet: Database.Statement;
@@ -65,7 +73,7 @@ export class SqliteKVStore implements KVStore {
       const result = this.stmtClear.run();
       return result.changes;
     }
-    const upper = prefix.slice(0, -1) + String.fromCharCode(prefix.charCodeAt(prefix.length - 1) + 1);
+    const upper = prefixUpperBound(prefix);
     const result = this.stmtDeleteByPrefix.run(prefix, upper);
     return result.changes;
   }
@@ -76,7 +84,7 @@ export class SqliteKVStore implements KVStore {
       return rows.map((r) => r.key);
     }
     // Range scan: prefix <= key < prefix with last char incremented
-    const upper = prefix.slice(0, -1) + String.fromCharCode(prefix.charCodeAt(prefix.length - 1) + 1);
+    const upper = prefixUpperBound(prefix);
     const rows = this.stmtKeysPrefix.all(prefix, upper) as Array<{
       key: string;
     }>;
@@ -84,7 +92,7 @@ export class SqliteKVStore implements KVStore {
   }
 
   async getByPrefix(prefix: string): Promise<Map<string, string>> {
-    const upper = prefix.slice(0, -1) + String.fromCharCode(prefix.charCodeAt(prefix.length - 1) + 1);
+    const upper = prefixUpperBound(prefix);
     const rows = this.stmtGetByPrefix.all(prefix, upper) as Array<{ key: string; value: string }>;
     const result = new Map<string, string>();
     for (const row of rows) {

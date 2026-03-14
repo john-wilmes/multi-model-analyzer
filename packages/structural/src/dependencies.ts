@@ -194,7 +194,7 @@ function resolvePackageImport(
   return probeExtensions(base, knownPaths) ?? undefined;
 }
 
-function findCircularDependencies(edges: readonly GraphEdge[]): string[][] {
+export function findCircularDependencies(edges: readonly GraphEdge[]): string[][] {
   const adjacency = new Map<string, string[]>();
   for (const edge of edges) {
     const targets = adjacency.get(edge.source) ?? [];

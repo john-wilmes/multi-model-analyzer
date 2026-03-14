@@ -49,6 +49,9 @@ function inferConstraints(
   }
 
   // Strategy 2: flags in modules that depend on each other
+  // Index edges for O(1) lookup instead of O(e) linear scan per pair
+  const edgeSet = new Set(graph.edges.map((e) => `${e.source}\0${e.target}`));
+
   for (const flag of flags) {
     for (const otherFlag of flags) {
       if (flag.name === otherFlag.name) continue;
@@ -58,10 +61,7 @@ function inferConstraints(
 
       for (const fm of flagModules) {
         for (const om of otherModules) {
-          const hasDep = graph.edges.some(
-            (e) => e.source === fm && e.target === om,
-          );
-          if (hasDep) {
+          if (edgeSet.has(`${fm}\0${om}`)) {
             constraints.push({
               kind: "requires",
               flags: [flag.name, otherFlag.name],

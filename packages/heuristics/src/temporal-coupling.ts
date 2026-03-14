@@ -66,16 +66,16 @@ export function detectTemporalCoupling(
       commitsSkipped++;
       continue;
     }
-    if (commit.files.length < 2) {
-      commitsAnalyzed++;
-      continue;
-    }
 
     commitsAnalyzed++;
 
-    // Count individual file appearances
+    // Count ALL file appearances (including single-file commits)
     for (const file of commit.files) {
       fileCommitCount.set(file, (fileCommitCount.get(file) ?? 0) + 1);
+    }
+
+    if (commit.files.length < 2) {
+      continue;
     }
 
     // Count all pairs in this commit using inline comparison for canonical key order

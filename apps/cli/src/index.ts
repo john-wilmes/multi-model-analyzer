@@ -425,8 +425,6 @@ async function main(): Promise<void> {
     return;
   }
 
-  mkdirSync(dirname(dbPath), { recursive: true });
-
   const configPath = resolve(values.config);
   let config: CliConfig;
   try {
@@ -456,6 +454,9 @@ async function main(): Promise<void> {
     }
   }
 
+  if (dbPath !== ":memory:") {
+    mkdirSync(dirname(dbPath), { recursive: true });
+  }
   const stores: SqliteStores = createSqliteStores({ dbPath });
   const { graphStore, searchStore, kvStore } = stores;
 

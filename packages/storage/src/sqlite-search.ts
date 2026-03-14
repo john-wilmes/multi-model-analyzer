@@ -102,7 +102,7 @@ export class SqliteSearchStore implements SearchStore {
     return rows.map((row) => ({
       id: row.id,
       content: row.content,
-      metadata: JSON.parse(row.metadata) as Record<string, string>,
+      metadata: (() => { try { return JSON.parse(row.metadata) as Record<string, string>; } catch { return {} as Record<string, string>; } })(),
       score: -row.score, // bm25() returns negative; negate for positive
     }));
   }

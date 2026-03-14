@@ -197,10 +197,18 @@ interface RawEdgeRow {
 }
 
 function toGraphEdge(row: RawEdgeRow): GraphEdge {
+  let metadata: Record<string, unknown> | undefined;
+  if (row.metadata) {
+    try {
+      metadata = JSON.parse(row.metadata) as Record<string, unknown>;
+    } catch {
+      metadata = {};
+    }
+  }
   return {
     source: row.source,
     target: row.target,
     kind: row.kind as EdgeKind,
-    ...(row.metadata ? { metadata: JSON.parse(row.metadata) as Record<string, unknown> } : {}),
+    ...(metadata ? { metadata } : {}),
   };
 }
