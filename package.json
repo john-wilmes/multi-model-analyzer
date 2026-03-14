@@ -7,6 +7,7 @@
   },
   "files": [
     "apps/cli/dist",
+    "apps/dashboard/dist",
     "packages/*/dist",
     "packages/models/*/dist"
   ],
@@ -27,10 +28,12 @@
     "packages/diagnostics",
     "packages/query",
     "packages/mcp",
-    "apps/cli"
+    "apps/cli",
+    "apps/dashboard"
   ],
   "scripts": {
     "build": "tsc --build",
+    "build:dashboard": "npm run build -w apps/dashboard",
     "type-check": "tsc --build --noEmit",
     "lint": "eslint packages/ apps/",
     "test": "vitest run",

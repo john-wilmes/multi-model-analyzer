@@ -27,6 +27,7 @@ import { exportCommand } from "./commands/export-cmd.js";
 import { mergeCommand } from "./commands/merge-cmd.js";
 import { importCommand } from "./commands/import-cmd.js";
 import { validateCommand } from "./commands/validate-cmd.js";
+import { compressCommand, dashboardCommand, maybeDecompress } from "./commands/dashboard-cmd.js";
 import { printJson, printTable, printSarif, validateFormat, validateReportFormat } from "./formatter.js";
 import { parseWatchInterval, watchLoop } from "./watch.js";
 
@@ -62,6 +63,7 @@ async function main(): Promise<void> {
       baseline: { type: "string" },
       "api-key": { type: "string" },
       "max-api-calls": { type: "string" },
+      port: { type: "string", default: "3000" },
     },
   });
 
@@ -378,6 +380,51 @@ async function main(): Promise<void> {
     return;
   }
 
+  // compress command -- gzip data/mma.db -> data/mma.db.gz
+  if (command === "compress") {
+    await compressCommand(dbPath);
+    return;
+  }
+
+  // dashboard command -- serve local web UI over the DB
+  if (command === "dashboard") {
+    await maybeDecompress(dbPath);
+    if (!existsSync(dbPath)) {
+      console.error(`Database not found: ${dbPath}`);
+      console.error("Run 'mma index' first to create the analysis database.");
+      process.exit(1);
+    }
+    const port = parseInt(values.port ?? "3000", 10);
+    if (isNaN(port) || port < 1 || port > 65535) {
+      console.error(`Invalid --port: "${values.port}". Must be 1–65535.`);
+      process.exit(1);
+    }
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- path.resolve/dirname are pure functions
+    const { resolve, dirname } = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    const staticDir = resolve(
+      dirname(fileURLToPath(import.meta.url)),
+      "..",
+      "..",
+      "..",
+      "apps",
+      "dashboard",
+      "dist",
+    );
+    const stores = createSqliteStores({ dbPath, readonly: true });
+    try {
+      await dashboardCommand({
+        kvStore: stores.kvStore,
+        graphStore: stores.graphStore,
+        port,
+        staticDir,
+      });
+    } finally {
+      stores.close();
+    }
+    return;
+  }
+
   mkdirSync(dirname(dbPath), { recursive: true });
 
   const configPath = resolve(values.config);
@@ -554,6 +601,8 @@ Usage:
                                                 Generate anonymized report (default: json)
   mma practices [--db path] [--format json|table|markdown] [-o file]
                                                 Best-practices recommendations (default: markdown)
+  mma compress [--db path]                      Gzip the analysis database
+  mma dashboard [--db path] [--port 3000]       Serve local web dashboard
 
 Options:
   -c, --config    Path to config file (default: mma.config.json)
@@ -572,6 +621,7 @@ Options:
   --mirrors       Path to bare repo mirrors (for fault validation)
   --sample-size   Findings to sample per check (default: 50)
   --seed          PRNG seed for reproducibility (default: 42)
+  --port          Port for dashboard server (default: 3000)
   -h, --help      Show this help message
   --version       Show version number
 `);

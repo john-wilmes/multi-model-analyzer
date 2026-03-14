@@ -20,6 +20,7 @@ export interface PracticesOptions {
   readonly format: ReportFormat;
   readonly output?: string;
   readonly topN?: number;
+  readonly silent?: boolean;
 }
 
 export interface PracticesReport {
@@ -815,7 +816,7 @@ export async function practicesCommand(
     const { writeFile } = await import("node:fs/promises");
     await writeFile(output, rendered + "\n", "utf-8");
     console.error(`Wrote practices report to ${output}`);
-  } else {
+  } else if (!options.silent) {
     console.log(rendered);
   }
 

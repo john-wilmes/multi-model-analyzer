@@ -1,11 +1,15 @@
 node_modules/
 dist/
+!apps/dashboard/dist/
 *.tsbuildinfo
 .env
 .env.local
 
-# Storage data (POC local stores)
-data/
+# Storage data (uncompressed DB ignored, compressed .gz tracked for distribution)
+data/*.db
+data/*.db-journal
+data/*.db-wal
+!data/*.db.gz
 
 # Config with local paths
 mma.config*.json
