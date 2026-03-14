@@ -9,7 +9,7 @@ import { pipeline } from "node:stream/promises";
 import { exec } from "node:child_process";
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { join, extname } from "node:path";
+import { join, extname, resolve } from "node:path";
 import type {
   ModuleMetrics,
   RepoMetricsSummary,
@@ -118,7 +118,13 @@ async function serveStatic(
   let urlPath = req.url?.split("?")[0] ?? "/";
   if (urlPath === "/") urlPath = "/index.html";
 
-  const filePath = join(staticDir, urlPath);
+  const filePath = resolve(join(staticDir, urlPath));
+  const resolvedStaticDir = resolve(staticDir);
+  if (!filePath.startsWith(resolvedStaticDir + "/")) {
+    res.writeHead(404, { "Content-Type": "text/plain" });
+    res.end("Not found");
+    return;
+  }
 
   try {
     const data = await readFile(filePath);

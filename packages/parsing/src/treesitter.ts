@@ -19,24 +19,30 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const wasmDir = join(__dirname, "..", "wasm");
 
 let initialized = false;
+let initPromise: Promise<void> | undefined;
 let tsGrammar: Parser.Language;
 let tsxGrammar: Parser.Language;
 let jsGrammar: Parser.Language;
 
 export async function initTreeSitter(): Promise<void> {
   if (initialized) return;
+  if (initPromise) return initPromise;
 
-  await Parser.init({
-    locateFile(scriptName: string) {
-      return join(wasmDir, scriptName);
-    },
-  });
+  initPromise = (async () => {
+    await Parser.init({
+      locateFile(scriptName: string) {
+        return join(wasmDir, scriptName);
+      },
+    });
 
-  tsGrammar = await Parser.Language.load(join(wasmDir, "tree-sitter-typescript.wasm"));
-  tsxGrammar = await Parser.Language.load(join(wasmDir, "tree-sitter-tsx.wasm"));
-  jsGrammar = await Parser.Language.load(join(wasmDir, "tree-sitter-javascript.wasm"));
+    tsGrammar = await Parser.Language.load(join(wasmDir, "tree-sitter-typescript.wasm"));
+    tsxGrammar = await Parser.Language.load(join(wasmDir, "tree-sitter-tsx.wasm"));
+    jsGrammar = await Parser.Language.load(join(wasmDir, "tree-sitter-javascript.wasm"));
 
-  initialized = true;
+    initialized = true;
+  })();
+
+  return initPromise;
 }
 
 export function selectGrammar(filePath: string): Parser.Language {

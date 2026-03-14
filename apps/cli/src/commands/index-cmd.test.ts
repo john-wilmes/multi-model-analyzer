@@ -305,7 +305,7 @@ describe("indexCommand", () => {
     await searchStore.index([
       { id: "src/old.ts", content: "old function foo", metadata: { repo: "repo-a" } },
     ]);
-    await kvStore.set("repo-a:src/old.ts:symbols", "cached-symbols");
+    await kvStore.set("symbols:repo-a:src/old.ts", "cached-symbols");
 
     const changeSet = makeChangeSet({
       repo: "repo-a",
@@ -326,7 +326,7 @@ describe("indexCommand", () => {
     expect(searchResults).toHaveLength(0);
 
     // KV entry cleaned up
-    const kvVal = await kvStore.get("repo-a:src/old.ts:symbols");
+    const kvVal = await kvStore.get("symbols:repo-a:src/old.ts");
     expect(kvVal).toBeUndefined();
   });
 

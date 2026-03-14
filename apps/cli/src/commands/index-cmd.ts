@@ -154,7 +154,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
 
       // Remove KV entries associated with deleted files
       for (const filePath of changeSet.deletedFiles) {
-        await kvStore.deleteByPrefix(`${changeSet.repo}:${filePath}`);
+        await kvStore.deleteByPrefix(`symbols:${changeSet.repo}:${filePath}`);
       }
 
       log(`  Removed stale data for ${changeSet.deletedFiles.length} files`);
