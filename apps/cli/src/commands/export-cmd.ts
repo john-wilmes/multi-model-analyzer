@@ -184,7 +184,7 @@ export async function exportCommand(
       repoCommits.push({ name: repoName, commit: commitByRepo.get(repo) ?? "" });
     }
     const manifest: ExportManifest = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       exportedAt: new Date().toISOString(),
       mode: raw ? "raw" : "anonymized",
       repos: repoCommits,

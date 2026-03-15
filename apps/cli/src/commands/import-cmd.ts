@@ -96,7 +96,7 @@ export async function importCommand(
       );
     }
 
-    if (manifest.schemaVersion > 1) {
+    if (manifest.schemaVersion > 2) {
       throw new Error(
         `Unsupported schema version ${manifest.schemaVersion}. Upgrade MMA.`,
       );

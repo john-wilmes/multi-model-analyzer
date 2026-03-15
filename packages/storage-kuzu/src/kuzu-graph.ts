@@ -1,34 +1,14 @@
 /**
  * Kuzu-backed graph store.
  *
- * Phase 1: flat-edge emulation via a single NODE TABLE (Edge).
- * Kuzu's typed relationship tables require distinct source/target node tables,
- * so we store edges as node rows to keep schema-free flexibility identical to
- * the SQLite adapter.
- *
- * BFS is application-level because Kuzu's recursive traversal syntax only
- * works on typed relationship tables, not flat node tables.
+ * Uses native Kuzu graph schema: Symbol node table + Edge relationship table.
+ * Enables native Cypher recursive traversal for BFS.
  */
 
 import type { GraphEdge, EdgeKind } from "@mma/core";
 import type { GraphStore, TraversalOptions, EdgeQueryOptions } from "@mma/storage";
 import kuzu from "kuzu";
 import { single } from "./kuzu-common.js";
-
-// ---------------------------------------------------------------------------
-// Schema bootstrap
-// ---------------------------------------------------------------------------
-
-const DDL = `
-CREATE NODE TABLE IF NOT EXISTS Edge(
-  id    SERIAL PRIMARY KEY,
-  source   STRING,
-  target   STRING,
-  kind     STRING,
-  metadata STRING,
-  repo     STRING
-)
-`.trim();
 
 // ---------------------------------------------------------------------------
 // Helper
@@ -52,7 +32,7 @@ function toGraphEdge(row: Record<string, unknown>): GraphEdge {
 }
 
 const RETURN_COLS =
-  "e.source AS source, e.target AS target, e.kind AS kind, e.metadata AS metadata";
+  "s.id AS source, t.id AS target, r.kind AS kind, r.metadata AS metadata";
 
 // ---------------------------------------------------------------------------
 // KuzuGraphStore
@@ -62,7 +42,8 @@ export class KuzuGraphStore implements GraphStore {
   private readonly conn: InstanceType<typeof kuzu.Connection>;
 
   // Prepared statements cached at construction time.
-  private readonly stmtInsert: InstanceType<typeof kuzu.PreparedStatement>;
+  private readonly stmtMergeSymbol: InstanceType<typeof kuzu.PreparedStatement>;
+  private readonly stmtInsertEdge: InstanceType<typeof kuzu.PreparedStatement>;
   private readonly stmtBySource: InstanceType<typeof kuzu.PreparedStatement>;
   private readonly stmtBySourceAndRepo: InstanceType<typeof kuzu.PreparedStatement>;
   private readonly stmtByTarget: InstanceType<typeof kuzu.PreparedStatement>;
@@ -76,41 +57,48 @@ export class KuzuGraphStore implements GraphStore {
   constructor(conn: InstanceType<typeof kuzu.Connection>) {
     this.conn = conn;
 
-    // Ensure table exists
-    conn.querySync(DDL);
+    // Schema is owned by initSchema() in kuzu-common.ts — no DDL here.
 
-    this.stmtInsert = conn.prepareSync(
-      `CREATE (e:Edge {source: $s, target: $t, kind: $k, metadata: $m, repo: $r})`,
+    this.stmtMergeSymbol = conn.prepareSync(
+      "MERGE (s:Symbol {id: $id})",
+    );
+
+    this.stmtInsertEdge = conn.prepareSync(
+      "MATCH (s:Symbol {id: $s}), (t:Symbol {id: $t}) " +
+        "CREATE (s)-[:Edge {kind: $k, metadata: $m, repo: $r}]->(t)",
     );
 
     this.stmtBySource = conn.prepareSync(
-      `MATCH (e:Edge) WHERE e.source = $s RETURN ${RETURN_COLS}`,
+      `MATCH (s:Symbol {id: $s})-[r:Edge]->(t:Symbol) RETURN ${RETURN_COLS}`,
     );
     this.stmtBySourceAndRepo = conn.prepareSync(
-      `MATCH (e:Edge) WHERE e.source = $s AND e.repo = $r RETURN ${RETURN_COLS}`,
+      `MATCH (s:Symbol {id: $s})-[r:Edge]->(t:Symbol) WHERE r.repo = $r RETURN ${RETURN_COLS}`,
     );
 
     this.stmtByTarget = conn.prepareSync(
-      `MATCH (e:Edge) WHERE e.target = $t RETURN ${RETURN_COLS}`,
+      `MATCH (s:Symbol)-[r:Edge]->(t:Symbol {id: $t}) RETURN ${RETURN_COLS}`,
     );
     this.stmtByTargetAndRepo = conn.prepareSync(
-      `MATCH (e:Edge) WHERE e.target = $t AND e.repo = $r RETURN ${RETURN_COLS}`,
+      `MATCH (s:Symbol)-[r:Edge]->(t:Symbol {id: $t}) WHERE r.repo = $r RETURN ${RETURN_COLS}`,
     );
 
     this.stmtByKind = conn.prepareSync(
-      `MATCH (e:Edge) WHERE e.kind = $k RETURN ${RETURN_COLS}`,
+      `MATCH (s:Symbol)-[r:Edge]->(t:Symbol) WHERE r.kind = $k RETURN ${RETURN_COLS}`,
     );
     this.stmtByKindAndRepo = conn.prepareSync(
-      `MATCH (e:Edge) WHERE e.kind = $k AND e.repo = $r RETURN ${RETURN_COLS}`,
+      `MATCH (s:Symbol)-[r:Edge]->(t:Symbol) WHERE r.kind = $k AND r.repo = $r RETURN ${RETURN_COLS}`,
     );
 
     this.stmtCountByKindAndRepo = conn.prepareSync(
-      `MATCH (e:Edge) WHERE e.kind = $k RETURN e.repo AS repo, count(e) AS cnt`,
+      "MATCH (s:Symbol)-[r:Edge]->(t:Symbol) WHERE r.kind = $k " +
+        "RETURN r.repo AS repo, count(r) AS cnt",
     );
 
-    this.stmtClearAll = conn.prepareSync(`MATCH (e:Edge) DELETE e`);
+    this.stmtClearAll = conn.prepareSync(
+      "MATCH (s:Symbol) DETACH DELETE s",
+    );
     this.stmtClearRepo = conn.prepareSync(
-      `MATCH (e:Edge) WHERE e.repo = $r DELETE e`,
+      "MATCH (s:Symbol)-[r:Edge]->(t:Symbol) WHERE r.repo = $r DELETE r",
     );
   }
 
@@ -122,12 +110,24 @@ export class KuzuGraphStore implements GraphStore {
     if (edges.length === 0) return;
     this.conn.querySync("BEGIN TRANSACTION");
     try {
+      // Pass 1: MERGE all unique symbol IDs
+      const symbolIds = new Set<string>();
       for (const edge of edges) {
-        const repo = typeof edge.metadata?.["repo"] === "string"
-          ? edge.metadata["repo"]
-          : "";
+        symbolIds.add(edge.source);
+        symbolIds.add(edge.target);
+      }
+      for (const id of symbolIds) {
+        this.conn.executeSync(this.stmtMergeSymbol, { id });
+      }
+
+      // Pass 2: CREATE relationships
+      for (const edge of edges) {
+        const repo =
+          typeof edge.metadata?.["repo"] === "string"
+            ? edge.metadata["repo"]
+            : "";
         const meta = edge.metadata ? JSON.stringify(edge.metadata) : "";
-        this.conn.executeSync(this.stmtInsert, {
+        this.conn.executeSync(this.stmtInsertEdge, {
           s: edge.source,
           t: edge.target,
           k: edge.kind,
@@ -178,8 +178,8 @@ export class KuzuGraphStore implements GraphStore {
       // directly. `limit` is always a number (type-enforced), so this is safe.
       const limitClause = `LIMIT ${options.limit}`;
       const cypher = repo
-        ? `MATCH (e:Edge) WHERE e.kind = $k AND e.repo = $r RETURN ${RETURN_COLS} ${limitClause}`
-        : `MATCH (e:Edge) WHERE e.kind = $k RETURN ${RETURN_COLS} ${limitClause}`;
+        ? `MATCH (s:Symbol)-[r:Edge]->(t:Symbol) WHERE r.kind = $k AND r.repo = $r RETURN ${RETURN_COLS} ${limitClause}`
+        : `MATCH (s:Symbol)-[r:Edge]->(t:Symbol) WHERE r.kind = $k RETURN ${RETURN_COLS} ${limitClause}`;
       const stmt = this.conn.prepareSync(cypher);
       const result = repo
         ? this.conn.executeSync(stmt, { k: kind, r: repo })
@@ -212,7 +212,7 @@ export class KuzuGraphStore implements GraphStore {
   }
 
   // -------------------------------------------------------------------------
-  // traverseBFS  (application-level, flat-table edition)
+  // traverseBFS  (native recursive Cypher with application-level fallback)
   // -------------------------------------------------------------------------
 
   async traverseBFS(
@@ -224,11 +224,63 @@ export class KuzuGraphStore implements GraphStore {
         ? { maxDepth: options, repo: undefined }
         : options;
 
+    if (maxDepth <= 0) return [];
+
+    try {
+      return this.traverseBFSNative(start, maxDepth, repo);
+    } catch {
+      // Fall back to application-level BFS if native recursive traversal
+      // fails (e.g., Kuzu version doesn't support the path syntax).
+      return this.traverseBFSFallback(start, maxDepth, repo);
+    }
+  }
+
+  /**
+   * Native recursive BFS via Kuzu's variable-length relationship patterns.
+   * Single Cypher query replaces the N+1 application-level loop.
+   */
+  private traverseBFSNative(
+    start: string,
+    maxDepth: number,
+    repo?: string,
+  ): GraphEdge[] {
+    let cypher: string;
+    if (repo) {
+      const safeRepo = repo.replace(/'/g, "''");
+      cypher =
+        `MATCH path = (start:Symbol {id: $start})` +
+        `-[e:Edge*1..${maxDepth} (r, _ | WHERE r.repo = '${safeRepo}')]->` +
+        `(end:Symbol) ` +
+        `WITH nodes(path) AS ns, rels(path) AS rs ` +
+        `UNWIND range(0, size(rs)-1) AS i ` +
+        `RETURN DISTINCT ns[i].id AS source, ns[i+1].id AS target, ` +
+        `rs[i].kind AS kind, rs[i].metadata AS metadata`;
+    } else {
+      cypher =
+        `MATCH path = (start:Symbol {id: $start})` +
+        `-[:Edge*1..${maxDepth}]->` +
+        `(end:Symbol) ` +
+        `WITH nodes(path) AS ns, rels(path) AS rs ` +
+        `UNWIND range(0, size(rs)-1) AS i ` +
+        `RETURN DISTINCT ns[i].id AS source, ns[i+1].id AS target, ` +
+        `rs[i].kind AS kind, rs[i].metadata AS metadata`;
+    }
+
+    const stmt = this.conn.prepareSync(cypher);
+    const result = this.conn.executeSync(stmt, { start });
+    return single(result).getAllSync().map(toGraphEdge);
+  }
+
+  /** Application-level BFS fallback using single-hop queries. */
+  private traverseBFSFallback(
+    start: string,
+    maxDepth: number,
+    repo?: string,
+  ): GraphEdge[] {
     const visitedNodes = new Set<string>();
     const seenEdgeKeys = new Set<string>();
     const collected: GraphEdge[] = [];
 
-    // Each entry is a node to expand at a given depth.
     let frontier: string[] = [start];
     visitedNodes.add(start);
 
@@ -237,20 +289,21 @@ export class KuzuGraphStore implements GraphStore {
 
       for (const node of frontier) {
         const result = repo
-          ? this.conn.executeSync(this.stmtBySourceAndRepo, { s: node, r: repo })
+          ? this.conn.executeSync(this.stmtBySourceAndRepo, {
+              s: node,
+              r: repo,
+            })
           : this.conn.executeSync(this.stmtBySource, { s: node });
 
         const edges = single(result).getAllSync().map(toGraphEdge);
 
         for (const edge of edges) {
-          // Deduplicate edges
           const edgeKey = `${edge.source}\0${edge.target}\0${edge.kind}`;
           if (!seenEdgeKeys.has(edgeKey)) {
             seenEdgeKeys.add(edgeKey);
             collected.push(edge);
           }
 
-          // Enqueue unvisited targets for next depth
           if (!visitedNodes.has(edge.target)) {
             visitedNodes.add(edge.target);
             nextFrontier.push(edge.target);

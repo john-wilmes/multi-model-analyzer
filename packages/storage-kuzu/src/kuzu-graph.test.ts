@@ -308,6 +308,32 @@ describe("KuzuGraphStore", () => {
       const result = await graphStore.traverseBFS("nobody", 5);
       expect(result).toEqual([]);
     });
+
+    it("returns empty array when maxDepth is 0", async () => {
+      await graphStore.addEdges([
+        edge("a", "b", "imports", "r1"),
+        edge("b", "c", "imports", "r1"),
+      ]);
+
+      const result = await graphStore.traverseBFS("a", 0);
+      expect(result).toEqual([]);
+    });
+
+    it("traverses multi-repo graph with repo filter on deeper paths", async () => {
+      await graphStore.addEdges([
+        edge("a", "b", "imports", "r1"),
+        edge("b", "c", "imports", "r1"),
+        edge("b", "d", "imports", "r2"),
+        edge("c", "e", "imports", "r1"),
+      ]);
+
+      const result = await graphStore.traverseBFS("a", { maxDepth: 5, repo: "r1" });
+      const targets = result.map((e) => e.target);
+      expect(targets).toContain("b");
+      expect(targets).toContain("c");
+      expect(targets).toContain("e");
+      expect(targets).not.toContain("d");
+    });
   });
 
   describe("clear", () => {
