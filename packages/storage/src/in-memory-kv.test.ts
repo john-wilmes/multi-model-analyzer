@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { InMemoryKVStore } from "./kv.js";
+import { InMemoryKVStore, discoverRepos } from "./kv.js";
 
 describe("InMemoryKVStore", () => {
   let store: InMemoryKVStore;
@@ -102,5 +102,32 @@ describe("InMemoryKVStore", () => {
       await store.close();
       expect(await store.get("a")).toBeUndefined();
     });
+  });
+});
+
+describe("discoverRepos", () => {
+  it("finds repos from multiple key prefixes", async () => {
+    const store = new InMemoryKVStore();
+    await store.set("metricsSummary:alpha", "{}");
+    await store.set("metrics:beta", "{}");
+    await store.set("patterns:alpha", "{}");
+    await store.set("commit:gamma", "abc123");
+
+    const repos = await discoverRepos(store);
+    expect(repos).toEqual(["alpha", "beta", "gamma"]);
+  });
+
+  it("ignores nested keys with colons", async () => {
+    const store = new InMemoryKVStore();
+    await store.set("metrics:alpha", "{}");
+    await store.set("metrics:alpha:sub", "{}");
+
+    const repos = await discoverRepos(store);
+    expect(repos).toEqual(["alpha"]);
+  });
+
+  it("returns empty array for empty store", async () => {
+    const store = new InMemoryKVStore();
+    expect(await discoverRepos(store)).toEqual([]);
   });
 });

@@ -5,7 +5,7 @@ export type { SearchDocument, SearchResult, SearchStore } from "./search.js";
 export { InMemorySearchStore } from "./search.js";
 
 export type { KVStore, TypedKVStore } from "./kv.js";
-export { InMemoryKVStore, createTypedKVStore } from "./kv.js";
+export { InMemoryKVStore, createTypedKVStore, discoverRepos } from "./kv.js";
 
 export { SqliteGraphStore } from "./sqlite-graph.js";
 export { SqliteSearchStore } from "./sqlite-search.js";

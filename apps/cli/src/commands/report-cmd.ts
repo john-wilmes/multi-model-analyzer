@@ -14,6 +14,7 @@ import type {
   SarifLog,
 } from "@mma/core";
 import type { KVStore, GraphStore } from "@mma/storage";
+import { discoverRepos } from "@mma/storage";
 import { redactSarifLog } from "@mma/diagnostics";
 import { printTable } from "../formatter.js";
 import type { ReportFormat } from "../formatter.js";
@@ -129,7 +130,7 @@ export async function reportCommand(options: ReportOptions): Promise<FieldTrialR
   const { kvStore, graphStore, format, output, includeSarif, salt, note } = options;
 
   // 1. Discover repos and assign anonymous labels
-  const repoMap = await discoverRepos(kvStore);
+  const repoMap = await discoverAnonymizedRepos(kvStore);
   const repoNames = [...repoMap.keys()];
 
   // 2. Collect sections
@@ -259,32 +260,10 @@ export async function reportCommand(options: ReportOptions): Promise<FieldTrialR
 // Repo discovery
 // ---------------------------------------------------------------------------
 
-async function discoverRepos(kvStore: KVStore): Promise<Map<string, string>> {
-  const repoSet = new Set<string>();
-
-  // Gather repo names from multiple key prefixes
-  const prefixes = ["metricsSummary:", "metrics:", "patterns:", "sarif:deadExports:"];
-  for (const prefix of prefixes) {
-    const keys = await kvStore.keys(prefix);
-    for (const key of keys) {
-      const repoName = key.slice(prefix.length);
-      if (repoName && !repoName.includes(":")) {
-        repoSet.add(repoName);
-      }
-    }
-  }
-
-  // Also check commit keys
-  const commitKeys = await kvStore.keys("commit:");
-  for (const key of commitKeys) {
-    const repoName = key.slice("commit:".length);
-    if (repoName) repoSet.add(repoName);
-  }
-
-  // Assign anonymous labels
-  const sorted = [...repoSet].sort();
+async function discoverAnonymizedRepos(kvStore: KVStore): Promise<Map<string, string>> {
+  const repos = await discoverRepos(kvStore);
   const repoMap = new Map<string, string>();
-  sorted.forEach((name, i) => repoMap.set(name, `repo-${i + 1}`));
+  repos.forEach((name, i) => repoMap.set(name, `repo-${i + 1}`));
   return repoMap;
 }
 

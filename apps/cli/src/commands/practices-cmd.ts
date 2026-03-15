@@ -7,6 +7,7 @@
  */
 
 import type { KVStore } from "@mma/storage";
+import { discoverRepos } from "@mma/storage";
 import type { SarifLog, SarifResult, RepoMetricsSummary } from "@mma/core";
 import type { ReportFormat } from "../formatter.js";
 import { formatTable } from "../formatter.js";
@@ -303,25 +304,6 @@ function getMeta(ruleId: string): RuleMeta {
 // Repo discovery
 // ---------------------------------------------------------------------------
 
-async function discoverRepos(kvStore: KVStore): Promise<string[]> {
-  const repoSet = new Set<string>();
-  const prefixes = ["metricsSummary:", "metrics:", "patterns:", "sarif:deadExports:"];
-  for (const prefix of prefixes) {
-    const keys = await kvStore.keys(prefix);
-    for (const key of keys) {
-      const repoName = key.slice(prefix.length);
-      if (repoName && !repoName.includes(":")) {
-        repoSet.add(repoName);
-      }
-    }
-  }
-  const commitKeys = await kvStore.keys("commit:");
-  for (const key of commitKeys) {
-    const repoName = key.slice("commit:".length);
-    if (repoName) repoSet.add(repoName);
-  }
-  return [...repoSet].sort();
-}
 
 // ---------------------------------------------------------------------------
 // Section builders

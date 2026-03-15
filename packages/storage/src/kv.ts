@@ -102,6 +102,32 @@ export interface TypedKVStore<T> {
   has(key: string): Promise<boolean>;
 }
 
+/**
+ * Discover all repo names stored in a KV store by scanning well-known key prefixes.
+ */
+export async function discoverRepos(kvStore: KVStore): Promise<string[]> {
+  const repoSet = new Set<string>();
+
+  const prefixes = ["metricsSummary:", "metrics:", "patterns:", "sarif:deadExports:"];
+  for (const prefix of prefixes) {
+    const keys = await kvStore.keys(prefix);
+    for (const key of keys) {
+      const repoName = key.slice(prefix.length);
+      if (repoName && !repoName.includes(":")) {
+        repoSet.add(repoName);
+      }
+    }
+  }
+
+  const commitKeys = await kvStore.keys("commit:");
+  for (const key of commitKeys) {
+    const repoName = key.slice("commit:".length);
+    if (repoName) repoSet.add(repoName);
+  }
+
+  return [...repoSet].sort();
+}
+
 export function createTypedKVStore<T>(
   store: KVStore,
   prefix: string,

@@ -9,6 +9,7 @@
 import Database from "better-sqlite3";
 import type { EdgeKind, SarifLog } from "@mma/core";
 import type { KVStore, GraphStore } from "@mma/storage";
+import { discoverRepos } from "@mma/storage";
 import { hashToken, redactSarifLog } from "@mma/diagnostics";
 
 export interface ExportOptions {
@@ -203,37 +204,6 @@ export async function exportCommand(
   return { kvCount, edgeCount: edgeRows.length };
 }
 
-// ---------------------------------------------------------------------------
-// Repo discovery (same logic as report-cmd)
-// ---------------------------------------------------------------------------
-
-export async function discoverRepos(kvStore: KVStore): Promise<string[]> {
-  const repoSet = new Set<string>();
-
-  const prefixes = [
-    "metricsSummary:",
-    "metrics:",
-    "patterns:",
-    "sarif:deadExports:",
-  ];
-  for (const prefix of prefixes) {
-    const keys = await kvStore.keys(prefix);
-    for (const key of keys) {
-      const repoName = key.slice(prefix.length);
-      if (repoName && !repoName.includes(":")) {
-        repoSet.add(repoName);
-      }
-    }
-  }
-
-  const commitKeys = await kvStore.keys("commit:");
-  for (const key of commitKeys) {
-    const repoName = key.slice("commit:".length);
-    if (repoName) repoSet.add(repoName);
-  }
-
-  return [...repoSet].sort();
-}
 
 // ---------------------------------------------------------------------------
 // Anonymization helpers
