@@ -99,7 +99,8 @@ export async function parseFiles(
   }
 
   // Phase 2: ts-morph (optional, type-resolved)
-  if (options?.enableTsMorph) {
+  // ts-morph requires filesystem access; skip for bare repos (contentProvider signals bare repo)
+  if (options?.enableTsMorph && !options?.contentProvider) {
     const start = performance.now();
     try {
       const project = createTsMorphProject({

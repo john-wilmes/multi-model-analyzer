@@ -1,4 +1,5 @@
-import type { ChangeSet, ClassifiedFile, FileKind, RepoConfig } from "@mma/core";
+import type { ChangeSet, ClassifiedFile, RepoConfig } from "@mma/core";
+import { classifyFileKind } from "@mma/core";
 import { cloneOrFetch, diffFiles, getHeadCommit } from "./git.js";
 
 export interface ChangeDetectionOptions {
@@ -12,9 +13,10 @@ export async function detectChanges(
 ): Promise<ChangeSet> {
   const repoPath = await cloneOrFetch(repo.url, repo.name, {
     mirrorDir: options.mirrorDir,
+    branch: repo.branch,
   });
 
-  const currentCommit = await getHeadCommit(repoPath);
+  const currentCommit = await getHeadCommit(repoPath, repo.branch);
   const previousCommit = options.previousCommits.get(repo.name) ?? null;
 
   const { added, modified, deleted } = await diffFiles(
@@ -38,7 +40,7 @@ export function classifyFile(
   filePath: string,
   repo: string,
 ): ClassifiedFile {
-  const kind = inferFileKind(filePath);
+  const kind = classifyFileKind(filePath);
   return {
     path: filePath,
     repo,
@@ -55,15 +57,4 @@ export function classifyFiles(
     ...changeSet.modifiedFiles,
   ];
   return allFiles.map((f) => classifyFile(f, changeSet.repo));
-}
-
-function inferFileKind(filePath: string): FileKind {
-  if (/\.(ts|tsx|mts|cts)$/.test(filePath)) return "typescript";
-  if (/\.(js|jsx|mjs|cjs)$/.test(filePath)) return "javascript";
-  if (filePath.endsWith(".json")) return "json";
-  if (filePath.endsWith(".yml") || filePath.endsWith(".yaml")) return "yaml";
-  if (/(^|\/)([Dd]ockerfile|DOCKERFILE)(\/|$|\.)/.test(filePath)) return "dockerfile";
-  if (/(^|\/)(?:k8s|kubernetes)(\/|$)/.test(filePath)) return "kubernetes";
-  if (filePath.endsWith(".md")) return "markdown";
-  return "unknown";
 }

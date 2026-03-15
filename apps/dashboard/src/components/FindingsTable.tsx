@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { fetchFindings, fetchRepos } from '../api/client.ts';
 
@@ -41,17 +41,33 @@ export default function FindingsTable() {
   const rule = searchParams.get('rule') ?? '';
   const page = parseInt(searchParams.get('page') ?? '0', 10);
 
+  const [ruleInput, setRuleInput] = useState(rule);
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => {
+    setRuleInput(rule);
+  }, [rule]);
+  useEffect(() => {
+    if (ruleInput === rule) return;
+    debounceRef.current = setTimeout(() => {
+      const next = new URLSearchParams(searchParams);
+      if (ruleInput) next.set('rule', ruleInput);
+      else next.delete('rule');
+      next.delete('page');
+      setSearchParams(next);
+    }, 300);
+    return () => clearTimeout(debounceRef.current);
+  }, [ruleInput, rule, searchParams, setSearchParams]);
+
   const load = useCallback(() => {
     setLoading(true);
-    const params: Record<string, string> = {
-      offset: String(page * PAGE_SIZE),
-      limit: String(PAGE_SIZE),
-    };
-    if (repo) params.repo = repo;
-    if (rule) params.rule = rule;
-    if (severities.length === 1) params.level = severities[0]!;
+    const qs = new URLSearchParams();
+    qs.set('offset', String(page * PAGE_SIZE));
+    qs.set('limit', String(PAGE_SIZE));
+    if (repo) qs.set('repo', repo);
+    if (rule) qs.set('rule', rule);
+    severities.forEach((s) => qs.append('level', s));
 
-    fetchFindings(params)
+    fetchFindings(qs)
       .then((data) => {
         setFindings((data.results ?? []) as Finding[]);
         setTotal(data.total ?? 0);
@@ -150,8 +166,8 @@ export default function FindingsTable() {
           <label className="block text-xs text-slate-500 mb-1">Rule ID</label>
           <input
             type="text"
-            value={rule}
-            onChange={(e) => setParam('rule', e.target.value)}
+            value={ruleInput}
+            onChange={(e) => setRuleInput(e.target.value)}
             placeholder="e.g. MMA001"
             className="border rounded px-2 py-1 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 w-36"
           />

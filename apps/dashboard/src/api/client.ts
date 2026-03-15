@@ -21,9 +21,9 @@ export async function fetchMetricsSummary(): Promise<Record<string, unknown>> {
 }
 
 export async function fetchFindings(
-  params: Record<string, string>,
+  params: Record<string, string> | URLSearchParams,
 ): Promise<{ results: unknown[]; total: number }> {
-  const qs = new URLSearchParams(params);
+  const qs = params instanceof URLSearchParams ? params : new URLSearchParams(params);
   return fetchJson(`${BASE}/api/findings?${qs}`);
 }
 

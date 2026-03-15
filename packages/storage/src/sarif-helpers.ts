@@ -58,7 +58,7 @@ export async function getSarifResultsPaginated(
   options: {
     repo?: string;
     ruleId?: string;
-    level?: string;
+    level?: string | string[];
     limit?: number;
     offset?: number;
   },
@@ -94,7 +94,11 @@ export async function getSarifResultsPaginated(
     filtered = filtered.filter((r) => r.ruleId === ruleId);
   }
   if (level) {
-    filtered = filtered.filter((r) => r.level === level);
+    if (Array.isArray(level)) {
+      filtered = filtered.filter((r) => level.includes(r.level ?? ""));
+    } else {
+      filtered = filtered.filter((r) => r.level === level);
+    }
   }
 
   const total = filtered.length;

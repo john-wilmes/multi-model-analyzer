@@ -125,7 +125,7 @@ export default function ZoneChart({ repo, metrics }: ZoneChartProps) {
           data={data}
           onClick={handleClick}
           style={{ cursor: 'pointer' }}
-          shape={(props: Record<string, unknown>) => {
+          shape={(props: unknown) => {
             const { cx, cy, fill } = props as {
               cx: number;
               cy: number;
