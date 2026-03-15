@@ -44,6 +44,7 @@ import {
 import type { PackageJsonInfo } from "@mma/heuristics";
 import { computeBaseline } from "@mma/diagnostics";
 import { computePageRank, pageRankToSarif } from "@mma/query";
+import { runCorrelation } from "@mma/correlation";
 import type { KVStore, GraphStore, SearchStore } from "@mma/storage";
 import {
   tier1Summarize,
@@ -900,6 +901,22 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
   log(`  Phase 6b total: ${phase6bTotalMs}ms`);
   log(`  Phase 6c total: ${phase6cTotalMs}ms`);
 
+  // Phase 7: Cross-repo correlation (only meaningful with 2+ repos)
+  if (repos.length > 1) {
+    tracer.startPhase("Cross-repo Correlation");
+    const correlationResult = await runCorrelation(kvStore, options.graphStore, {
+      repos, packageRoots, verbose,
+    });
+    if (verbose) {
+      log(`  Cross-repo edges: ${correlationResult.counts.crossRepoEdges}`);
+      log(`  Repo pairs: ${correlationResult.counts.repoPairs}`);
+      log(`  Linchpins: ${correlationResult.counts.linchpins}`);
+      log(`  SARIF findings: ${correlationResult.counts.sarifFindings}`);
+    }
+    tracer.record("crossRepoEdges", correlationResult.counts.crossRepoEdges);
+    tracer.endPhase();
+  }
+
   // Aggregate all per-repo SARIF into a combined latest result
   tracer.startPhase("SARIF Aggregation");
   const allSarifResults: import("@mma/core").SarifResult[] = [];
@@ -922,6 +939,16 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       sarifRepoNames.push(repo.name);
     }
     allSarifResults.push(...repoResults);
+  }
+  // Add cross-repo correlation SARIF (not per-repo)
+  const correlationSarifJson = await kvStore.get("sarif:correlation");
+  if (correlationSarifJson) {
+    try {
+      const correlationResults = JSON.parse(correlationSarifJson) as import("@mma/core").SarifResult[];
+      allSarifResults.push(...correlationResults);
+    } catch {
+      log(`    warning: could not parse sarif:correlation`);
+    }
   }
   // Compare against previous baseline for incremental adoption
   // (must run even when allSarifResults is empty to track "absent" results)

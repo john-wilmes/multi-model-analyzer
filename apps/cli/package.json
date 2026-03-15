@@ -32,6 +32,7 @@
     "@mma/model-functional": "*",
     "@mma/diagnostics": "*",
     "@mma/query": "*",
-    "@mma/mcp": "*"
+    "@mma/mcp": "*",
+    "@mma/correlation": "*"
   }
 }

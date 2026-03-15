@@ -18,6 +18,7 @@
     { "path": "../../packages/models/functional" },
     { "path": "../../packages/diagnostics" },
     { "path": "../../packages/query" },
-    { "path": "../../packages/mcp" }
+    { "path": "../../packages/mcp" },
+    { "path": "../../packages/correlation" }
   ]
 }

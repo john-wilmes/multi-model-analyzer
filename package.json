@@ -28,6 +28,7 @@
     "packages/diagnostics",
     "packages/query",
     "packages/mcp",
+    "packages/correlation",
     "packages/storage-kuzu",
     "apps/cli",
     "apps/dashboard"
