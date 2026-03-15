@@ -60,13 +60,22 @@ export default function ModuleDetail() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!repo || !module) return;
+    if (!repo || !module) {
+      setFindings([]);
+      setOutgoing([]);
+      setIncoming([]);
+      setMetricsData(null);
+      setLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
     Promise.all([
       fetchFindings({ repo, limit: '500' }),
       fetchDependencies(`${repo}:${module}`, 3) as Promise<{ dependencies: DepEntry[]; dependents: DepEntry[] }>,
     ])
       .then(([findingsData, depData]) => {
-        // Filter findings to only those affecting this module
+        if (cancelled) return;
         const allFindings = (findingsData.results ?? []) as Finding[];
         const moduleFindings = allFindings.filter((f) => {
           if (!f.locations) return false;
@@ -93,8 +102,9 @@ export default function ModuleDetail() {
         const instability = Ce + Ca > 0 ? Ce / (Ce + Ca) : 0;
         setMetricsData({ instability, afferentCoupling: Ca, efferentCoupling: Ce });
       })
-      .catch((err: unknown) => console.error("Failed to fetch module data:", err))
-      .finally(() => setLoading(false));
+      .catch((err: unknown) => { if (!cancelled) console.error("Failed to fetch module data:", err); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
   }, [repo, module]);
 
   if (loading) return <p className="text-slate-500">Loading...</p>;
