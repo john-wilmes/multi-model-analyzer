@@ -557,6 +557,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         if (trees && trees.size > 0) {
           const flagInventory = scanForFlags(trees, repo.name);
           flagsByRepo.set(repo.name, flagInventory);
+          await kvStore.set(`flags:${repo.name}`, JSON.stringify(flagInventory));
           log(`    ${flagInventory.flags.length} feature flags found`);
 
           // 5d: Log statement extraction
