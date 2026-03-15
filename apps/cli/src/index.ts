@@ -14,8 +14,8 @@ import { resolve, dirname } from "node:path";
 import { mkdirSync, existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { RepoConfig, ArchitecturalRule } from "@mma/core";
-import { createSqliteStores } from "@mma/storage";
-import type { SqliteStores } from "@mma/storage";
+import { createSqliteStores, createStores } from "@mma/storage";
+import type { StorageBackend } from "@mma/storage";
 import { validateArchRules } from "@mma/heuristics";
 import type { RawArchRule } from "@mma/heuristics";
 import { indexCommand } from "./commands/index-cmd.js";
@@ -37,6 +37,7 @@ interface CliConfig {
   readonly dbPath?: string;
   readonly rules?: readonly RawArchRule[];
   readonly baselinePath?: string;
+  readonly backend?: StorageBackend;
 }
 
 async function main(): Promise<void> {
@@ -64,6 +65,7 @@ async function main(): Promise<void> {
       "api-key": { type: "string" },
       "max-api-calls": { type: "string" },
       port: { type: "string", default: "3000" },
+      backend: { type: "string" },
     },
   });
 
@@ -441,6 +443,14 @@ async function main(): Promise<void> {
     dbPath = config.dbPath === ":memory:" ? ":memory:" : resolve(dirname(configPath), config.dbPath);
   }
 
+  // Resolve backend: --backend flag > config.backend > "sqlite"
+  const rawBackend = values.backend ?? config.backend ?? "sqlite";
+  if (rawBackend !== "sqlite" && rawBackend !== "kuzu") {
+    console.error(`Invalid --backend: "${rawBackend}". Must be "sqlite" or "kuzu".`);
+    process.exit(1);
+  }
+  const backend: StorageBackend = rawBackend;
+
   // Validate architectural rules from config
   let validatedRules: ArchitecturalRule[] = [];
   if (config.rules && config.rules.length > 0) {
@@ -457,7 +467,7 @@ async function main(): Promise<void> {
   if (dbPath !== ":memory:") {
     mkdirSync(dirname(dbPath), { recursive: true });
   }
-  const stores: SqliteStores = createSqliteStores({ dbPath });
+  const stores = await createStores({ backend, dbPath });
   const { graphStore, searchStore, kvStore } = stores;
 
   // Auto-import baseline on fresh DB
@@ -623,6 +633,7 @@ Options:
   --sample-size   Findings to sample per check (default: 50)
   --seed          PRNG seed for reproducibility (default: 42)
   --port          Port for dashboard server (default: 3000)
+  --backend       Storage backend: sqlite (default) or kuzu
   -h, --help      Show this help message
   --version       Show version number
 `);

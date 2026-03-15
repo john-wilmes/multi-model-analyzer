@@ -28,6 +28,7 @@
     "packages/diagnostics",
     "packages/query",
     "packages/mcp",
+    "packages/storage-kuzu",
     "apps/cli",
     "apps/dashboard"
   ],
@@ -60,5 +61,6 @@
     "minimatch@>=9.0.0 <9.0.7": "9.0.7",
     "minimatch@>=10.0.0 <10.2.3": "10.2.3",
     "ajv@>=6.0.0 <6.14.0": "6.14.0"
-  }
+  },
+  "dependencies": {}
 }
