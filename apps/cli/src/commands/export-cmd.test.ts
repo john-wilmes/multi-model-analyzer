@@ -425,7 +425,7 @@ describe("exportCommand", () => {
       repos: Array<{ name: string; commit: string }>;
     };
 
-    expect(manifest.schemaVersion).toBe(1);
+    expect(manifest.schemaVersion).toBe(2);
     expect(manifest.mode).toBe("raw");
     expect(Array.isArray(manifest.repos)).toBe(true);
     expect(manifest.repos.length).toBeGreaterThan(0);
@@ -456,7 +456,7 @@ describe("exportCommand", () => {
       repos: Array<{ name: string; commit: string }>;
     };
 
-    expect(manifest.schemaVersion).toBe(1);
+    expect(manifest.schemaVersion).toBe(2);
     expect(manifest.mode).toBe("anonymized");
 
     db.close();
