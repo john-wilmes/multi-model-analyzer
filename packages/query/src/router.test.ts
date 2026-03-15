@@ -124,4 +124,16 @@ describe("routeQuery", () => {
     expect(routeQuery("show faults").route).toBe("analytical");
     expect(routeQuery("what are the faults").route).toBe("analytical");
   });
+
+  it("routes flag impact queries to flagimpact", () => {
+    expect(routeQuery("flag impact of ENABLE_DARK_MODE").route).toBe("flagimpact");
+    expect(routeQuery("feature flags").route).toBe("flagimpact");
+    expect(routeQuery("show feature flag inventory").route).toBe("flagimpact");
+    expect(routeQuery("flag analysis").route).toBe("flagimpact");
+  });
+
+  it("does not route non-flag impact queries to flagimpact", () => {
+    // "what is the impact of changing X" has no "flag" keyword — should be blastradius
+    expect(routeQuery("what is the impact of changing X").route).toBe("blastradius");
+  });
 });

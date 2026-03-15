@@ -501,6 +501,14 @@ async function dispatchRoute(
       return { error: "No files specified for blast radius analysis." };
     }
 
+    case "flagimpact": {
+      const entity = decision.extractedEntities[0];
+      if (entity && repo) {
+        return await computeFlagImpact(entity, repo, kvStore, graphStore);
+      }
+      return await getFlagInventory(kvStore, { repo, search: entity });
+    }
+
     case "synthesis": {
       return { error: "Synthesis queries require tier 4 (Sonnet) -- not yet implemented." };
     }

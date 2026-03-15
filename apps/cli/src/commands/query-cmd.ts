@@ -9,6 +9,8 @@ import { routeQuery } from "@mma/query";
 import { executeSearchQuery } from "@mma/query";
 import { executeCallersQuery, executeCalleesQuery, executeDependencyQuery } from "@mma/query";
 import { executeArchitectureQuery } from "@mma/query";
+import { getFlagInventory, computeFlagImpact } from "@mma/query";
+import type { FlagInventoryEntry } from "@mma/query";
 import type { DetectedPattern, FaultTree, SarifLog } from "@mma/core";
 import type { GraphStore, SearchStore, KVStore } from "@mma/storage";
 import { printJson, printSarif } from "../formatter.js";
@@ -487,6 +489,68 @@ export async function queryCommand(
             }
             if (trees.length > DISPLAY_LIMITS.faultTrees) {
               console.log(`  ... and ${trees.length - DISPLAY_LIMITS.faultTrees} more`);
+            }
+          }
+        }
+      }
+      break;
+    }
+
+    case "flagimpact": {
+      const entity = decision.extractedEntities[0];
+      if (entity && repoFilter) {
+        // Specific flag in a specific repo — compute impact
+        const impact = await computeFlagImpact(entity, repoFilter, options.kvStore, options.graphStore);
+        if (format === "json") {
+          printJson({ route: "flagimpact", ...impact });
+        } else if (format === "sarif") {
+          printSarif("mma-query", impact.affectedFiles.map((f) => ({
+            ruleId: "flagimpact/impact",
+            level: "note" as const,
+            message: `${f.path} (${f.via}, depth ${f.depth})`,
+            repo: repoFilter,
+          })));
+        } else {
+          console.log(`Flag impact: ${impact.flagName} (${impact.repo})`);
+          console.log(`  Depth: ${impact.maxDepth}, Files affected: ${impact.affectedFiles.length}, Services affected: ${impact.affectedServices.length}`);
+          if (impact.affectedFiles.length > 0) {
+            console.log("  Files:");
+            for (const f of impact.affectedFiles) {
+              console.log(`    ${f.path} (${f.via}, depth ${f.depth})`);
+            }
+          }
+          if (impact.affectedServices.length > 0) {
+            console.log("  Services:");
+            for (const s of impact.affectedServices) {
+              console.log(`    ${s.endpoint} (from ${s.sourceFile})`);
+            }
+          }
+        }
+      } else {
+        // No specific flag or no repo — show inventory
+        const inventory = await getFlagInventory(options.kvStore, { repo: repoFilter, search: entity });
+        if (format === "json") {
+          printJson({ route: "flagimpact", ...inventory });
+        } else if (format === "sarif") {
+          printSarif("mma-query", inventory.flags.map((e: FlagInventoryEntry) => ({
+            ruleId: "flagimpact/inventory",
+            level: "note" as const,
+            message: `${e.name}${e.sdk ? ` (${e.sdk})` : ""} — ${e.locationCount} location(s) in ${e.modules.join(", ")}`,
+            repo: e.repo,
+          })));
+        } else {
+          if (inventory.total === 0) {
+            console.log(repoFilter
+              ? `No feature flags found for repo: ${repoFilter}`
+              : "No feature flags found. Run 'index' first.");
+          } else {
+            console.log(`${inventory.total} feature flags found:`);
+            for (const e of inventory.flags) {
+              const sdkStr = e.sdk ? ` (${e.sdk})` : "";
+              console.log(`  [${e.repo}] ${e.name}${sdkStr} — ${e.locationCount} location(s)`);
+            }
+            if (inventory.hasMore) {
+              console.log(`  ... and more (use --limit/--offset to paginate)`);
             }
           }
         }
