@@ -43,6 +43,36 @@ function register(server: ReturnType<typeof createMockServer>, stores: Stores) {
   registerTools(server as unknown as Parameters<typeof registerTools>[0], stores);
 }
 
+/** Serialized correlation:graph fixture matching the run-correlation.ts format. */
+function makeSerializedGraph() {
+  return JSON.stringify({
+    edges: [
+      {
+        edge: { source: "src/index.ts", target: "src/util.ts", kind: "imports", metadata: {} },
+        sourceRepo: "repo-a",
+        targetRepo: "repo-b",
+        packageName: "@acme/lib",
+      },
+    ],
+    repoPairs: ["repo-a->repo-b"],
+    downstreamMap: [["repo-a", ["repo-b"]]],
+    upstreamMap: [["repo-b", ["repo-a"]]],
+  });
+}
+
+/** Serialized correlation:services fixture. */
+function makeSerializedServices() {
+  return JSON.stringify({
+    links: [],
+    linchpins: [
+      { endpoint: "/api/users", producerCount: 2, consumerCount: 3, linkedRepoCount: 4, criticalityScore: 20 },
+    ],
+    orphanedServices: [
+      { endpoint: "/api/legacy", hasProducers: true, hasConsumers: false, repos: ["repo-c"] },
+    ],
+  });
+}
+
 describe("registerTools", () => {
   it("registers all expected tools", () => {
     const server = createMockServer();
@@ -52,6 +82,7 @@ describe("registerTools", () => {
       "query", "search", "get_callers", "get_callees",
       "get_dependencies", "get_architecture", "get_diagnostics",
       "get_metrics", "get_blast_radius",
+      "get_cross_repo_graph", "get_service_correlation", "get_cross_repo_impact",
     ];
 
     for (const tool of expectedTools) {
@@ -201,5 +232,184 @@ describe("resources", () => {
     const kvStore = new InMemoryKVStore();
     registerResources(server as unknown as Parameters<typeof registerResources>[0], kvStore);
     expect(server.resource).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe("get_cross_repo_graph", () => {
+  it("returns error when no correlation data exists", async () => {
+    const server = createMockServer();
+    register(server, makeStores());
+
+    const handler = server.tools.get("get_cross_repo_graph")!.handler;
+    const result = await handler({});
+    const parsed = JSON.parse(result.content[0]!.text) as { error: string };
+    expect(parsed.error).toContain("No correlation data");
+  });
+
+  it("returns edges and repo pairs when data exists", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("correlation:graph", makeSerializedGraph());
+    register(server, stores);
+
+    const handler = server.tools.get("get_cross_repo_graph")!.handler;
+    const result = await handler({});
+    const parsed = JSON.parse(result.content[0]!.text) as {
+      edgeCount: number;
+      repoPairs: string[];
+      edges: unknown[];
+    };
+    expect(parsed.edgeCount).toBe(1);
+    expect(parsed.repoPairs).toContain("repo-a->repo-b");
+    expect(parsed.edges).toHaveLength(1);
+  });
+
+  it("filters edges by repo", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("correlation:graph", makeSerializedGraph());
+    register(server, stores);
+
+    const handler = server.tools.get("get_cross_repo_graph")!.handler;
+
+    // repo-a is the sourceRepo of the only edge — should match
+    const resultA = await handler({ repo: "repo-a" });
+    const parsedA = JSON.parse(resultA.content[0]!.text) as { edgeCount: number };
+    expect(parsedA.edgeCount).toBe(1);
+
+    // repo-c is not in the fixture — should return 0 edges
+    const resultC = await handler({ repo: "repo-c" });
+    const parsedC = JSON.parse(resultC.content[0]!.text) as { edgeCount: number };
+    expect(parsedC.edgeCount).toBe(0);
+  });
+
+  it("includes paths when includePaths is true", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("correlation:graph", makeSerializedGraph());
+    register(server, stores);
+
+    const handler = server.tools.get("get_cross_repo_graph")!.handler;
+    const result = await handler({ includePaths: true });
+    const parsed = JSON.parse(result.content[0]!.text) as { paths: Record<string, unknown> };
+    expect(parsed.paths).toBeDefined();
+    expect(parsed.paths["repo-a->repo-b"]).toBeDefined();
+  });
+});
+
+describe("get_service_correlation", () => {
+  it("returns error when no correlation data exists", async () => {
+    const server = createMockServer();
+    register(server, makeStores());
+
+    const handler = server.tools.get("get_service_correlation")!.handler;
+    const result = await handler({});
+    const parsed = JSON.parse(result.content[0]!.text) as { error: string };
+    expect(parsed.error).toContain("No correlation data");
+  });
+
+  it("returns linchpins and orphaned services when data exists", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("correlation:services", makeSerializedServices());
+    register(server, stores);
+
+    const handler = server.tools.get("get_service_correlation")!.handler;
+    const result = await handler({});
+    const parsed = JSON.parse(result.content[0]!.text) as {
+      linchpins: { results: Array<{ endpoint: string }> };
+      orphanedServices: { results: Array<{ endpoint: string }> };
+    };
+    expect(parsed.linchpins.results[0]!.endpoint).toBe("/api/users");
+    expect(parsed.orphanedServices.results[0]!.endpoint).toBe("/api/legacy");
+  });
+
+  it("returns only linchpins when kind is 'linchpins'", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("correlation:services", makeSerializedServices());
+    register(server, stores);
+
+    const handler = server.tools.get("get_service_correlation")!.handler;
+    const result = await handler({ kind: "linchpins" });
+    const parsed = JSON.parse(result.content[0]!.text) as Record<string, unknown>;
+    expect(parsed["linchpins"]).toBeDefined();
+    expect(parsed["orphanedServices"]).toBeUndefined();
+  });
+
+  it("returns only orphaned when kind is 'orphaned'", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("correlation:services", makeSerializedServices());
+    register(server, stores);
+
+    const handler = server.tools.get("get_service_correlation")!.handler;
+    const result = await handler({ kind: "orphaned" });
+    const parsed = JSON.parse(result.content[0]!.text) as Record<string, unknown>;
+    expect(parsed["orphanedServices"]).toBeDefined();
+    expect(parsed["linchpins"]).toBeUndefined();
+  });
+
+  it("filters by endpoint substring (case-insensitive)", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("correlation:services", makeSerializedServices());
+    register(server, stores);
+
+    const handler = server.tools.get("get_service_correlation")!.handler;
+
+    // "USERS" should match "/api/users" case-insensitively
+    const result = await handler({ endpoint: "USERS" });
+    const parsed = JSON.parse(result.content[0]!.text) as {
+      linchpins: { results: Array<{ endpoint: string }> };
+      orphanedServices: { results: Array<{ endpoint: string }> };
+    };
+    expect(parsed.linchpins.results).toHaveLength(1);
+    expect(parsed.orphanedServices.results).toHaveLength(0);
+  });
+});
+
+describe("get_cross_repo_impact", () => {
+  it("returns error when no correlation data exists", async () => {
+    const server = createMockServer();
+    register(server, makeStores());
+
+    const handler = server.tools.get("get_cross_repo_impact")!.handler;
+    const result = await handler({ files: ["src/index.ts"], repo: "repo-a" });
+    const parsed = JSON.parse(result.content[0]!.text) as { error: string };
+    expect(parsed.error).toContain("No correlation data");
+  });
+
+  it("returns impact result with affectedAcrossRepos as plain object", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("correlation:graph", makeSerializedGraph());
+
+    // Seed graphStore with an edge in repo-b so the BFS can find affected files
+    await stores.graphStore.addEdges([{
+      source: "src/consumer.ts",
+      target: "src/util.ts",
+      kind: "imports",
+      metadata: { repo: "repo-b" },
+    }]);
+
+    register(server, stores);
+
+    const handler = server.tools.get("get_cross_repo_impact")!.handler;
+    const result = await handler({ files: ["src/index.ts"], repo: "repo-a" });
+    const parsed = JSON.parse(result.content[0]!.text) as {
+      changedFiles: string[];
+      changedRepo: string;
+      affectedWithinRepo: string[];
+      affectedAcrossRepos: Record<string, string[]>;
+      reposReached: number;
+    };
+
+    expect(parsed.changedFiles).toEqual(["src/index.ts"]);
+    expect(parsed.changedRepo).toBe("repo-a");
+    // affectedAcrossRepos must be a plain object (not a Map)
+    expect(typeof parsed.affectedAcrossRepos).toBe("object");
+    expect(Array.isArray(parsed.affectedAcrossRepos)).toBe(false);
+    expect(parsed.reposReached).toBeGreaterThanOrEqual(1);
   });
 });

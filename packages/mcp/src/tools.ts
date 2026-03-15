@@ -2,6 +2,8 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { GraphStore, SearchStore, KVStore } from "@mma/storage";
 import { getSarifResultsPaginated } from "@mma/storage";
 import type { DetectedPattern, FaultTree, SarifLog } from "@mma/core";
+import { findDependencyPaths, computeCrossRepoImpact } from "@mma/correlation";
+import type { CrossRepoGraph } from "@mma/correlation";
 import {
   routeQuery,
   executeSearchQuery,
@@ -209,6 +211,103 @@ export function registerTools(server: McpServer, stores: Stores): void {
     return jsonResult(data, links);
   });
 
+  // 10. Cross-repo dependency graph
+  server.registerTool("get_cross_repo_graph", {
+    description: "Get the cross-repo dependency graph showing which repos depend on which via resolved import/depends-on edges",
+    inputSchema: {
+      repo: z.string().optional().describe("Filter to edges involving this repo"),
+      includePaths: z.boolean().optional().describe("Include dependency paths between repos"),
+    },
+  }, async ({ repo, includePaths }) => {
+    const raw = await kvStore.get("correlation:graph");
+    if (!raw) {
+      return jsonResult({ error: "No correlation data. Run 'mma index' with 2+ repos first." });
+    }
+    const parsed = JSON.parse(raw) as {
+      edges: CrossRepoGraph["edges"];
+      repoPairs: string[];
+      downstreamMap: [string, string[]][];
+      upstreamMap: [string, string[]][];
+    };
+    const graph = deserializeGraph(parsed);
+
+    const filteredEdges = repo
+      ? graph.edges.filter((e) => e.sourceRepo === repo || e.targetRepo === repo)
+      : graph.edges;
+
+    const result: Record<string, unknown> = {
+      repoCount: new Set([...graph.repoPairs].flatMap((p) => p.split("->"))).size,
+      edgeCount: filteredEdges.length,
+      repoPairs: [...graph.repoPairs],
+      edges: filteredEdges,
+      downstreamMap: [...graph.downstreamMap.entries()].map(([k, v]) => [k, [...v]]),
+      upstreamMap: [...graph.upstreamMap.entries()].map(([k, v]) => [k, [...v]]),
+    };
+
+    if (includePaths && graph.edges.length > 0) {
+      const repoList = [...new Set(graph.edges.flatMap((e) => [e.sourceRepo, e.targetRepo]))];
+      const paths: Record<string, unknown[]> = {};
+      for (const src of repoList) {
+        for (const tgt of repoList) {
+          if (src !== tgt) {
+            const found = findDependencyPaths(src, tgt, graph);
+            if (found.length > 0) {
+              paths[`${src}->${tgt}`] = found;
+            }
+          }
+        }
+      }
+      result["paths"] = paths;
+    }
+
+    return jsonResult(result);
+  });
+
+  // 11. Cross-repo service correlation
+  server.registerTool("get_service_correlation", {
+    description: "Get cross-repo service correlation: linchpin services with high cross-repo coupling and orphaned services",
+    inputSchema: {
+      endpoint: z.string().optional().describe("Filter by endpoint substring (case-insensitive)"),
+      kind: z.enum(["linchpins", "orphaned", "all"]).optional().describe("Which subset to return (default: all)"),
+      limit: z.number().optional().describe("Max results to return (default 50)"),
+      offset: z.number().optional().describe("Number of results to skip for pagination (default 0)"),
+    },
+  }, async ({ endpoint, kind, limit, offset }) => {
+    const raw = await kvStore.get("correlation:services");
+    if (!raw) {
+      return jsonResult({ error: "No correlation data. Run 'mma index' with 2+ repos first." });
+    }
+    const parsed = JSON.parse(raw) as {
+      links: unknown[];
+      linchpins: Array<{ endpoint: string; [key: string]: unknown }>;
+      orphanedServices: Array<{ endpoint: string; [key: string]: unknown }>;
+    };
+
+    let linchpins = parsed.linchpins;
+    let orphanedServices = parsed.orphanedServices;
+
+    if (endpoint) {
+      const lower = endpoint.toLowerCase();
+      linchpins = linchpins.filter((l) => l.endpoint.toLowerCase().includes(lower));
+      orphanedServices = orphanedServices.filter((o) => o.endpoint.toLowerCase().includes(lower));
+    }
+
+    const selectedKind = kind ?? "all";
+    const result: Record<string, unknown> = {};
+
+    if (selectedKind === "linchpins" || selectedKind === "all") {
+      result["linchpins"] = paginated(linchpins, offset ?? 0, limit ?? 50);
+    }
+    if (selectedKind === "orphaned" || selectedKind === "all") {
+      result["orphanedServices"] = paginated(orphanedServices, offset ?? 0, limit ?? 50);
+    }
+    if (selectedKind === "all") {
+      result["links"] = parsed.links;
+    }
+
+    return jsonResult(result);
+  });
+
   // 9. Blast radius analysis
   server.registerTool("get_blast_radius", {
     description: "Compute the blast radius of changing one or more files: what other files would be affected via import and call dependencies.",
@@ -224,6 +323,49 @@ export function registerTools(server: McpServer, stores: Stores): void {
     }, searchStore);
     return jsonResult(result);
   });
+
+  // 12. Cross-repo impact analysis
+  server.registerTool("get_cross_repo_impact", {
+    description: "Compute cross-repo impact of file changes: which files in the same repo and other repos are transitively affected",
+    inputSchema: {
+      files: z.array(z.string()).describe("File paths that are changing"),
+      repo: z.string().describe("Repository the changed files belong to"),
+    },
+  }, async ({ files, repo }) => {
+    const raw = await kvStore.get("correlation:graph");
+    if (!raw) {
+      return jsonResult({ error: "No correlation data. Run 'mma index' with 2+ repos first." });
+    }
+    const parsed = JSON.parse(raw) as {
+      edges: CrossRepoGraph["edges"];
+      repoPairs: string[];
+      downstreamMap: [string, string[]][];
+      upstreamMap: [string, string[]][];
+    };
+    const graph = deserializeGraph(parsed);
+    const impact = await computeCrossRepoImpact(files, repo, graphStore, graph);
+    return jsonResult({
+      changedFiles: impact.changedFiles,
+      changedRepo: impact.changedRepo,
+      affectedWithinRepo: impact.affectedWithinRepo,
+      affectedAcrossRepos: Object.fromEntries(impact.affectedAcrossRepos),
+      reposReached: impact.reposReached,
+    });
+  });
+}
+
+function deserializeGraph(raw: {
+  edges: CrossRepoGraph["edges"];
+  repoPairs: string[];
+  downstreamMap: [string, string[]][];
+  upstreamMap: [string, string[]][];
+}): CrossRepoGraph {
+  return {
+    edges: raw.edges,
+    repoPairs: new Set(raw.repoPairs),
+    downstreamMap: new Map(raw.downstreamMap.map(([k, v]) => [k, new Set(v)])),
+    upstreamMap: new Map(raw.upstreamMap.map(([k, v]) => [k, new Set(v)])),
+  };
 }
 
 /** Dispatch a routed query to the appropriate handler, returning structured data. */
