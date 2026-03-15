@@ -4,19 +4,12 @@
  * Uses a SearchDoc node table with Kuzu's built-in FTS extension (BM25).
  * The FTS index must be dropped and recreated whenever documents change,
  * because Kuzu v0.11.3 does not support incremental FTS index updates.
- * A `ftsIndexDirty` flag defers the rebuild to the next search call but
- * we eagerly rebuild after mutations so that concurrent reads remain valid.
+ * A `ftsIndexDirty` flag defers the rebuild to the next search call.
  */
 
 import type { SearchDocument, SearchResult, SearchStore } from "@mma/storage";
 import kuzu from "kuzu";
-
-/** Normalize executeSync's union return to a single QueryResult. */
-function single(
-  result: kuzu.QueryResult | kuzu.QueryResult[],
-): kuzu.QueryResult {
-  return Array.isArray(result) ? (result[0] as kuzu.QueryResult) : result;
-}
+import { single } from "./kuzu-common.js";
 
 function sanitizeQuery(query: string): string {
   const tokens = query
@@ -34,6 +27,13 @@ export class KuzuSearchStore implements SearchStore {
   private readonly stmtUpsert: InstanceType<typeof kuzu.PreparedStatement>;
   private readonly stmtDeleteOne: InstanceType<typeof kuzu.PreparedStatement>;
   private readonly stmtDeleteByRepo: InstanceType<typeof kuzu.PreparedStatement>;
+
+  // Cache of prepared FTS search statements keyed by "limit:repo" string.
+  // Cleared whenever the FTS index is rebuilt (index change invalidates plans).
+  private readonly stmtSearchCache = new Map<
+    string,
+    InstanceType<typeof kuzu.PreparedStatement>
+  >();
 
   constructor(conn: InstanceType<typeof kuzu.Connection>) {
     this.conn = conn;
@@ -60,9 +60,10 @@ export class KuzuSearchStore implements SearchStore {
         repo,
       });
     }
+    // Fix 6: only mark dirty; do NOT eagerly rebuild. The rebuild is deferred
+    // to the next search() call so that bulk indexing pays rebuild cost once.
     if (documents.length > 0) {
       this.ftsIndexDirty = true;
-      this.rebuildFtsIndex();
     }
   }
 
@@ -80,20 +81,31 @@ export class KuzuSearchStore implements SearchStore {
       this.rebuildFtsIndex();
     }
 
-    // LIMIT does not accept parameters in Kuzu; interpolate the number directly.
-    // `limit` is always a number (type-enforced), so this is safe.
-    const cypher = `CALL QUERY_FTS_INDEX("SearchDoc", "search_idx", $q, conjunctive := false) RETURN node.id AS id, node.content AS content, node.metadata AS metadata, node.repo AS repo, score LIMIT ${limit}`;
-    const stmt = this.conn.prepareSync(cypher);
+    // Fix 7: cache prepared statements by (limit, repo) key to avoid
+    // re-preparing on every call. Cache is cleared when the FTS index rebuilds.
+    const cacheKey = `${limit}:${repo ?? ""}`;
+    let stmt = this.stmtSearchCache.get(cacheKey);
+    if (stmt === undefined) {
+      // Fix 4: when repo is provided, push the filter into the Cypher WHERE
+      // clause so filtering occurs in the database before LIMIT is applied.
+      // Fix 5 (search): LIMIT does not accept parameters in Kuzu; interpolate
+      // the number directly. `limit` is always a number, so this is safe.
+      const repoFilter =
+        repo !== undefined ? ` AND node.repo = "${repo.replace(/"/g, '\\"')}"` : "";
+      const cypher =
+        `CALL QUERY_FTS_INDEX("SearchDoc", "search_idx", $q, conjunctive := false)` +
+        ` WHERE score > 0${repoFilter}` +
+        ` RETURN node.id AS id, node.content AS content, node.metadata AS metadata, node.repo AS repo, score` +
+        ` LIMIT ${limit}`;
+      stmt = this.conn.prepareSync(cypher);
+      this.stmtSearchCache.set(cacheKey, stmt);
+    }
+
     const result = this.conn.executeSync(stmt, { q: sanitized });
     const rows = single(result).getAllSync();
 
     const results: SearchResult[] = [];
     for (const row of rows) {
-      const rowRepo = row["repo"] as string;
-      if (repo !== undefined && rowRepo !== repo) {
-        continue;
-      }
-
       let metadata: Record<string, string> = {};
       const rawMeta = row["metadata"] as string;
       try {
@@ -119,7 +131,6 @@ export class KuzuSearchStore implements SearchStore {
     }
     if (ids.length > 0) {
       this.ftsIndexDirty = true;
-      this.rebuildFtsIndex();
     }
   }
 
@@ -130,7 +141,6 @@ export class KuzuSearchStore implements SearchStore {
       this.conn.querySync("MATCH (d:SearchDoc) DELETE d");
     }
     this.ftsIndexDirty = true;
-    this.rebuildFtsIndex();
   }
 
   async close(): Promise<void> {
@@ -147,5 +157,8 @@ export class KuzuSearchStore implements SearchStore {
       `CALL CREATE_FTS_INDEX("SearchDoc", "search_idx", ["content"])`,
     );
     this.ftsIndexDirty = false;
+    // Fix 7: clear the statement cache — plans prepared against the old index
+    // are invalid after the index is rebuilt.
+    this.stmtSearchCache.clear();
   }
 }

@@ -135,19 +135,13 @@ export async function buildServiceCorrelation(
     const hasProducers = producers.size > 0;
     const hasConsumers = consumers.size > 0;
 
-    // Cross-repo orphan: producers exist but consumers are only in the same repos as producers
-    // (i.e., no consumers from repos that aren't also producers), or no consumers at all
-    const producerRepos = new Set(producers.keys());
-    const consumerRepos = new Set(consumers.keys());
-
-    const hasExternalConsumers = [...consumerRepos].some((r) => !producerRepos.has(r));
-    const hasExternalProducers = [...producerRepos].some((r) => !consumerRepos.has(r));
-
+    // Orphan: producer with no consumer at all (dead producer), or
+    // consumer with no producer at all (missing dependency).
+    // Same-repo producer+consumer pairs are NOT orphaned — they are valid
+    // intra-repo services and should not generate noise.
     const isOrphaned =
       (hasProducers && !hasConsumers) ||
-      (hasConsumers && !hasProducers) ||
-      (hasProducers && hasConsumers && !hasExternalConsumers) ||
-      (hasProducers && hasConsumers && !hasExternalProducers);
+      (hasConsumers && !hasProducers);
 
     if (isOrphaned) {
       orphanedServices.push({

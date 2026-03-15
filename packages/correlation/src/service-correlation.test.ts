@@ -150,18 +150,18 @@ describe("buildServiceCorrelation", () => {
     expect(result.linchpins[1]!.criticalityScore).toBe(4);
   });
 
-  it("detects orphaned service: producer with no cross-repo consumer", async () => {
+  it("does NOT flag same-repo producer+consumer as orphaned", async () => {
     await graphStore.addEdges([
       {
         source: "/repos/repo-a/src/pub.ts",
-        target: "dead-queue",
+        target: "internal-queue",
         kind: "service-call",
         metadata: { role: "producer", repo: "repo-a" },
       },
-      // consumer in same repo as producer — no cross-repo consumption
+      // consumer in same repo as producer — healthy intra-repo service
       {
         source: "/repos/repo-a/src/con.ts",
-        target: "dead-queue",
+        target: "internal-queue",
         kind: "service-call",
         metadata: { role: "consumer", repo: "repo-a" },
       },
@@ -169,10 +169,8 @@ describe("buildServiceCorrelation", () => {
 
     const result = await buildServiceCorrelation(graphStore, [makeRepo("repo-a")]);
 
-    const orphaned = result.orphanedServices.find((o) => o.endpoint === "dead-queue");
-    expect(orphaned).toBeDefined();
-    expect(orphaned!.hasProducers).toBe(true);
-    expect(orphaned!.hasConsumers).toBe(true);
+    const orphaned = result.orphanedServices.find((o) => o.endpoint === "internal-queue");
+    expect(orphaned).toBeUndefined();
   });
 
   it("detects orphaned service: producer with no consumers at all", async () => {

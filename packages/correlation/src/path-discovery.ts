@@ -48,6 +48,11 @@ export function findDependencyPaths(
           }
           parents.get(neighbor)!.add(node);
           nextFrontier.push(neighbor);
+        } else if (parents.has(neighbor)) {
+          // Neighbor already enqueued at this BFS level — record the additional
+          // parent without re-enqueuing, so all shortest paths through it are
+          // reconstructed during backtracking.
+          parents.get(neighbor)!.add(node);
         }
       }
     }

@@ -16,34 +16,35 @@ import type { CrossRepoGraph, ServiceCorrelationResult } from "./types.js";
 export function detectBreakingChangeRisk(
   graph: CrossRepoGraph,
 ): SarifResult[] {
-  // Group edges by source module, collecting distinct target repos
-  const sourceToTargetRepos = new Map<
+  // Group edges by target module (the exported module being depended on),
+  // collecting distinct source repos (the repos that import it).
+  const targetToSourceRepos = new Map<
     string,
-    { sourceRepo: string; targetRepos: Set<string> }
+    { targetRepo: string; dependentRepos: Set<string> }
   >();
 
   for (const resolved of graph.edges) {
-    const source = resolved.edge.source;
-    let entry = sourceToTargetRepos.get(source);
+    const target = resolved.edge.target;
+    let entry = targetToSourceRepos.get(target);
     if (!entry) {
-      entry = { sourceRepo: resolved.sourceRepo, targetRepos: new Set() };
-      sourceToTargetRepos.set(source, entry);
+      entry = { targetRepo: resolved.targetRepo, dependentRepos: new Set() };
+      targetToSourceRepos.set(target, entry);
     }
-    entry.targetRepos.add(resolved.targetRepo);
+    entry.dependentRepos.add(resolved.sourceRepo);
   }
 
   const results: SarifResult[] = [];
 
-  for (const [moduleName, { sourceRepo, targetRepos }] of sourceToTargetRepos) {
-    if (targetRepos.size < 3) continue;
+  for (const [moduleName, { targetRepo, dependentRepos }] of targetToSourceRepos) {
+    if (dependentRepos.size < 3) continue;
 
     const location = {
       logicalLocations: [
-        createLogicalLocation(sourceRepo, moduleName, undefined, "module"),
+        createLogicalLocation(targetRepo, moduleName, undefined, "module"),
       ],
     };
 
-    const relatedLocations = Array.from(targetRepos).map((repo) => ({
+    const relatedLocations = Array.from(dependentRepos).map((repo) => ({
       logicalLocations: [
         createLogicalLocation(repo, repo, undefined, "repository"),
       ],
@@ -53,11 +54,11 @@ export function detectBreakingChangeRisk(
       createSarifResult(
         "cross-repo/breaking-change-risk",
         "warning",
-        `Module "${moduleName}" in repo "${sourceRepo}" is depended on by ${targetRepos.size} repos. A breaking change would have wide cross-repo impact.`,
+        `Module "${moduleName}" in repo "${targetRepo}" is depended on by ${dependentRepos.size} repos. A breaking change would have wide cross-repo impact.`,
         {
           locations: [location],
           relatedLocations,
-          properties: { dependentRepoCount: targetRepos.size },
+          properties: { dependentRepoCount: dependentRepos.size },
         },
       ),
     );
@@ -150,36 +151,28 @@ export function detectCriticalPaths(graph: CrossRepoGraph): SarifResult[] {
 }
 
 /**
- * BFS to find the longest downstream chain starting from `start`.
+ * DFS to find the longest downstream chain starting from `start`.
  * Returns the chain as an ordered array of repo names.
+ *
+ * No memoization: results depend on which nodes are already in the `visited`
+ * set, so caching results keyed only by node is incorrect on graphs with
+ * shared intermediate nodes.
  */
 function longestChain(
   start: string,
-  downstreamMap: ReadonlyMap<string, ReadonlySet<string>>,
+  graph: ReadonlyMap<string, ReadonlySet<string>>,
 ): string[] {
-  // BFS tracking longest path — use DFS with memoization to find longest chain
-  const memo = new Map<string, string[]>();
-
-  function dfs(repo: string, visited: Set<string>): string[] {
-    if (memo.has(repo)) return memo.get(repo)!;
-
-    const downstream = downstreamMap.get(repo);
-    if (!downstream || downstream.size === 0) return [repo];
-
-    let best: string[] = [repo];
-    for (const next of downstream) {
-      if (visited.has(next)) continue; // avoid cycles
-      visited.add(next);
-      const sub = dfs(next, visited);
-      visited.delete(next);
-      if (sub.length + 1 > best.length) {
-        best = [repo, ...sub];
-      }
+  function dfs(node: string, visited: ReadonlySet<string>): string[] {
+    const neighbors = graph.get(node) ?? new Set<string>();
+    let best: string[] = [];
+    for (const n of neighbors) {
+      if (visited.has(n)) continue;
+      const newVisited = new Set(visited);
+      newVisited.add(n);
+      const chain = dfs(n, newVisited);
+      if (chain.length > best.length) best = chain;
     }
-
-    memo.set(repo, best);
-    return best;
+    return [node, ...best];
   }
-
   return dfs(start, new Set([start]));
 }

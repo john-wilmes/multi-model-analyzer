@@ -13,6 +13,7 @@
 import type { GraphEdge, EdgeKind } from "@mma/core";
 import type { GraphStore, TraversalOptions, EdgeQueryOptions } from "@mma/storage";
 import kuzu from "kuzu";
+import { single } from "./kuzu-common.js";
 
 // ---------------------------------------------------------------------------
 // Schema bootstrap
@@ -50,13 +51,6 @@ function toGraphEdge(row: Record<string, unknown>): GraphEdge {
   };
 }
 
-/** Normalize executeSync's union return to a single QueryResult. */
-function single(
-  result: kuzu.QueryResult | kuzu.QueryResult[],
-): kuzu.QueryResult {
-  return Array.isArray(result) ? (result[0] as kuzu.QueryResult) : result;
-}
-
 const RETURN_COLS =
   "e.source AS source, e.target AS target, e.kind AS kind, e.metadata AS metadata";
 
@@ -78,9 +72,6 @@ export class KuzuGraphStore implements GraphStore {
   private readonly stmtCountByKindAndRepo: InstanceType<typeof kuzu.PreparedStatement>;
   private readonly stmtClearAll: InstanceType<typeof kuzu.PreparedStatement>;
   private readonly stmtClearRepo: InstanceType<typeof kuzu.PreparedStatement>;
-  // BFS per-node lookup (application-level traversal)
-  private readonly stmtBfsStep: InstanceType<typeof kuzu.PreparedStatement>;
-  private readonly stmtBfsStepWithRepo: InstanceType<typeof kuzu.PreparedStatement>;
 
   constructor(conn: InstanceType<typeof kuzu.Connection>) {
     this.conn = conn;
@@ -121,14 +112,6 @@ export class KuzuGraphStore implements GraphStore {
     this.stmtClearRepo = conn.prepareSync(
       `MATCH (e:Edge) WHERE e.repo = $r DELETE e`,
     );
-
-    // BFS step: fetch all outgoing edges from a single source node
-    this.stmtBfsStep = conn.prepareSync(
-      `MATCH (e:Edge) WHERE e.source = $s RETURN ${RETURN_COLS}`,
-    );
-    this.stmtBfsStepWithRepo = conn.prepareSync(
-      `MATCH (e:Edge) WHERE e.source = $s AND e.repo = $r RETURN ${RETURN_COLS}`,
-    );
   }
 
   // -------------------------------------------------------------------------
@@ -137,18 +120,25 @@ export class KuzuGraphStore implements GraphStore {
 
   async addEdges(edges: readonly GraphEdge[]): Promise<void> {
     if (edges.length === 0) return;
-    for (const edge of edges) {
-      const repo = typeof edge.metadata?.["repo"] === "string"
-        ? edge.metadata["repo"]
-        : "";
-      const meta = edge.metadata ? JSON.stringify(edge.metadata) : "";
-      this.conn.executeSync(this.stmtInsert, {
-        s: edge.source,
-        t: edge.target,
-        k: edge.kind,
-        m: meta,
-        r: repo,
-      });
+    this.conn.querySync("BEGIN TRANSACTION");
+    try {
+      for (const edge of edges) {
+        const repo = typeof edge.metadata?.["repo"] === "string"
+          ? edge.metadata["repo"]
+          : "";
+        const meta = edge.metadata ? JSON.stringify(edge.metadata) : "";
+        this.conn.executeSync(this.stmtInsert, {
+          s: edge.source,
+          t: edge.target,
+          k: edge.kind,
+          m: meta,
+          r: repo,
+        });
+      }
+      this.conn.querySync("COMMIT");
+    } catch (e) {
+      this.conn.querySync("ROLLBACK");
+      throw e;
     }
   }
 
@@ -183,14 +173,24 @@ export class KuzuGraphStore implements GraphStore {
     repo?: string,
     options?: EdgeQueryOptions,
   ): Promise<GraphEdge[]> {
-    // Kuzu does not support parameterised LIMIT, so we apply it in JS.
-    // For very large result sets callers should apply their own pagination.
+    if (options?.limit !== undefined) {
+      // Kuzu does not support parameterised LIMIT; interpolate the number
+      // directly. `limit` is always a number (type-enforced), so this is safe.
+      const limitClause = `LIMIT ${options.limit}`;
+      const cypher = repo
+        ? `MATCH (e:Edge) WHERE e.kind = $k AND e.repo = $r RETURN ${RETURN_COLS} ${limitClause}`
+        : `MATCH (e:Edge) WHERE e.kind = $k RETURN ${RETURN_COLS} ${limitClause}`;
+      const stmt = this.conn.prepareSync(cypher);
+      const result = repo
+        ? this.conn.executeSync(stmt, { k: kind, r: repo })
+        : this.conn.executeSync(stmt, { k: kind });
+      return single(result).getAllSync().map(toGraphEdge);
+    }
+
     const result = repo
       ? this.conn.executeSync(this.stmtByKindAndRepo, { k: kind, r: repo })
       : this.conn.executeSync(this.stmtByKind, { k: kind });
-
-    const rows = single(result).getAllSync().map(toGraphEdge);
-    return options?.limit !== undefined ? rows.slice(0, options.limit) : rows;
+    return single(result).getAllSync().map(toGraphEdge);
   }
 
   // -------------------------------------------------------------------------
@@ -237,8 +237,8 @@ export class KuzuGraphStore implements GraphStore {
 
       for (const node of frontier) {
         const result = repo
-          ? this.conn.executeSync(this.stmtBfsStepWithRepo, { s: node, r: repo })
-          : this.conn.executeSync(this.stmtBfsStep, { s: node });
+          ? this.conn.executeSync(this.stmtBySourceAndRepo, { s: node, r: repo })
+          : this.conn.executeSync(this.stmtBySource, { s: node });
 
         const edges = single(result).getAllSync().map(toGraphEdge);
 

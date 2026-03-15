@@ -35,7 +35,7 @@ function findRepoForPath(
   repos: readonly RepoConfig[],
 ): string | null {
   for (const repo of repos) {
-    if (dirPath.startsWith(repo.localPath)) {
+    if (dirPath === repo.localPath || dirPath.startsWith(repo.localPath + "/")) {
       return repo.name;
     }
   }

@@ -43,10 +43,18 @@ export interface Stores {
 export async function createStores(options: StoreOptions): Promise<Stores> {
   if (options.backend === "kuzu") {
     // Dynamic import avoids circular tsconfig reference (storage-kuzu depends on storage).
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-    const mod = await import("@mma/storage-kuzu" as string);
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-    return mod.createKuzuStores({ dbPath: options.dbPath, readonly: options.readonly }) as Stores;
+    let mod: { createKuzuStores: (o: { dbPath: string; readonly?: boolean }) => Stores };
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+      mod = await import("@mma/storage-kuzu" as string);
+    } catch (e) {
+      throw new Error(
+        "Kuzu backend unavailable: " +
+          (e instanceof Error ? e.message : String(e)) +
+          ". Install kuzu or use --backend sqlite.",
+      );
+    }
+    return mod.createKuzuStores({ dbPath: options.dbPath, readonly: options.readonly });
   }
   // Default: sqlite
   return _createSqliteStores({

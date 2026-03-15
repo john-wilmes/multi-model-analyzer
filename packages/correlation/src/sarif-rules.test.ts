@@ -71,11 +71,11 @@ function makeServices(
 // ---------------------------------------------------------------------------
 
 describe("detectBreakingChangeRisk", () => {
-  it("emits warning when a module has 3 distinct dependent repos", () => {
+  it("emits warning when a module is depended on by 3 distinct repos", () => {
     const graph = makeGraph([
-      { source: "repo-a/src/api.ts", target: "lib", sourceRepo: "repo-a", targetRepo: "repo-b" },
-      { source: "repo-a/src/api.ts", target: "lib", sourceRepo: "repo-a", targetRepo: "repo-c" },
-      { source: "repo-a/src/api.ts", target: "lib", sourceRepo: "repo-a", targetRepo: "repo-d" },
+      { source: "repo-b/src/use.ts", target: "shared-lib/index.ts", sourceRepo: "repo-b", targetRepo: "repo-a" },
+      { source: "repo-c/src/use.ts", target: "shared-lib/index.ts", sourceRepo: "repo-c", targetRepo: "repo-a" },
+      { source: "repo-d/src/use.ts", target: "shared-lib/index.ts", sourceRepo: "repo-d", targetRepo: "repo-a" },
     ]);
 
     const results = detectBreakingChangeRisk(graph);
@@ -84,15 +84,15 @@ describe("detectBreakingChangeRisk", () => {
     const r = results[0]!;
     expect(r.ruleId).toBe("cross-repo/breaking-change-risk");
     expect(r.level).toBe("warning");
-    expect(r.locations![0]!.logicalLocations![0]!.name).toBe("repo-a/src/api.ts");
+    expect(r.locations![0]!.logicalLocations![0]!.name).toBe("shared-lib/index.ts");
     expect(r.relatedLocations).toHaveLength(3);
     expect(r.properties!["dependentRepoCount"]).toBe(3);
   });
 
   it("does NOT emit warning when a module has exactly 2 dependent repos", () => {
     const graph = makeGraph([
-      { source: "repo-a/src/api.ts", target: "lib", sourceRepo: "repo-a", targetRepo: "repo-b" },
-      { source: "repo-a/src/api.ts", target: "lib", sourceRepo: "repo-a", targetRepo: "repo-c" },
+      { source: "repo-b/src/use.ts", target: "shared-lib/index.ts", sourceRepo: "repo-b", targetRepo: "repo-a" },
+      { source: "repo-c/src/use.ts", target: "shared-lib/index.ts", sourceRepo: "repo-c", targetRepo: "repo-a" },
     ]);
 
     expect(detectBreakingChangeRisk(graph)).toHaveLength(0);
@@ -108,30 +108,30 @@ describe("detectBreakingChangeRisk", () => {
     expect(detectBreakingChangeRisk(graph)).toHaveLength(0);
   });
 
-  it("counts distinct target repos, not total edges", () => {
-    // Same source, same targetRepo repeated — should count as 1 distinct repo
+  it("counts distinct source repos, not total edges", () => {
+    // Same sourceRepo "repo-b" imports two different files — should count as 1 distinct repo
     const graph = makeGraph([
-      { source: "repo-a/src/api.ts", target: "lib", sourceRepo: "repo-a", targetRepo: "repo-b" },
-      { source: "repo-a/src/api.ts", target: "lib2", sourceRepo: "repo-a", targetRepo: "repo-b" },
-      { source: "repo-a/src/api.ts", target: "lib3", sourceRepo: "repo-a", targetRepo: "repo-c" },
+      { source: "repo-b/src/a.ts", target: "shared-lib/index.ts", sourceRepo: "repo-b", targetRepo: "repo-a" },
+      { source: "repo-b/src/b.ts", target: "shared-lib/index.ts", sourceRepo: "repo-b", targetRepo: "repo-a" },
+      { source: "repo-c/src/a.ts", target: "shared-lib/index.ts", sourceRepo: "repo-c", targetRepo: "repo-a" },
     ]);
-    // Only 2 distinct target repos — should not trigger
+    // Only 2 distinct source repos — should not trigger
     expect(detectBreakingChangeRisk(graph)).toHaveLength(0);
   });
 
   it("handles multiple modules, some triggering and some not", () => {
     const graph = makeGraph([
-      // module-1: 3 dependents — triggers
-      { source: "repo-a/mod1.ts", target: "lib", sourceRepo: "repo-a", targetRepo: "repo-b" },
-      { source: "repo-a/mod1.ts", target: "lib", sourceRepo: "repo-a", targetRepo: "repo-c" },
-      { source: "repo-a/mod1.ts", target: "lib", sourceRepo: "repo-a", targetRepo: "repo-d" },
-      // module-2: 1 dependent — does not trigger
-      { source: "repo-a/mod2.ts", target: "lib", sourceRepo: "repo-a", targetRepo: "repo-e" },
+      // shared-lib: depended on by 3 repos — triggers
+      { source: "repo-b/use.ts", target: "shared-lib/index.ts", sourceRepo: "repo-b", targetRepo: "repo-a" },
+      { source: "repo-c/use.ts", target: "shared-lib/index.ts", sourceRepo: "repo-c", targetRepo: "repo-a" },
+      { source: "repo-d/use.ts", target: "shared-lib/index.ts", sourceRepo: "repo-d", targetRepo: "repo-a" },
+      // other-lib: depended on by 1 repo — does not trigger
+      { source: "repo-e/use.ts", target: "other-lib/index.ts", sourceRepo: "repo-e", targetRepo: "repo-a" },
     ]);
 
     const results = detectBreakingChangeRisk(graph);
     expect(results).toHaveLength(1);
-    expect(results[0]!.locations![0]!.logicalLocations![0]!.name).toBe("repo-a/mod1.ts");
+    expect(results[0]!.locations![0]!.logicalLocations![0]!.name).toBe("shared-lib/index.ts");
   });
 });
 

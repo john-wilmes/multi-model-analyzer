@@ -10,6 +10,17 @@ import type { GraphStore } from "@mma/storage";
 import type { SearchStore } from "@mma/storage";
 import type { KVStore } from "@mma/storage";
 import kuzu from "kuzu";
+
+// ---------------------------------------------------------------------------
+// Shared helper
+// ---------------------------------------------------------------------------
+
+/** Normalize executeSync's union return to a single QueryResult. */
+export function single(
+  result: kuzu.QueryResult | kuzu.QueryResult[],
+): kuzu.QueryResult {
+  return Array.isArray(result) ? (result[0] as kuzu.QueryResult) : result;
+}
 import { KuzuKVStore } from "./kuzu-kv.js";
 import { KuzuGraphStore } from "./kuzu-graph.js";
 import { KuzuSearchStore } from "./kuzu-search.js";

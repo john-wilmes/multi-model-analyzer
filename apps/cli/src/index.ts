@@ -14,7 +14,7 @@ import { resolve, dirname } from "node:path";
 import { mkdirSync, existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { RepoConfig, ArchitecturalRule } from "@mma/core";
-import { createSqliteStores, createStores } from "@mma/storage";
+import { createStores } from "@mma/storage";
 import type { StorageBackend } from "@mma/storage";
 import { validateArchRules } from "@mma/heuristics";
 import type { RawArchRule } from "@mma/heuristics";
@@ -97,6 +97,11 @@ async function main(): Promise<void> {
     dbPath = resolve("data", "mma.db");
   }
 
+  // Resolve backend early for commands that don't load a config file.
+  // Full validation (against config.backend) happens later for config-aware commands.
+  const earlyBackend: StorageBackend =
+    values.backend === "kuzu" ? "kuzu" : "sqlite";
+
   // serve command bypasses config -- only needs the DB (read-only)
   if (command === "serve") {
     if (!existsSync(dbPath)) {
@@ -104,7 +109,7 @@ async function main(): Promise<void> {
       console.error("Run 'mma index' first to create the analysis database.");
       process.exit(1);
     }
-    const stores = createSqliteStores({ dbPath, readonly: true });
+    const stores = await createStores({ backend: earlyBackend, dbPath, readonly: true });
     try {
       await serveCommand({
         graphStore: stores.graphStore,
@@ -132,7 +137,7 @@ async function main(): Promise<void> {
       process.exit(1);
     }
     const affectedFormat = validateFormat(values.format, "table");
-    const stores = createSqliteStores({ dbPath, readonly: true });
+    const stores = await createStores({ backend: earlyBackend, dbPath, readonly: true });
     try {
       const { computeBlastRadius, computePageRank } = await import("@mma/query");
       const { parseRevisionRange, getChangedFilesInRange } = await import("@mma/ingestion");
@@ -225,7 +230,7 @@ async function main(): Promise<void> {
       process.exit(1);
     }
     const outputPath = values.output ?? "export.db";
-    const stores = createSqliteStores({ dbPath, readonly: true });
+    const stores = await createStores({ backend: earlyBackend, dbPath, readonly: true });
     try {
       await exportCommand({
         kvStore: stores.kvStore,
@@ -266,7 +271,7 @@ async function main(): Promise<void> {
     }
 
     mkdirSync(dirname(dbPath), { recursive: true });
-    const stores = createSqliteStores({ dbPath });
+    const stores = await createStores({ backend: earlyBackend, dbPath });
     try {
       // Optionally load config for repo mismatch warnings
       let configRepos: string[] | undefined;
@@ -304,7 +309,7 @@ async function main(): Promise<void> {
       console.error("Run 'mma index' first to create the analysis database.");
       process.exit(1);
     }
-    const stores = createSqliteStores({ dbPath, readonly: true });
+    const stores = await createStores({ backend: earlyBackend, dbPath, readonly: true });
     try {
       const valFormat = values.format as "json" | "table" | "markdown" | undefined;
       if (valFormat && !["json", "table", "markdown"].includes(valFormat)) {
@@ -343,7 +348,7 @@ async function main(): Promise<void> {
       console.error("Run 'mma index' first to create the analysis database.");
       process.exit(1);
     }
-    const stores = createSqliteStores({ dbPath, readonly: true });
+    const stores = await createStores({ backend: earlyBackend, dbPath, readonly: true });
     try {
       const fmt = validateReportFormat(values.format, "json");
       await reportCommand({
@@ -368,7 +373,7 @@ async function main(): Promise<void> {
       console.error("Run 'mma index' first to create the analysis database.");
       process.exit(1);
     }
-    const stores = createSqliteStores({ dbPath, readonly: true });
+    const stores = await createStores({ backend: earlyBackend, dbPath, readonly: true });
     try {
       const fmt = validateReportFormat(values.format, "markdown");
       await practicesCommand({
@@ -413,7 +418,7 @@ async function main(): Promise<void> {
       "dashboard",
       "dist",
     );
-    const stores = createSqliteStores({ dbPath, readonly: true });
+    const stores = await createStores({ backend: earlyBackend, dbPath, readonly: true });
     try {
       await dashboardCommand({
         kvStore: stores.kvStore,

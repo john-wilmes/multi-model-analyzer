@@ -8,13 +8,7 @@
 
 import type { KVStore } from "@mma/storage";
 import kuzu from "kuzu";
-
-/** Normalize executeSync's union return to a single QueryResult. */
-function single(
-  result: kuzu.QueryResult | kuzu.QueryResult[],
-): kuzu.QueryResult {
-  return Array.isArray(result) ? (result[0] as kuzu.QueryResult) : result;
-}
+import { single } from "./kuzu-common.js";
 
 /** Extract all rows from a QueryResult | QueryResult[], guarding the array case. */
 function allRows(
@@ -143,8 +137,16 @@ export class KuzuKVStore implements KVStore {
   async setMany(
     entries: ReadonlyArray<readonly [key: string, value: string]>,
   ): Promise<void> {
-    for (const [key, value] of entries) {
-      this.conn.executeSync(this.stmtSet, { k: key, v: value });
+    if (entries.length === 0) return;
+    this.conn.querySync("BEGIN TRANSACTION");
+    try {
+      for (const [key, value] of entries) {
+        this.conn.executeSync(this.stmtSet, { k: key, v: value });
+      }
+      this.conn.querySync("COMMIT");
+    } catch (e) {
+      this.conn.querySync("ROLLBACK");
+      throw e;
     }
   }
 
