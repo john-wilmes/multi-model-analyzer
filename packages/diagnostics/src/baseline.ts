@@ -11,7 +11,7 @@
 import type { SarifResult, SarifBaselineState } from "@mma/core";
 
 /** Result fingerprint for matching across runs */
-function fingerprint(result: SarifResult): string {
+export function fingerprint(result: SarifResult): string {
   // Collect all logicalLocation FQNs across all locations for a richer key.
   // Joining them avoids collisions when multiple findings share the same
   // ruleId and first-location FQN (e.g. two SDP violations from the same

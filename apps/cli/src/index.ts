@@ -28,6 +28,7 @@ import { mergeCommand } from "./commands/merge-cmd.js";
 import { importCommand } from "./commands/import-cmd.js";
 import { validateCommand } from "./commands/validate-cmd.js";
 import { compressCommand, dashboardCommand, maybeDecompress } from "./commands/dashboard-cmd.js";
+import { baselineCreateCommand, baselineCheckCommand } from "./commands/baseline-cmd.js";
 import { printJson, printTable, printSarif, validateFormat, validateReportFormat } from "./formatter.js";
 import { parseWatchInterval, watchLoop } from "./watch.js";
 
@@ -358,6 +359,56 @@ async function main(): Promise<void> {
     }
   }
 
+  // baseline command: create or check a known-violations baseline
+  if (command === "baseline") {
+    const subcommand = positionals[1];
+    if (!subcommand || !["create", "check"].includes(subcommand)) {
+      console.error("Usage: mma baseline create [-o baseline.json] [--db path]");
+      console.error("       mma baseline check -b baseline.json [--db path]");
+      process.exit(1);
+    }
+    if (!existsSync(dbPath)) {
+      console.error(`Database not found: ${dbPath}`);
+      console.error("Run 'mma index' first to create the analysis database.");
+      process.exit(1);
+    }
+    const stores = await createStores({ backend: earlyBackend, dbPath, readonly: true });
+    try {
+      if (subcommand === "create") {
+        await baselineCreateCommand({
+          kvStore: stores.kvStore,
+          output: resolve(values.output ?? "baseline.json"),
+        });
+      } else {
+        const bPath = values.baseline;
+        if (!bPath) {
+          console.error("Missing --baseline flag. Usage: mma baseline check --baseline baseline.json");
+          process.exit(1);
+        }
+        const result = await baselineCheckCommand({
+          kvStore: stores.kvStore,
+          baselinePath: resolve(bPath),
+        });
+        console.log(`Current: ${result.totalCurrent} finding(s), Baseline: ${result.totalBaseline} finding(s)`);
+        console.log(`New: ${result.newFindings.length}, Absent: ${result.absentFindings}`);
+        if (result.newFindings.length > 0) {
+          console.log("\nNew violations:");
+          for (const f of result.newFindings) {
+            const fqns = f.locations
+              ?.flatMap((l) => l.logicalLocations?.map((ll) => ll.fullyQualifiedName) ?? [])
+              .filter(Boolean)
+              .join(", ") ?? "";
+            console.log(`  ${f.ruleId}: ${f.message.text}${fqns ? ` (${fqns})` : ""}`);
+          }
+          process.exit(1);
+        }
+      }
+    } finally {
+      stores.close();
+    }
+    return;
+  }
+
   // report command bypasses config -- only needs the DB (read-only)
   if (command === "report") {
     if (!existsSync(dbPath)) {
@@ -645,6 +696,10 @@ Usage:
   mma import <file.db> [--db path] [-v]         Import raw export baseline
   mma merge file1.db file2.db ... [-o merged.db]
                                                 Merge anonymized export DBs
+  mma baseline create [-o baseline.json] [--db path]
+                                                Snapshot findings as known-violations baseline
+  mma baseline check --baseline baseline.json [--db path]
+                                                Check for new violations (exit 1 if found)
   mma validate [--db path] [--mirrors dir] [--sample-size 50] [--seed 42]
                [--format json|table|markdown] [-o file]
                                                 Validate SARIF findings quality
