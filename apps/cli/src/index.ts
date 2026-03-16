@@ -89,10 +89,24 @@ async function main(): Promise<void> {
   const verbose = values.verbose;
 
   // Resolve DB path: --db flag > config.dbPath > default data/mma.db
-  // For config-less commands (serve, report), config.dbPath is not available
   let dbPath: string;
   if (values.db) {
     dbPath = values.db === ":memory:" ? ":memory:" : resolve(values.db);
+  } else if (values.config) {
+    // Even for config-less commands (serve, report), honour config.dbPath
+    try {
+      const cfgRaw = JSON.parse(readFileSync(resolve(values.config), "utf-8"));
+      if (cfgRaw.dbPath) {
+        dbPath =
+          cfgRaw.dbPath === ":memory:"
+            ? ":memory:"
+            : resolve(dirname(resolve(values.config)), cfgRaw.dbPath);
+      } else {
+        dbPath = resolve("data", "mma.db");
+      }
+    } catch {
+      dbPath = resolve("data", "mma.db");
+    }
   } else {
     dbPath = resolve("data", "mma.db");
   }
@@ -443,9 +457,20 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // Resolve all paths in config relative to the config file's directory
+  const configDir = dirname(configPath);
+  config = {
+    ...config,
+    mirrorDir: resolve(configDir, config.mirrorDir),
+    repos: config.repos.map((r) => ({
+      ...r,
+      localPath: resolve(configDir, r.localPath),
+    })),
+  };
+
   // If no --db flag was provided, check config.dbPath (resolved relative to config file)
   if (!values.db && config.dbPath) {
-    dbPath = config.dbPath === ":memory:" ? ":memory:" : resolve(dirname(configPath), config.dbPath);
+    dbPath = config.dbPath === ":memory:" ? ":memory:" : resolve(configDir, config.dbPath);
   }
 
   // Resolve backend: --backend flag > config.backend > "sqlite"
