@@ -571,7 +571,198 @@ describe("indexCommand", () => {
   });
 
   // -----------------------------------------------------------------------
-  // Test 11: pipelineComplete flag prevents recovery on fully-completed repo
+  // Test 11: Incremental indexing -- modify one file, graph matches full re-index
+  // -----------------------------------------------------------------------
+  it("incremental index after modifying one file matches full re-index", async () => {
+    // --- Run 1: Full index of 3 files with edges a→b, b→c ---
+    const changeSet1 = makeChangeSet({
+      repo: "repo-a",
+      commitHash: "inc1",
+      addedFiles: ["src/a.ts", "src/b.ts", "src/c.ts"],
+    });
+    mockDetectChanges.mockResolvedValue(changeSet1);
+
+    const classified1 = [
+      makeClassified("src/a.ts", "repo-a"),
+      makeClassified("src/b.ts", "repo-a"),
+      makeClassified("src/c.ts", "repo-a"),
+    ];
+    mockClassifyFiles.mockReturnValue(classified1);
+
+    const parsedFiles1 = [
+      { ...makeParsedFile("src/a.ts", "repo-a"), contentHash: "a-v1" },
+      { ...makeParsedFile("src/b.ts", "repo-a"), contentHash: "b-v1" },
+      { ...makeParsedFile("src/c.ts", "repo-a"), contentHash: "c-v1" },
+    ];
+    mockParseFiles.mockResolvedValue(
+      makeParseResult(parsedFiles1, ["src/a.ts", "src/b.ts", "src/c.ts"]),
+    );
+
+    const edgeAB: GraphEdge = { source: "src/a.ts", target: "src/b.ts", kind: "imports", metadata: { repo: "repo-a" } };
+    const edgeBC: GraphEdge = { source: "src/b.ts", target: "src/c.ts", kind: "imports", metadata: { repo: "repo-a" } };
+    mockExtractDepGraph.mockReturnValue({
+      repo: "repo-a",
+      edges: [edgeAB, edgeBC],
+      circularDependencies: [],
+    });
+
+    await indexCommand(makeOptions([repoA], { kvStore, graphStore, searchStore }));
+
+    // Verify full index: 2 import edges
+    const edgesAfterRun1 = await graphStore.getEdgesByKind("imports", "repo-a");
+    expect(edgesAfterRun1).toHaveLength(2);
+    expect(edgesAfterRun1.some((e: GraphEdge) => e.source === "src/a.ts" && e.target === "src/b.ts")).toBe(true);
+    expect(edgesAfterRun1.some((e: GraphEdge) => e.source === "src/b.ts" && e.target === "src/c.ts")).toBe(true);
+
+    // Verify symbols cached for all 3 files
+    expect(await kvStore.get("symbols:repo-a:src/a.ts")).toBeDefined();
+    expect(await kvStore.get("symbols:repo-a:src/b.ts")).toBeDefined();
+    expect(await kvStore.get("symbols:repo-a:src/c.ts")).toBeDefined();
+
+    // --- Run 2: Incremental -- modify a.ts (new edge a→c replacing a→b) ---
+    vi.clearAllMocks();
+
+    const changeSet2 = makeChangeSet({
+      repo: "repo-a",
+      commitHash: "inc2",
+      previousCommitHash: "inc1",
+      modifiedFiles: ["src/a.ts"],
+    });
+    mockDetectChanges.mockResolvedValue(changeSet2);
+    mockClassifyFiles.mockReturnValue([makeClassified("src/a.ts", "repo-a")]);
+
+    // parseFiles only returns the changed file
+    const parsedFiles2 = [
+      { ...makeParsedFile("src/a.ts", "repo-a"), contentHash: "a-v2" },
+    ];
+    mockParseFiles.mockResolvedValue(
+      makeParseResult(parsedFiles2, ["src/a.ts"]),
+    );
+
+    // extractDependencyGraph returns new edge for the changed file only
+    const edgeAC: GraphEdge = { source: "src/a.ts", target: "src/c.ts", kind: "imports", metadata: { repo: "repo-a" } };
+    mockExtractDepGraph.mockReturnValue({
+      repo: "repo-a",
+      edges: [edgeAC],
+      circularDependencies: [],
+    });
+
+    await indexCommand(makeOptions([repoA], { kvStore, graphStore, searchStore }));
+
+    // Verify incremental result: a→c and b→c (old a→b removed)
+    const edgesIncremental = await graphStore.getEdgesByKind("imports", "repo-a");
+    expect(edgesIncremental).toHaveLength(2);
+    expect(edgesIncremental.some((e: GraphEdge) => e.source === "src/a.ts" && e.target === "src/c.ts")).toBe(true);
+    expect(edgesIncremental.some((e: GraphEdge) => e.source === "src/b.ts" && e.target === "src/c.ts")).toBe(true);
+    // Old edge a→b must be gone
+    expect(edgesIncremental.some((e: GraphEdge) => e.source === "src/a.ts" && e.target === "src/b.ts")).toBe(false);
+
+    // Verify cached symbols include all 3 files (b.ts and c.ts from cache)
+    expect(await kvStore.get("symbols:repo-a:src/a.ts")).toBeDefined();
+    expect(await kvStore.get("symbols:repo-a:src/b.ts")).toBeDefined();
+    expect(await kvStore.get("symbols:repo-a:src/c.ts")).toBeDefined();
+    // a.ts should have updated contentHash
+    const aSymbols = JSON.parse((await kvStore.get("symbols:repo-a:src/a.ts"))!);
+    expect(aSymbols.contentHash).toBe("a-v2");
+
+    // --- Run 3: Full re-index with same state -- result should match incremental ---
+    vi.clearAllMocks();
+
+    const changeSet3 = makeChangeSet({
+      repo: "repo-a",
+      commitHash: "inc3",
+      previousCommitHash: "inc2",
+      addedFiles: ["src/a.ts", "src/b.ts", "src/c.ts"],
+    });
+    mockDetectChanges.mockResolvedValue(changeSet3);
+    mockClassifyFiles.mockReturnValue([
+      makeClassified("src/a.ts", "repo-a"),
+      makeClassified("src/b.ts", "repo-a"),
+      makeClassified("src/c.ts", "repo-a"),
+    ]);
+
+    const parsedFiles3 = [
+      { ...makeParsedFile("src/a.ts", "repo-a"), contentHash: "a-v2" },
+      { ...makeParsedFile("src/b.ts", "repo-a"), contentHash: "b-v1" },
+      { ...makeParsedFile("src/c.ts", "repo-a"), contentHash: "c-v1" },
+    ];
+    mockParseFiles.mockResolvedValue(
+      makeParseResult(parsedFiles3, ["src/a.ts", "src/b.ts", "src/c.ts"]),
+    );
+
+    // Same edges as after modification: a→c and b→c
+    mockExtractDepGraph.mockReturnValue({
+      repo: "repo-a",
+      edges: [edgeAC, edgeBC],
+      circularDependencies: [],
+    });
+
+    await indexCommand({
+      ...makeOptions([repoA], { kvStore, graphStore, searchStore }),
+      forceFullReindex: true,
+    });
+
+    // Full re-index should produce identical edges
+    const edgesFullReindex = await graphStore.getEdgesByKind("imports", "repo-a");
+    expect(edgesFullReindex).toHaveLength(2);
+    expect(edgesFullReindex.some((e: GraphEdge) => e.source === "src/a.ts" && e.target === "src/c.ts")).toBe(true);
+    expect(edgesFullReindex.some((e: GraphEdge) => e.source === "src/b.ts" && e.target === "src/c.ts")).toBe(true);
+  });
+
+  // -----------------------------------------------------------------------
+  // Test 12: Incremental indexing -- delete one file, edges cleaned up
+  // -----------------------------------------------------------------------
+  it("incremental index removes edges when a file is deleted", async () => {
+    // --- Run 1: Full index of 3 files ---
+    mockDetectChanges.mockResolvedValue(
+      makeChangeSet({ repo: "repo-a", commitHash: "del1", addedFiles: ["src/a.ts", "src/b.ts", "src/c.ts"] }),
+    );
+    mockClassifyFiles.mockReturnValue([
+      makeClassified("src/a.ts", "repo-a"),
+      makeClassified("src/b.ts", "repo-a"),
+      makeClassified("src/c.ts", "repo-a"),
+    ]);
+    mockParseFiles.mockResolvedValue(
+      makeParseResult([
+        { ...makeParsedFile("src/a.ts", "repo-a"), contentHash: "a1" },
+        { ...makeParsedFile("src/b.ts", "repo-a"), contentHash: "b1" },
+        { ...makeParsedFile("src/c.ts", "repo-a"), contentHash: "c1" },
+      ], ["src/a.ts", "src/b.ts", "src/c.ts"]),
+    );
+    mockExtractDepGraph.mockReturnValue({
+      repo: "repo-a",
+      edges: [
+        { source: "src/a.ts", target: "src/b.ts", kind: "imports", metadata: { repo: "repo-a" } },
+        { source: "src/b.ts", target: "src/c.ts", kind: "imports", metadata: { repo: "repo-a" } },
+      ],
+      circularDependencies: [],
+    });
+
+    await indexCommand(makeOptions([repoA], { kvStore, graphStore, searchStore }));
+    expect(await graphStore.getEdgesByKind("imports", "repo-a")).toHaveLength(2);
+
+    // --- Run 2: Delete b.ts (edge b→c should be removed, a→b target orphaned) ---
+    vi.clearAllMocks();
+
+    mockDetectChanges.mockResolvedValue(
+      makeChangeSet({ repo: "repo-a", commitHash: "del2", previousCommitHash: "del1", deletedFiles: ["src/b.ts"] }),
+    );
+    mockClassifyFiles.mockReturnValue([]);
+
+    await indexCommand(makeOptions([repoA], { kvStore, graphStore, searchStore }));
+
+    const edgesAfterDelete = await graphStore.getEdgesByKind("imports", "repo-a");
+    // b→c edge should be gone (b.ts was source), a→b still exists (a.ts is source)
+    expect(edgesAfterDelete.some((e: GraphEdge) => e.source === "src/b.ts")).toBe(false);
+    expect(edgesAfterDelete.some((e: GraphEdge) => e.source === "src/a.ts" && e.target === "src/b.ts")).toBe(true);
+    expect(edgesAfterDelete).toHaveLength(1);
+
+    // KV symbols for b.ts should be cleaned up
+    expect(await kvStore.get("symbols:repo-a:src/b.ts")).toBeUndefined();
+  });
+
+  // -----------------------------------------------------------------------
+  // Test 13: pipelineComplete flag prevents recovery on fully-completed repo
   // -----------------------------------------------------------------------
   it("skips recovery when pipelineComplete is set", async () => {
     // Simulate a fully completed previous run
