@@ -22,6 +22,8 @@ export class SqliteGraphStore implements GraphStore {
   private readonly stmtCountByKindAndRepo: Database.Statement;
   private readonly stmtClearAll: Database.Statement;
   private readonly stmtClearRepo: Database.Statement;
+  private readonly stmtDeleteBySource: Database.Statement;
+  private readonly stmtDeleteBySourcePrefix: Database.Statement;
   private readonly stmtBfsNoRepo: Database.Statement;
   private readonly stmtBfsWithRepo: Database.Statement;
   private readonly insertMany: Database.Transaction<
@@ -62,6 +64,12 @@ export class SqliteGraphStore implements GraphStore {
     this.stmtClearAll = db.prepare("DELETE FROM edges");
     this.stmtClearRepo = db.prepare(
       "DELETE FROM edges WHERE json_extract(metadata, '$.repo') = ?",
+    );
+    this.stmtDeleteBySource = db.prepare(
+      "DELETE FROM edges WHERE source = ? AND json_extract(metadata, '$.repo') = ?",
+    );
+    this.stmtDeleteBySourcePrefix = db.prepare(
+      "DELETE FROM edges WHERE source LIKE ? ESCAPE '\\' AND json_extract(metadata, '$.repo') = ?",
     );
 
     // Recursive CTE for BFS traversal without repo filter
@@ -182,6 +190,19 @@ export class SqliteGraphStore implements GraphStore {
     } else {
       this.stmtClearAll.run();
     }
+  }
+
+  async deleteEdgesForFiles(repo: string, filePaths: readonly string[]): Promise<void> {
+    if (filePaths.length === 0) return;
+    const db = this.stmtDeleteBySource.database;
+    const txn = db.transaction(() => {
+      for (const fp of filePaths) {
+        this.stmtDeleteBySource.run(fp, repo);
+        const escaped = fp.replace(/[%_\\]/g, "\\$&");
+        this.stmtDeleteBySourcePrefix.run(escaped + "#%", repo);
+      }
+    });
+    txn();
   }
 
   async close(): Promise<void> {

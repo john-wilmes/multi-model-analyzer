@@ -93,6 +93,7 @@ export interface IndexOptions {
   readonly affected?: boolean;
   readonly narrateOnly?: boolean;
   readonly narrateForce?: boolean;
+  readonly forceFullReindex?: boolean;
 }
 
 export interface IndexResult {
@@ -291,8 +292,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       await options.searchStore.delete(deletedIds);
 
       // Remove stale graph edges sourced from deleted files
-      // (Graph edges are re-added during Phase 4, so clearing per-repo is simpler)
-      await options.graphStore.clear(changeSet.repo);
+      await options.graphStore.deleteEdgesForFiles(changeSet.repo, changeSet.deletedFiles);
 
       // Remove KV entries associated with deleted files
       for (const filePath of changeSet.deletedFiles) {
@@ -482,6 +482,22 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       trees = result.treeSitterTrees;
       parsedFilesByRepo.set(repo.name, result.parsedFiles);
 
+      // For incremental mode: load cached symbols for unchanged files and merge
+      if (!options.forceFullReindex) {
+        const changedPathSet = new Set(result.parsedFiles.map(pf => pf.path));
+        const symbolEntries = await kvStore.getByPrefix(`symbols:${repo.name}:`);
+        for (const [key, raw] of symbolEntries) {
+          const filePath = key.slice(`symbols:${repo.name}:`.length);
+          if (changedPathSet.has(filePath)) continue; // freshly parsed
+          try {
+            const { symbols, contentHash, kind = "typescript" } = JSON.parse(raw) as { symbols: SymbolInfo[]; contentHash: string; kind?: string };
+            result.parsedFiles.push({ path: filePath, repo: repo.name, kind: kind as ParsedFile["kind"], symbols, contentHash, errors: [] });
+          } catch {
+            // skip malformed cached entry
+          }
+        }
+      }
+
       // Persist parsed symbols to KV for failure recovery.
       // If Phase 5+ fails, the next run can load these instead of re-parsing.
       const symbolEntries: Array<readonly [string, string]> = result.parsedFiles.map((pf) => [
@@ -504,7 +520,12 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         const elapsed = Math.round(performance.now() - start);
 
         depGraphByRepo.set(repo.name, graph);
-        await options.graphStore.clear(repo.name);
+        const changedFilePaths = classified.map(f => f.path);
+        if (options.forceFullReindex) {
+          await options.graphStore.clear(repo.name);
+        } else {
+          await options.graphStore.deleteEdgesForFiles(repo.name, changedFilePaths);
+        }
         await options.graphStore.addEdges(graph.edges);
 
         log(`  [${repo.name}] ${graph.edges.length} import edges (${elapsed}ms)`);
@@ -559,6 +580,11 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     if (repoChangeSet) {
       await kvStore.delete(`pipelineComplete:${repo.name}`);
       await kvStore.set(`commit:${repo.name}`, repoChangeSet.commitHash);
+    }
+    // Reconstruct full depGraph from graph store (incremental: changed + unchanged edges)
+    if (!options.forceFullReindex) {
+      const fullImportEdges = await options.graphStore.getEdgesByKind("imports", repo.name);
+      depGraphByRepo.set(repo.name, { repo: repo.name, edges: fullImportEdges, circularDependencies: [] });
     }
     } // end of normal (non-recovery) Phases 3-4d block
 

@@ -283,4 +283,83 @@ describe("SqliteGraphStore", () => {
       expect(remaining[0]!.metadata?.["repo"]).toBe("r2");
     });
   });
+
+  describe("deleteEdgesForFiles", () => {
+    it("deletes exact-path edges (imports)", async () => {
+      await graphStore.addEdges([
+        edge("src/a.ts", "src/c.ts", "imports", "myrepo"),
+        edge("src/b.ts", "src/c.ts", "imports", "myrepo"),
+      ]);
+
+      await graphStore.deleteEdgesForFiles("myrepo", ["src/a.ts"]);
+
+      const remaining = await graphStore.getEdgesByKind("imports", "myrepo");
+      expect(remaining).toHaveLength(1);
+      expect(remaining[0]!.source).toBe("src/b.ts");
+    });
+
+    it("deletes sub-symbol edges (calls via # prefix)", async () => {
+      await graphStore.addEdges([
+        edge("src/a.ts#Foo.bar", "src/c.ts", "calls", "myrepo"),
+        edge("src/a.ts#baz",    "src/d.ts", "calls", "myrepo"),
+        edge("src/b.ts#Other",  "src/c.ts", "calls", "myrepo"),
+      ]);
+
+      await graphStore.deleteEdgesForFiles("myrepo", ["src/a.ts"]);
+
+      const remaining = await graphStore.getEdgesByKind("calls", "myrepo");
+      expect(remaining).toHaveLength(1);
+      expect(remaining[0]!.source).toBe("src/b.ts#Other");
+    });
+
+    it("does not delete edges from other repos", async () => {
+      await graphStore.addEdges([
+        edge("src/a.ts", "src/c.ts", "imports", "repo-a"),
+        edge("src/a.ts", "src/d.ts", "imports", "repo-b"),
+      ]);
+
+      await graphStore.deleteEdgesForFiles("repo-a", ["src/a.ts"]);
+
+      const repoBEdges = await graphStore.getEdgesByKind("imports", "repo-b");
+      expect(repoBEdges).toHaveLength(1);
+      expect(repoBEdges[0]!.source).toBe("src/a.ts");
+    });
+
+    it("is a no-op for empty file list", async () => {
+      await graphStore.addEdges([
+        edge("src/a.ts", "src/b.ts", "imports", "myrepo"),
+      ]);
+
+      await graphStore.deleteEdgesForFiles("myrepo", []);
+
+      const remaining = await graphStore.getEdgesByKind("imports", "myrepo");
+      expect(remaining).toHaveLength(1);
+    });
+
+    it("does not delete edges where the file is the target, not the source", async () => {
+      await graphStore.addEdges([
+        edge("src/other.ts", "src/a.ts", "imports", "myrepo"),
+      ]);
+
+      await graphStore.deleteEdgesForFiles("myrepo", ["src/a.ts"]);
+
+      const remaining = await graphStore.getEdgesByKind("imports", "myrepo");
+      expect(remaining).toHaveLength(1);
+      expect(remaining[0]!.target).toBe("src/a.ts");
+    });
+
+    it("handles multiple files in a single call", async () => {
+      await graphStore.addEdges([
+        edge("src/a.ts", "src/c.ts", "imports", "myrepo"),
+        edge("src/b.ts", "src/c.ts", "imports", "myrepo"),
+        edge("src/keep.ts", "src/c.ts", "imports", "myrepo"),
+      ]);
+
+      await graphStore.deleteEdgesForFiles("myrepo", ["src/a.ts", "src/b.ts"]);
+
+      const remaining = await graphStore.getEdgesByKind("imports", "myrepo");
+      expect(remaining).toHaveLength(1);
+      expect(remaining[0]!.source).toBe("src/keep.ts");
+    });
+  });
 });

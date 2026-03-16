@@ -27,6 +27,8 @@ export interface GraphStore {
   getEdgeCountsByKindAndRepo(kind: EdgeKind): Promise<Map<string, number>>;
   traverseBFS(start: string, options: number | TraversalOptions): Promise<GraphEdge[]>;
   clear(repo?: string): Promise<void>;
+  /** Delete edges sourced from specific files (exact path or path#symbol prefix). */
+  deleteEdgesForFiles(repo: string, filePaths: readonly string[]): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -111,6 +113,17 @@ export class InMemoryGraphStore implements GraphStore {
     } else {
       this.edges = [];
     }
+  }
+
+  async deleteEdgesForFiles(repo: string, filePaths: readonly string[]): Promise<void> {
+    if (filePaths.length === 0) return;
+    const pathSet = new Set(filePaths);
+    const prefixes = filePaths.map(p => p + "#");
+    this.edges = this.edges.filter(e => {
+      if (e.metadata?.["repo"] !== repo) return true;
+      if (pathSet.has(e.source)) return false;
+      return !prefixes.some(pfx => e.source.startsWith(pfx));
+    });
   }
 
   async close(): Promise<void> {

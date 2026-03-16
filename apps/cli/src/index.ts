@@ -66,6 +66,7 @@ async function main(): Promise<void> {
       "max-api-calls": { type: "string" },
       "narrate-only": { type: "boolean", default: false },
       force: { type: "boolean", default: false },
+      "force-full-reindex": { type: "boolean", default: false },
       port: { type: "string", default: "3000" },
       backend: { type: "string" },
     },
@@ -563,6 +564,7 @@ async function main(): Promise<void> {
           maxApiCalls,
           narrateOnly: values["narrate-only"],
           narrateForce: values["force"],
+          forceFullReindex: values["force-full-reindex"],
         } as const;
 
         if (values.watch) {
@@ -631,7 +633,8 @@ Multi-Model Analyzer (mma)
 Usage:
   mma index [-c config.json] [-v] [--affected] [--baseline file.db]
             [--format json|table|sarif] [--watch [-w] [--watch-interval N]]
-            [--narrate-only] [--force]    Index repositories (default: table)
+            [--narrate-only] [--force] [--force-full-reindex]
+                                          Index repositories (default: table)
   mma query [-c config.json] "..." [--format json|table|sarif]
                                                 Query the index (default: table)
   mma affected <rev-range> [--db path] [--format json|table|sarif]
@@ -672,6 +675,7 @@ Options:
   --seed          PRNG seed for reproducibility (default: 42)
   --port          Port for dashboard server (default: 3000)
   --force         Bypass narration cache (use with --narrate-only or --api-key)
+  --force-full-reindex  Clear and rebuild graph for each repo (default: incremental)
   --backend       Storage backend: sqlite (default) or kuzu
   -h, --help      Show this help message
   --version       Show version number

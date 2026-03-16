@@ -98,6 +98,9 @@ export class KuzuGraphStore implements GraphStore {
   // Clear all (DETACH DELETE)
   private readonly stmtClearAll: InstanceType<typeof kuzu.PreparedStatement>;
 
+  // Delete edges sourced from a specific file (by exact id or id# prefix), per kind
+  private readonly stmtDeleteByFileAndRepo: Map<EdgeKind, InstanceType<typeof kuzu.PreparedStatement>>;
+
   constructor(conn: InstanceType<typeof kuzu.Connection>) {
     this.conn = conn;
 
@@ -113,6 +116,7 @@ export class KuzuGraphStore implements GraphStore {
     this.stmtByKindAndRepo = new Map();
     this.stmtCountByKindAndRepo = new Map();
     this.stmtClearKind = new Map();
+    this.stmtDeleteByFileAndRepo = new Map();
 
     for (const kind of ALL_EDGE_KINDS) {
       const table = EDGE_TABLE[kind];
@@ -149,6 +153,13 @@ export class KuzuGraphStore implements GraphStore {
         kind,
         conn.prepareSync(
           `MATCH (s:Symbol)-[r:${table}]->(t:Symbol) WHERE r.repo = $r DELETE r`,
+        ),
+      );
+
+      this.stmtDeleteByFileAndRepo.set(
+        kind,
+        conn.prepareSync(
+          `MATCH (s:Symbol)-[r:${table}]->(t:Symbol) WHERE r.repo = $r AND (s.id = $fp OR s.id STARTS WITH $pfx) DELETE r`,
         ),
       );
     }
@@ -417,6 +428,27 @@ export class KuzuGraphStore implements GraphStore {
       }
     } else {
       this.conn.executeSync(this.stmtClearAll, {});
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // deleteEdgesForFiles
+  // -------------------------------------------------------------------------
+
+  async deleteEdgesForFiles(repo: string, filePaths: readonly string[]): Promise<void> {
+    if (filePaths.length === 0) return;
+    this.conn.querySync("BEGIN TRANSACTION");
+    try {
+      for (const fp of filePaths) {
+        const pfx = fp + "#";
+        for (const kind of ALL_EDGE_KINDS) {
+          this.conn.executeSync(this.stmtDeleteByFileAndRepo.get(kind)!, { r: repo, fp, pfx });
+        }
+      }
+      this.conn.querySync("COMMIT");
+    } catch (e) {
+      this.conn.querySync("ROLLBACK");
+      throw new Error("Kuzu deleteEdgesForFiles failed", { cause: e });
     }
   }
 
