@@ -91,6 +91,7 @@ export interface IndexOptions {
   readonly maxApiCalls?: number;
   readonly rules?: readonly ArchitecturalRule[];
   readonly affected?: boolean;
+  readonly narrateOnly?: boolean;
 }
 
 export interface IndexResult {
@@ -107,6 +108,143 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
   const tracer = new PipelineTracer();
 
   log(`Indexing ${repos.length} repositories...`);
+
+  // Narrate-only mode: skip Phases 1-7, regenerate narrations from stored data
+  if (options.narrateOnly) {
+    if (!options.anthropicApiKey) {
+      throw new Error("--narrate-only requires an Anthropic API key");
+    }
+    log("Narrate-only mode: skipping analysis, regenerating narrations from stored data...");
+
+    // Reconstruct repoSarifCounts from stored per-category SARIF keys
+    const repoSarifCounts = new Map<string, Record<string, number>>();
+    let totalFindings = 0;
+    for (const repo of repos) {
+      const counts: Record<string, number> = {};
+      for (const key of ["config", "fault", "deadExports", "arch", "instability", "blastRadius"] as const) {
+        const json = await kvStore.get(`sarif:${key}:${repo.name}`);
+        if (json) {
+          try {
+            const results = JSON.parse(json) as unknown[];
+            counts[key] = results.length;
+            totalFindings += results.length;
+          } catch { /* skip malformed */ }
+        }
+      }
+      repoSarifCounts.set(repo.name, counts);
+    }
+    // Add correlation SARIF count
+    const correlationSarifJson = await kvStore.get("sarif:correlation");
+    if (correlationSarifJson) {
+      try {
+        const correlationResults = JSON.parse(correlationSarifJson) as unknown[];
+        totalFindings += correlationResults.length;
+      } catch { /* skip */ }
+    }
+
+    // Build narration inputs (same logic as Phase 8 in the full pipeline)
+    tracer.startPhase("Narration");
+    const narrationStart = performance.now();
+    const repoInputs: RepoNarrationInput[] = [];
+
+    for (const repo of repos) {
+      const patternsJson = await kvStore.get(`patterns:${repo.name}`);
+      const patterns: string[] = patternsJson
+        ? (JSON.parse(patternsJson) as Array<{ kind: string }>).map((p) => p.kind)
+        : [];
+
+      const summaryJson = await kvStore.get(`metricsSummary:${repo.name}`);
+      const metricsSummary = summaryJson ? JSON.parse(summaryJson) as RepoNarrationInput["metricsSummary"] : null;
+
+      const sarifCounts = repoSarifCounts.get(repo.name) ?? {};
+
+      // Recover service names + summaries from tier-4 cache
+      const services: string[] = [];
+      const serviceSummaries: string[] = [];
+      const t4Keys = await kvStore.keys("summary:t4:");
+      for (const k of t4Keys) {
+        const val = await kvStore.get(k);
+        if (val) {
+          try {
+            const s = JSON.parse(val) as { entityId: string; description: string };
+            if (s.entityId.startsWith(`service:`) && s.entityId.includes(repo.name)) {
+              services.push(s.entityId.replace("service:", ""));
+              if (s.description) serviceSummaries.push(s.description);
+            }
+          } catch { /* skip malformed */ }
+        }
+      }
+
+      // Cross-repo edge count for this repo
+      let crossRepoEdges = 0;
+      const corrGraphJson = await kvStore.get("correlation:graph");
+      if (corrGraphJson) {
+        try {
+          const cg = JSON.parse(corrGraphJson) as { edges: Array<{ source: string; target: string }> };
+          crossRepoEdges = cg.edges.filter(
+            (e) => e.source.startsWith(repo.name) || e.target.startsWith(repo.name),
+          ).length;
+        } catch { /* skip */ }
+      }
+
+      repoInputs.push({ repo: repo.name, patterns, metricsSummary, sarifCounts, services, serviceSummaries, crossRepoEdges });
+    }
+
+    // System overview input
+    let systemInput: SystemNarrationInput | undefined;
+    if (repos.length > 1) {
+      const corrServicesJson = await kvStore.get("correlation:services");
+      const linchpins: string[] = [];
+      let crossRepoEdgeCount = 0;
+      if (corrServicesJson) {
+        try {
+          const cs = JSON.parse(corrServicesJson) as { linchpins: string[] };
+          linchpins.push(...cs.linchpins);
+        } catch { /* skip */ }
+      }
+      const corrGraphJson = await kvStore.get("correlation:graph");
+      if (corrGraphJson) {
+        try {
+          const cg = JSON.parse(corrGraphJson) as { edges: unknown[] };
+          crossRepoEdgeCount = cg.edges.length;
+        } catch { /* skip */ }
+      }
+      systemInput = {
+        repoNames: repos.map((r) => r.name),
+        totalFindings,
+        crossRepoEdgeCount,
+        linchpins,
+      };
+    }
+
+    const narrationResults = await narrateAll(repoInputs, systemInput, {
+      apiKey: options.anthropicApiKey,
+      kvStore,
+    });
+
+    const cached = narrationResults.filter((r) => r.cached).length;
+    const generated = narrationResults.length - cached;
+    const narrationMs = Math.round(performance.now() - narrationStart);
+    log(`  Narration: ${narrationResults.length} total (${generated} generated, ${cached} cached) in ${narrationMs}ms`);
+    tracer.record("narrationsGenerated", generated);
+    tracer.record("narrationsCached", cached);
+    tracer.endPhase();
+
+    // Store pipeline trace
+    const trace = tracer.finalize();
+    await kvStore.set("pipeline:trace:latest", JSON.stringify(trace));
+    if (verbose) {
+      log(PipelineTracer.formatSummary(trace));
+    }
+
+    log("Narration complete.");
+    return {
+      hadChanges: false,
+      repoCount: repos.length,
+      totalFiles: 0,
+      totalSarifResults: totalFindings,
+    };
+  }
 
   // Load previous commit hashes
   const previousCommits = new Map<string, string>();

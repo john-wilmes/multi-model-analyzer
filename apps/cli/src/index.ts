@@ -64,6 +64,7 @@ async function main(): Promise<void> {
       baseline: { type: "string" },
       "api-key": { type: "string" },
       "max-api-calls": { type: "string" },
+      "narrate-only": { type: "boolean", default: false },
       port: { type: "string", default: "3000" },
       backend: { type: "string" },
     },
@@ -544,6 +545,10 @@ async function main(): Promise<void> {
           console.error(`Invalid --max-api-calls: "${values["max-api-calls"]}". Must be a non-negative integer.`);
           process.exit(1);
         }
+        if (values["narrate-only"] && !anthropicApiKey) {
+          console.error("--narrate-only requires --api-key or ANTHROPIC_API_KEY environment variable.");
+          process.exit(1);
+        }
         const indexOpts = {
           repos: config.repos,
           mirrorDir: config.mirrorDir,
@@ -555,6 +560,7 @@ async function main(): Promise<void> {
           affected: values.affected,
           anthropicApiKey,
           maxApiCalls,
+          narrateOnly: values["narrate-only"],
         } as const;
 
         if (values.watch) {
@@ -623,7 +629,7 @@ Multi-Model Analyzer (mma)
 Usage:
   mma index [-c config.json] [-v] [--affected] [--baseline file.db]
             [--format json|table|sarif] [--watch [-w] [--watch-interval N]]
-                                                Index repositories (default: table)
+            [--narrate-only]              Index repositories (default: table)
   mma query [-c config.json] "..." [--format json|table|sarif]
                                                 Query the index (default: table)
   mma affected <rev-range> [--db path] [--format json|table|sarif]
