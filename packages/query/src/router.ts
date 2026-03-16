@@ -89,6 +89,11 @@ export function routeQuery(query: string): RouteDecision {
     return decision("analytical", 0.85);
   }
 
+  // Narration patterns — must precede architecture so "narrate architecture" routes to synthesis
+  if (/\b(narrat(?:e|ion|ive))\b/.test(normalized)) {
+    return decision("synthesis", 0.9);
+  }
+
   // Architecture patterns (cross-repo topology, service overview)
   if (/\b(architecture|topology|service[\s-]?map|cross[\s-]?repo|(?:architecture|service)\s+overview)\b/.test(normalized)) {
     return decision("architecture", 0.9);

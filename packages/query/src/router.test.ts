@@ -43,6 +43,9 @@ describe("routeQuery", () => {
   it("routes synthesis patterns correctly", () => {
     expect(routeQuery("why does this exist?").route).toBe("synthesis");
     expect(routeQuery("explain the design").route).toBe("synthesis");
+    expect(routeQuery("narrate architecture").route).toBe("synthesis");
+    expect(routeQuery("narration for nest").route).toBe("synthesis");
+    expect(routeQuery("give me a narrative overview").route).toBe("synthesis");
   });
 
   it("defaults to search", () => {

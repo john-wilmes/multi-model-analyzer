@@ -19,7 +19,7 @@ export interface SonnetOptions {
 }
 
 export const SONNET_DEFAULTS: Omit<SonnetOptions, "apiKey"> = {
-  model: "claude-sonnet-4-6-20250514",
+  model: "claude-sonnet-4-20250514",
   maxTokens: 500,
   batchSize: 5,
 };
