@@ -230,4 +230,44 @@ describe("buildCrossRepoGraph", () => {
     expect(graph.edges[0]!.packageName).toBe("lodash");
     expect(graph.edges[0]!.targetRepo).toBe("repo-b");
   });
+
+  it("does not match a repo whose localPath is a prefix of another repo name", async () => {
+    // Regression test for the prefix-ambiguity bug: a bare startsWith check would
+    // incorrectly match /repos/repo-b against /repos/repo-b-extra/src/file.ts.
+    const repoShort: RepoConfig = {
+      name: "repo-b",
+      url: "https://example.com/repo-b",
+      branch: "main",
+      localPath: "/repos/repo-b",
+    };
+    const repoLong: RepoConfig = {
+      name: "repo-b-extra",
+      url: "https://example.com/repo-b-extra",
+      branch: "main",
+      localPath: "/repos/repo-b-extra",
+    };
+    // packageRoots maps @org/extra to a path under /repos/repo-b-extra
+    const ambiguousRoots = new Map<string, string>([
+      ["@org/extra", "/repos/repo-b-extra/packages/extra"],
+    ]);
+
+    await store.addEdges([
+      {
+        source: "repo-a/src/index.ts",
+        target: "@org/extra/src/index.ts",
+        kind: "imports",
+        metadata: { repo: "repo-a" },
+      },
+    ]);
+
+    // Build with all three repos so repo-a exists and self-edge filtering works
+    const threeRepos = [repoA, repoShort, repoLong] as const;
+    const graph = await buildCrossRepoGraph(store, threeRepos, ambiguousRoots);
+
+    // Without the separator guard, /repos/repo-b-extra/... would match repo-b
+    // (because "/repos/repo-b-extra".startsWith("/repos/repo-b") is true).
+    // With the fix it correctly resolves to repo-b-extra.
+    expect(graph.edges).toHaveLength(1);
+    expect(graph.edges[0]!.targetRepo).toBe("repo-b-extra");
+  });
 });

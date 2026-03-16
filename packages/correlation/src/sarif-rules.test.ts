@@ -297,4 +297,98 @@ describe("detectCriticalPaths", () => {
     expect(fromA).toBeDefined();
     expect(fromA.properties!["chainLength"]).toBe(5);
   });
+
+  it("correctly computes longest chain in a diamond graph (shared intermediate node)", () => {
+    // Diamond: a -> b -> d, a -> c -> d -> e -> f
+    //
+    //   a
+    //  / \
+    // b   c
+    //  \ /
+    //   d
+    //   |
+    //   e
+    //   |
+    //   f
+    //
+    // Longest chain from a: a->c->d->e->f (5 nodes).
+    // With the old memoization bug, dfs(d) might be cached from the b->d path
+    // with a visited set that includes b, then reused for the c->d path where
+    // visited includes c.  The cached result is still correct here because
+    // neither b nor c is a descendant of d, but if we extend the graph so that
+    // the shared node d can itself reach b (via a different route), the memo
+    // would incorrectly skip that branch.  The simpler correctness check is:
+    // ensure the reported chain length is 5 (a,c,d,e,f) not 3 (a,b,d).
+    const downstreamMap = new Map<string, Set<string>>([
+      ["a", new Set(["b", "c"])],
+      ["b", new Set(["d"])],
+      ["c", new Set(["d"])],
+      ["d", new Set(["e"])],
+      ["e", new Set(["f"])],
+      ["f", new Set()],
+    ]);
+
+    const graph: CrossRepoGraph = {
+      edges: [],
+      repoPairs: new Set(),
+      downstreamMap,
+      upstreamMap: new Map(),
+    };
+
+    const results = detectCriticalPaths(graph);
+    const fromA = results.find(
+      (r) => r.locations![0]!.logicalLocations![0]!.name === "a",
+    )!;
+    expect(fromA).toBeDefined();
+    // Both a->b->d->e->f and a->c->d->e->f are length 5 — either is a valid
+    // answer.  The key invariant is that the shared tail d->e->f is reachable
+    // from both paths, so the chain must be exactly 5 nodes long and must
+    // include a, d, e, f regardless of which middle node (b or c) is chosen.
+    const chain = fromA.properties!["chain"] as string[];
+    expect(fromA.properties!["chainLength"]).toBe(5);
+    expect(chain).toHaveLength(5);
+    expect(chain[0]).toBe("a");
+    expect(chain).toContain("d");
+    expect(chain).toContain("e");
+    expect(chain).toContain("f");
+  });
+
+  it("does not double-visit nodes when the same node is reachable via two paths (path-dependent visited)", () => {
+    // Graph where the shared sink reachable via two routes must not be
+    // counted twice: a->b->d->e->f and a->c->d->e->f.
+    // The old memo (keyed only by node, ignoring the visited set) could cache
+    // dfs(d) on the first path and return a truncated result on the second if
+    // any ancestor of d happened to be in visited.
+    //
+    // Concretely: a->b, a->c, b->c, c->d->e->f
+    // From a, two paths reach c: directly (a->c) or via b (a->b->c).
+    // The longer path is a->b->c->d->e->f (6 nodes).
+    // With the memo bug: dfs(c) is cached when first visited with visited={a,c}
+    // returning [c,d,e,f].  When visited via b (visited={a,b,c}), the memo
+    // returns the same cached [c,d,e,f] — which happens to be correct here.
+    // But dfs(b) returns [b,c,d,e,f] so the overall longest from a is 6.
+    const downstreamMap = new Map<string, Set<string>>([
+      ["a", new Set(["b", "c"])],
+      ["b", new Set(["c"])],
+      ["c", new Set(["d"])],
+      ["d", new Set(["e"])],
+      ["e", new Set(["f"])],
+      ["f", new Set()],
+    ]);
+
+    const graph: CrossRepoGraph = {
+      edges: [],
+      repoPairs: new Set(),
+      downstreamMap,
+      upstreamMap: new Map(),
+    };
+
+    const results = detectCriticalPaths(graph);
+    const fromA = results.find(
+      (r) => r.locations![0]!.logicalLocations![0]!.name === "a",
+    )!;
+    expect(fromA).toBeDefined();
+    expect(fromA.properties!["chainLength"]).toBe(6);
+    expect(fromA.properties!["chain"]).toEqual(["a", "b", "c", "d", "e", "f"]);
+  });
 });
