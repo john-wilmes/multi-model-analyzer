@@ -223,7 +223,7 @@ export class KuzuGraphStore implements GraphStore {
       this.conn.querySync("COMMIT");
     } catch (e) {
       this.conn.querySync("ROLLBACK");
-      throw e;
+      throw new Error("Kuzu addEdges failed", { cause: e });
     }
   }
 

@@ -49,6 +49,14 @@ export const V3_REL_TABLES = [
   "DependsOn", "Contains", "ServiceCall",
 ];
 
+/** DDL for the Symbol node table. */
+const DDL_SYMBOL = "CREATE NODE TABLE IF NOT EXISTS Symbol(id STRING PRIMARY KEY)";
+
+/** DDL template for a typed relationship table. */
+function ddlRelTable(table: string): string {
+  return `CREATE REL TABLE IF NOT EXISTS ${table}(FROM Symbol TO Symbol, metadata STRING, repo STRING)`;
+}
+
 /** Maps EdgeKind string values to v3 table names (for migration). */
 const KIND_TO_TABLE: Record<string, string> = {
   "calls": "Calls",
@@ -127,9 +135,7 @@ export function migrateV1ToV2(
   conn.querySync("DROP TABLE Edge");
 
   // 3. Create v2 schema
-  conn.querySync(
-    "CREATE NODE TABLE IF NOT EXISTS Symbol(id STRING PRIMARY KEY)",
-  );
+  conn.querySync(DDL_SYMBOL);
   conn.querySync(
     "CREATE REL TABLE IF NOT EXISTS Edge(FROM Symbol TO Symbol, " +
       "kind STRING, metadata STRING, repo STRING)",
@@ -167,7 +173,7 @@ export function migrateV1ToV2(
       conn.querySync("COMMIT");
     } catch (e) {
       conn.querySync("ROLLBACK");
-      throw e;
+      throw new Error("Kuzu migration v1→v2 failed", { cause: e });
     }
   }
 
@@ -195,9 +201,7 @@ export function migrateV2ToV3(
 
   // 3. Create 7 typed rel tables
   for (const table of V3_REL_TABLES) {
-    conn.querySync(
-      `CREATE REL TABLE IF NOT EXISTS ${table}(FROM Symbol TO Symbol, metadata STRING, repo STRING)`,
-    );
+    conn.querySync(ddlRelTable(table));
   }
 
   // 4. Re-insert edges dispatched by kind
@@ -228,7 +232,7 @@ export function migrateV2ToV3(
       conn.querySync("COMMIT");
     } catch (e) {
       conn.querySync("ROLLBACK");
-      throw e;
+      throw new Error("Kuzu migration v2→v3 failed", { cause: e });
     }
   }
 }
@@ -247,13 +251,9 @@ function initSchema(conn: InstanceType<typeof kuzu.Connection>): void {
 
   if (version === 0) {
     // Fresh database — create v3 schema directly
-    conn.querySync(
-      "CREATE NODE TABLE IF NOT EXISTS Symbol(id STRING PRIMARY KEY)",
-    );
+    conn.querySync(DDL_SYMBOL);
     for (const table of V3_REL_TABLES) {
-      conn.querySync(
-        `CREATE REL TABLE IF NOT EXISTS ${table}(FROM Symbol TO Symbol, metadata STRING, repo STRING)`,
-      );
+      conn.querySync(ddlRelTable(table));
     }
   } else if (version === 1) {
     migrateV1ToV2(conn);
