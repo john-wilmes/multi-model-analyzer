@@ -26,6 +26,8 @@ vi.mock("@mma/query", () => ({
   executeCalleesQuery: vi.fn(),
   executeDependencyQuery: vi.fn(),
   executeArchitectureQuery: vi.fn(),
+  computeFlagImpact: vi.fn(),
+  getFlagInventory: vi.fn(),
 }));
 
 import {
@@ -35,6 +37,8 @@ import {
   executeCalleesQuery,
   executeDependencyQuery,
   executeArchitectureQuery,
+  computeFlagImpact,
+  getFlagInventory,
 } from "@mma/query";
 
 const mockRouteQuery = routeQuery as ReturnType<typeof vi.fn>;
@@ -43,6 +47,8 @@ const mockExecuteCallers = executeCallersQuery as ReturnType<typeof vi.fn>;
 const mockExecuteCallees = executeCalleesQuery as ReturnType<typeof vi.fn>;
 const mockExecuteDeps = executeDependencyQuery as ReturnType<typeof vi.fn>;
 const mockExecuteArch = executeArchitectureQuery as ReturnType<typeof vi.fn>;
+const mockComputeFlagImpact = computeFlagImpact as ReturnType<typeof vi.fn>;
+const mockGetFlagInventory = getFlagInventory as ReturnType<typeof vi.fn>;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -613,6 +619,151 @@ describe("queryCommand", () => {
       const parsed = JSON.parse(output) as { route: string; trees: unknown[] };
       expect(parsed.route).toBe("faulttree");
       expect(parsed.trees).toHaveLength(1);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // flagimpact route
+  // -------------------------------------------------------------------------
+  describe("flagimpact route", () => {
+    const impactResult = {
+      flagName: "ENABLE_DARK_MODE",
+      repo: "repo-a",
+      maxDepth: 2,
+      totalAffected: 3,
+      flagLocations: ["src/config.ts"],
+      affectedFiles: [
+        { path: "src/theme.ts", via: "import", depth: 1 },
+        { path: "src/app.ts", via: "call", depth: 2 },
+      ],
+      affectedServices: [
+        { endpoint: "/api/theme", sourceFile: "src/theme.ts" },
+      ],
+    };
+
+    const inventoryResult = {
+      total: 2,
+      returned: 2,
+      offset: 0,
+      hasMore: false,
+      flags: [
+        { name: "ENABLE_DARK_MODE", repo: "repo-a", sdk: "launchdarkly", locationCount: 3, modules: ["src/config.ts", "src/theme.ts"] },
+        { name: "BETA_FEATURE", repo: "repo-a", sdk: undefined, locationCount: 1, modules: ["src/beta.ts"] },
+      ],
+    };
+
+    // --- impact path (entity + repo) ---
+
+    it("displays flag impact in table format", async () => {
+      mockRouteQuery.mockReturnValue(
+        makeDecision({ route: "flagimpact", strippedQuery: "flag impact of ENABLE_DARK_MODE", extractedEntities: ["ENABLE_DARK_MODE"], repo: "repo-a" }),
+      );
+      mockComputeFlagImpact.mockResolvedValue(impactResult);
+
+      await queryCommand("flag impact of ENABLE_DARK_MODE", makeOptions({ kvStore, graphStore, searchStore }));
+
+      expect(mockComputeFlagImpact).toHaveBeenCalledWith("ENABLE_DARK_MODE", "repo-a", kvStore, graphStore);
+      const output = consoleSpy.mock.calls.map((c) => c[0]).join("\n");
+      expect(output).toContain("ENABLE_DARK_MODE");
+      expect(output).toContain("src/theme.ts");
+      expect(output).toContain("/api/theme");
+    });
+
+    it("outputs flag impact as JSON", async () => {
+      mockRouteQuery.mockReturnValue(
+        makeDecision({ route: "flagimpact", extractedEntities: ["ENABLE_DARK_MODE"], repo: "repo-a" }),
+      );
+      mockComputeFlagImpact.mockResolvedValue(impactResult);
+
+      await queryCommand("flag impact", makeOptions({ kvStore, graphStore, searchStore }, "json"));
+
+      const output = consoleSpy.mock.calls.map((c) => c[0]).join("");
+      const parsed = JSON.parse(output) as { route: string; flagName: string };
+      expect(parsed.route).toBe("flagimpact");
+      expect(parsed.flagName).toBe("ENABLE_DARK_MODE");
+    });
+
+    it("outputs flag impact as SARIF", async () => {
+      mockRouteQuery.mockReturnValue(
+        makeDecision({ route: "flagimpact", extractedEntities: ["ENABLE_DARK_MODE"], repo: "repo-a" }),
+      );
+      mockComputeFlagImpact.mockResolvedValue(impactResult);
+
+      await queryCommand("flag impact", makeOptions({ kvStore, graphStore, searchStore }, "sarif"));
+
+      const output = consoleSpy.mock.calls.map((c) => c[0]).join("");
+      const parsed = JSON.parse(output) as { runs: Array<{ results: Array<{ ruleId: string }> }> };
+      expect(parsed.runs[0]!.results.length).toBe(2);
+      expect(parsed.runs[0]!.results[0]!.ruleId).toBe("flagimpact/impact");
+    });
+
+    // --- inventory path (no entity or no repo) ---
+
+    it("displays flag inventory in table format", async () => {
+      mockRouteQuery.mockReturnValue(
+        makeDecision({ route: "flagimpact", strippedQuery: "feature flags", extractedEntities: [] }),
+      );
+      mockGetFlagInventory.mockResolvedValue(inventoryResult);
+
+      await queryCommand("feature flags", makeOptions({ kvStore, graphStore, searchStore }));
+
+      expect(mockGetFlagInventory).toHaveBeenCalledWith(kvStore, { repo: undefined, search: undefined });
+      const output = consoleSpy.mock.calls.map((c) => c[0]).join("\n");
+      expect(output).toContain("2 feature flags found");
+      expect(output).toContain("ENABLE_DARK_MODE");
+      expect(output).toContain("BETA_FEATURE");
+    });
+
+    it("reports no flags when inventory is empty", async () => {
+      mockRouteQuery.mockReturnValue(
+        makeDecision({ route: "flagimpact", strippedQuery: "flags", extractedEntities: [] }),
+      );
+      mockGetFlagInventory.mockResolvedValue({ total: 0, returned: 0, offset: 0, hasMore: false, flags: [] });
+
+      await queryCommand("flags", makeOptions({ kvStore, graphStore, searchStore }));
+
+      const output = consoleSpy.mock.calls.map((c) => c[0]).join("\n");
+      expect(output).toContain("No feature flags found");
+    });
+
+    it("outputs inventory as JSON", async () => {
+      mockRouteQuery.mockReturnValue(
+        makeDecision({ route: "flagimpact", extractedEntities: [] }),
+      );
+      mockGetFlagInventory.mockResolvedValue(inventoryResult);
+
+      await queryCommand("flags", makeOptions({ kvStore, graphStore, searchStore }, "json"));
+
+      const output = consoleSpy.mock.calls.map((c) => c[0]).join("");
+      const parsed = JSON.parse(output) as { route: string; total: number; flags: unknown[] };
+      expect(parsed.route).toBe("flagimpact");
+      expect(parsed.total).toBe(2);
+    });
+
+    it("outputs inventory as SARIF", async () => {
+      mockRouteQuery.mockReturnValue(
+        makeDecision({ route: "flagimpact", extractedEntities: [] }),
+      );
+      mockGetFlagInventory.mockResolvedValue(inventoryResult);
+
+      await queryCommand("flags", makeOptions({ kvStore, graphStore, searchStore }, "sarif"));
+
+      const output = consoleSpy.mock.calls.map((c) => c[0]).join("");
+      const parsed = JSON.parse(output) as { runs: Array<{ results: Array<{ ruleId: string }> }> };
+      expect(parsed.runs[0]!.results.length).toBe(2);
+      expect(parsed.runs[0]!.results[0]!.ruleId).toBe("flagimpact/inventory");
+    });
+
+    it("shows hasMore indicator when inventory is truncated", async () => {
+      mockRouteQuery.mockReturnValue(
+        makeDecision({ route: "flagimpact", extractedEntities: [] }),
+      );
+      mockGetFlagInventory.mockResolvedValue({ ...inventoryResult, hasMore: true });
+
+      await queryCommand("flags", makeOptions({ kvStore, graphStore, searchStore }));
+
+      const output = consoleSpy.mock.calls.map((c) => c[0]).join("\n");
+      expect(output).toContain("and more");
     });
   });
 
