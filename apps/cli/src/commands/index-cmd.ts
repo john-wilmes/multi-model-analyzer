@@ -92,6 +92,7 @@ export interface IndexOptions {
   readonly rules?: readonly ArchitecturalRule[];
   readonly affected?: boolean;
   readonly narrateOnly?: boolean;
+  readonly narrateForce?: boolean;
 }
 
 export interface IndexResult {
@@ -220,6 +221,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     const narrationResults = await narrateAll(repoInputs, systemInput, {
       apiKey: options.anthropicApiKey,
       kvStore,
+      force: options.narrateForce,
     });
 
     const cached = narrationResults.filter((r) => r.cached).length;
@@ -1229,6 +1231,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     const narrationResults = await narrateAll(repoInputs, systemInput, {
       apiKey: options.anthropicApiKey,
       kvStore,
+      force: options.narrateForce,
     });
 
     const cached = narrationResults.filter((r) => r.cached).length;

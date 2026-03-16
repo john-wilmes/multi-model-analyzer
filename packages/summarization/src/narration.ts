@@ -65,6 +65,8 @@ export interface NarrationOptions {
   readonly kvStore: KVStore;
   readonly model?: string;
   readonly maxTokens?: number;
+  /** When true, bypass the narration cache and regenerate all narrations. */
+  readonly force?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -171,10 +173,12 @@ export async function narrateSingle(
   key: string,
   options: NarrationOptions,
 ): Promise<NarrationResult> {
-  // Check cache
-  const cached = await options.kvStore.get(key);
-  if (cached) {
-    return { type, key, text: cached, cached: true };
+  // Check cache (skipped when force=true)
+  if (!options.force) {
+    const cached = await options.kvStore.get(key);
+    if (cached) {
+      return { type, key, text: cached, cached: true };
+    }
   }
 
   const sonnetOpts: SonnetOptions = {

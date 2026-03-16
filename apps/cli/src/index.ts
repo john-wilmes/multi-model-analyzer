@@ -65,6 +65,7 @@ async function main(): Promise<void> {
       "api-key": { type: "string" },
       "max-api-calls": { type: "string" },
       "narrate-only": { type: "boolean", default: false },
+      force: { type: "boolean", default: false },
       port: { type: "string", default: "3000" },
       backend: { type: "string" },
     },
@@ -561,6 +562,7 @@ async function main(): Promise<void> {
           anthropicApiKey,
           maxApiCalls,
           narrateOnly: values["narrate-only"],
+          narrateForce: values["force"],
         } as const;
 
         if (values.watch) {
@@ -629,7 +631,7 @@ Multi-Model Analyzer (mma)
 Usage:
   mma index [-c config.json] [-v] [--affected] [--baseline file.db]
             [--format json|table|sarif] [--watch [-w] [--watch-interval N]]
-            [--narrate-only]              Index repositories (default: table)
+            [--narrate-only] [--force]    Index repositories (default: table)
   mma query [-c config.json] "..." [--format json|table|sarif]
                                                 Query the index (default: table)
   mma affected <rev-range> [--db path] [--format json|table|sarif]
@@ -669,6 +671,7 @@ Options:
   --sample-size   Findings to sample per check (default: 50)
   --seed          PRNG seed for reproducibility (default: 42)
   --port          Port for dashboard server (default: 3000)
+  --force         Bypass narration cache (use with --narrate-only or --api-key)
   --backend       Storage backend: sqlite (default) or kuzu
   -h, --help      Show this help message
   --version       Show version number
