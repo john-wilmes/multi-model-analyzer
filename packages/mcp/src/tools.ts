@@ -510,7 +510,57 @@ async function dispatchRoute(
     }
 
     case "synthesis": {
-      return { error: "Synthesis queries require tier 4 (Sonnet) -- not yet implemented." };
+      const entity = decision.extractedEntities[0];
+      const entityLower = (entity ?? "").toLowerCase();
+      const wantArch    = entityLower.includes("arch");
+      const wantHealth  = entityLower.includes("health");
+      const wantCatalog = entityLower.includes("catalog") || entityLower.includes("service");
+      const wantSystem  = entityLower.includes("system") || entityLower.includes("overview");
+      const wantAll     = !wantArch && !wantHealth && !wantCatalog && !wantSystem;
+
+      type NarrationEntry = { key: string; kind: string; repo?: string; text: string };
+      const narrations: NarrationEntry[] = [];
+
+      const fetchKey = async (key: string, kind: string, repoName?: string): Promise<void> => {
+        const raw = await kvStore.get(key);
+        if (raw) narrations.push({ key, kind, repo: repoName, text: raw });
+      };
+
+      if (wantSystem || wantAll) {
+        await fetchKey("narration:system", "system");
+      }
+
+      if (repo) {
+        if (wantArch    || wantAll) await fetchKey(`narration:repo-arch:${repo}`, "repo-arch", repo);
+        if (wantHealth  || wantAll) await fetchKey(`narration:health:${repo}`,    "health",    repo);
+        if (wantCatalog || wantAll) await fetchKey(`narration:catalog:${repo}`,   "catalog",   repo);
+      } else {
+        // No repo filter — scan all keys for each kind
+        const allKeys = await kvStore.keys("narration:");
+        for (const key of allKeys) {
+          if (key === "narration:system") continue; // already handled above
+          const m = /^narration:(repo-arch|health|catalog):(.+)$/.exec(key);
+          if (!m) continue;
+          const kind = m[1]!;
+          const repoName = m[2]!;
+          const include =
+            wantAll ||
+            (wantArch    && kind === "repo-arch") ||
+            (wantHealth  && kind === "health")    ||
+            (wantCatalog && kind === "catalog");
+          if (!include) continue;
+          const raw = await kvStore.get(key);
+          if (raw) narrations.push({ key, kind, repo: repoName, text: raw });
+        }
+      }
+
+      if (narrations.length === 0) {
+        return {
+          narrations: [],
+          message: "No narrations found. Run 'mma index' with --api-key to generate narrations.",
+        };
+      }
+      return { narrations };
     }
 
     default:

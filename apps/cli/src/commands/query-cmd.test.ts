@@ -617,10 +617,10 @@ describe("queryCommand", () => {
   });
 
   // -------------------------------------------------------------------------
-  // synthesis route (stub)
+  // synthesis route (narration lookup)
   // -------------------------------------------------------------------------
   describe("synthesis route", () => {
-    it("prints not-implemented message", async () => {
+    it("prints fallback message when no narrations cached", async () => {
       mockRouteQuery.mockReturnValue(
         makeDecision({ route: "synthesis", strippedQuery: "summarize the codebase" }),
       );
@@ -628,7 +628,20 @@ describe("queryCommand", () => {
       await queryCommand("summarize", makeOptions({ kvStore, graphStore, searchStore }));
 
       const output = consoleSpy.mock.calls.map((c) => c[0]).join("\n");
-      expect(output).toContain("not yet implemented");
+      expect(output).toContain("No narrations found");
+    });
+
+    it("returns cached narrations when available", async () => {
+      mockRouteQuery.mockReturnValue(
+        makeDecision({ route: "synthesis", strippedQuery: "architecture" }),
+      );
+
+      await kvStore.set("narration:repo-arch:my-repo", "This repo uses a layered architecture.");
+
+      await queryCommand("architecture", makeOptions({ kvStore, graphStore, searchStore }));
+
+      const output = consoleSpy.mock.calls.map((c) => c[0]).join("\n");
+      expect(output).toContain("layered architecture");
     });
   });
 });

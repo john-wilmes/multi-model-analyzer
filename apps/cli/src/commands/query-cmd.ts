@@ -559,7 +559,69 @@ export async function queryCommand(
     }
 
     case "synthesis": {
-      console.log("Synthesis queries require tier 4 (Sonnet) -- not yet implemented in CLI.");
+      const q = decision.strippedQuery.toLowerCase();
+      // Keyword → narration type mapping
+      const typeKeywords: Array<{ type: string; keywords: string[] }> = [
+        { type: "repo-arch", keywords: ["architecture", "arch"] },
+        { type: "health",    keywords: ["health"] },
+        { type: "catalog",   keywords: ["catalog", "service"] },
+        { type: "system",    keywords: ["system", "overview"] },
+      ];
+      let typeFilter: string | null = null;
+      for (const entry of typeKeywords) {
+        if (entry.keywords.some((kw) => q.includes(kw))) {
+          typeFilter = entry.type;
+          break;
+        }
+      }
+
+      // Collect all narration keys and filter
+      const allKeys = await options.kvStore.keys("narration:");
+      const narrations: Array<{ type: string; repo: string | null; text: string }> = [];
+
+      for (const key of allKeys) {
+        const withoutPrefix = key.replace("narration:", "");
+        // Parse key: "system" (no repo) or "<type>:<repo>"
+        const colonIdx = withoutPrefix.indexOf(":");
+        let narType: string;
+        let narRepo: string | null;
+        if (colonIdx === -1) {
+          // e.g. narration:system
+          narType = withoutPrefix;
+          narRepo = null;
+        } else {
+          narType = withoutPrefix.slice(0, colonIdx);
+          narRepo = withoutPrefix.slice(colonIdx + 1);
+        }
+
+        // Apply repo filter
+        if (repoFilter && narRepo !== null && narRepo !== repoFilter) continue;
+        if (repoFilter && narRepo === null) continue; // skip system-wide when repo filter is set
+
+        // Apply type filter
+        if (typeFilter && narType !== typeFilter) continue;
+
+        const text = await options.kvStore.get(key);
+        if (!text) continue;
+        narrations.push({ type: narType, repo: narRepo, text });
+      }
+
+      if (format === "json") {
+        printJson({ route: "synthesis", typeFilter, narrations });
+      } else if (format === "sarif") {
+        console.log("Narrations are not available in SARIF format.");
+      } else {
+        if (narrations.length === 0) {
+          console.log("No narrations found. Run 'mma index' with --api-key to generate narrations.");
+        } else {
+          for (const n of narrations) {
+            const label = n.repo ? `${n.type}:${n.repo}` : n.type;
+            console.log(`[${label}]`);
+            console.log(n.text);
+            console.log();
+          }
+        }
+      }
       break;
     }
   }

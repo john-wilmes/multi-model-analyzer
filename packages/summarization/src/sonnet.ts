@@ -92,6 +92,14 @@ function buildServicePrompt(input: ServiceSummaryInput): string {
 
 const RETRY_DELAYS = [1000, 2000, 4000, 8000];
 
+/** Public wrapper around the retry-enabled Anthropic API caller. */
+export async function callAnthropicWithRetry(
+  prompt: string,
+  options: SonnetOptions,
+): Promise<string> {
+  return callSonnetWithRetry(prompt, options);
+}
+
 async function callSonnetWithRetry(
   prompt: string,
   options: SonnetOptions,
