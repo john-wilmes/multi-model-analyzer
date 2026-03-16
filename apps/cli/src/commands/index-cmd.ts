@@ -771,6 +771,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         if (symbolsByFile.size > 0) {
           const namingHeuristic = analyzeNamingWithMeta(symbolsByFile, repo.name);
           namingByRepo.set(repo.name, namingHeuristic.data);
+          await kvStore.set(`naming:${repo.name}`, JSON.stringify(namingHeuristic.data));
           log(`    ${namingHeuristic.meta.itemCount} method purposes inferred in ${namingHeuristic.meta.durationMs}ms`);
         } else {
           log(`    skipping naming analysis (no symbols)`);

@@ -14,6 +14,7 @@ import type {
   ClassifiedFile,
   GraphEdge,
   DependencyGraph,
+  SymbolInfo,
 } from "@mma/core";
 import {
   InMemoryGraphStore,
@@ -177,7 +178,7 @@ import { detectChanges, classifyFiles } from "@mma/ingestion";
 import { parseFiles } from "@mma/parsing";
 import { extractDependencyGraph } from "@mma/structural";
 import { tier1Summarize } from "@mma/summarization";
-import { inferServicesWithMeta, scanForFlags } from "@mma/heuristics";
+import { inferServicesWithMeta, scanForFlags, detectPatternsWithMeta, analyzeNamingWithMeta } from "@mma/heuristics";
 
 const mockReadFile = readFile as ReturnType<typeof vi.fn>;
 const mockDetectChanges = detectChanges as ReturnType<typeof vi.fn>;
@@ -187,6 +188,8 @@ const mockExtractDepGraph = extractDependencyGraph as ReturnType<typeof vi.fn>;
 const mockTier1Summarize = tier1Summarize as ReturnType<typeof vi.fn>;
 const mockInferServices = inferServicesWithMeta as ReturnType<typeof vi.fn>;
 const mockScanForFlags = scanForFlags as ReturnType<typeof vi.fn>;
+const mockDetectPatterns = detectPatternsWithMeta as ReturnType<typeof vi.fn>;
+const mockAnalyzeNaming = analyzeNamingWithMeta as ReturnType<typeof vi.fn>;
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -853,5 +856,136 @@ describe("indexCommand", () => {
     // Neither parse nor heuristics should run (repo fully completed, skipped)
     expect(mockParseFiles).not.toHaveBeenCalled();
     expect(mockInferServices).not.toHaveBeenCalled();
+  });
+
+  // -----------------------------------------------------------------------
+  // Test 15: Pattern detection in incremental mode uses all files' symbols
+  // -----------------------------------------------------------------------
+  it("incremental index passes all files to pattern detection", async () => {
+    const symbolA: SymbolInfo = { name: "ClassA", kind: "class", startLine: 1, endLine: 10, exported: true };
+    const symbolB: SymbolInfo = { name: "ClassB", kind: "class", startLine: 1, endLine: 10, exported: true };
+
+    // --- Run 1: Full index with 2 files ---
+    mockDetectChanges.mockResolvedValue(
+      makeChangeSet({ repo: "repo-a", commitHash: "pat1", addedFiles: ["src/a.ts", "src/b.ts"] }),
+    );
+    mockClassifyFiles.mockReturnValue([
+      makeClassified("src/a.ts", "repo-a"),
+      makeClassified("src/b.ts", "repo-a"),
+    ]);
+    mockParseFiles.mockResolvedValue(
+      makeParseResult([
+        { ...makeParsedFile("src/a.ts", "repo-a"), symbols: [symbolA], contentHash: "a1" },
+        { ...makeParsedFile("src/b.ts", "repo-a"), symbols: [symbolB], contentHash: "b1" },
+      ], ["src/a.ts", "src/b.ts"]),
+    );
+    mockExtractDepGraph.mockReturnValue({ ...emptyDepGraph, repo: "repo-a" });
+
+    await indexCommand(makeOptions([repoA], { kvStore, graphStore, searchStore }));
+
+    // Run 1: both files should be passed
+    const call1 = mockDetectPatterns.mock.calls[0]![0];
+    expect(call1.symbols.size).toBe(2);
+
+    // --- Run 2: Incremental -- only a.ts changed ---
+    vi.clearAllMocks();
+
+    mockDetectChanges.mockResolvedValue(
+      makeChangeSet({ repo: "repo-a", commitHash: "pat2", previousCommitHash: "pat1", modifiedFiles: ["src/a.ts"] }),
+    );
+    mockClassifyFiles.mockReturnValue([makeClassified("src/a.ts", "repo-a")]);
+    mockParseFiles.mockResolvedValue(
+      makeParseResult([
+        { ...makeParsedFile("src/a.ts", "repo-a"), symbols: [symbolA], contentHash: "a2" },
+      ], ["src/a.ts"]),
+    );
+    mockExtractDepGraph.mockReturnValue({ ...emptyDepGraph, repo: "repo-a" });
+
+    await indexCommand(makeOptions([repoA], { kvStore, graphStore, searchStore }));
+
+    // Pattern detection should still see both files (b.ts from cache)
+    const call2 = mockDetectPatterns.mock.calls[0]![0];
+    expect(call2.symbols.size).toBe(2);
+    expect(call2.symbols.has("src/a.ts")).toBe(true);
+    expect(call2.symbols.has("src/b.ts")).toBe(true);
+  });
+
+  // -----------------------------------------------------------------------
+  // Test 16: Naming analysis results are persisted to KV
+  // -----------------------------------------------------------------------
+  it("persists naming analysis results to KV", async () => {
+    const symbolA: SymbolInfo = { name: "getUser", kind: "function", startLine: 1, endLine: 5, exported: true };
+
+    mockDetectChanges.mockResolvedValue(
+      makeChangeSet({ repo: "repo-a", commitHash: "nam1", addedFiles: ["src/a.ts"] }),
+    );
+    mockClassifyFiles.mockReturnValue([makeClassified("src/a.ts", "repo-a")]);
+    mockParseFiles.mockResolvedValue(
+      makeParseResult([
+        { ...makeParsedFile("src/a.ts", "repo-a"), symbols: [symbolA], contentHash: "a1" },
+      ], ["src/a.ts"]),
+    );
+    mockExtractDepGraph.mockReturnValue({ ...emptyDepGraph, repo: "repo-a" });
+
+    const namingData = { methods: [{ name: "getUser", purpose: "fetch user" }] };
+    mockAnalyzeNaming.mockReturnValue({
+      data: namingData,
+      meta: { repo: "repo-a", heuristic: "analyzeNaming", durationMs: 1, itemCount: 1 },
+    });
+
+    await indexCommand(makeOptions([repoA], { kvStore, graphStore, searchStore }));
+
+    const stored = await kvStore.get("naming:repo-a");
+    expect(stored).toBeDefined();
+    expect(JSON.parse(stored!)).toEqual(namingData);
+  });
+
+  // -----------------------------------------------------------------------
+  // Test 17: Naming analysis in incremental mode uses all files' symbols
+  // -----------------------------------------------------------------------
+  it("incremental index passes all files to naming analysis", async () => {
+    const symbolA: SymbolInfo = { name: "ClassA", kind: "class", startLine: 1, endLine: 10, exported: true };
+    const symbolB: SymbolInfo = { name: "ClassB", kind: "class", startLine: 1, endLine: 10, exported: true };
+
+    // --- Run 1: Full index with 2 files ---
+    mockDetectChanges.mockResolvedValue(
+      makeChangeSet({ repo: "repo-a", commitHash: "naminc1", addedFiles: ["src/a.ts", "src/b.ts"] }),
+    );
+    mockClassifyFiles.mockReturnValue([
+      makeClassified("src/a.ts", "repo-a"),
+      makeClassified("src/b.ts", "repo-a"),
+    ]);
+    mockParseFiles.mockResolvedValue(
+      makeParseResult([
+        { ...makeParsedFile("src/a.ts", "repo-a"), symbols: [symbolA], contentHash: "a1" },
+        { ...makeParsedFile("src/b.ts", "repo-a"), symbols: [symbolB], contentHash: "b1" },
+      ], ["src/a.ts", "src/b.ts"]),
+    );
+    mockExtractDepGraph.mockReturnValue({ ...emptyDepGraph, repo: "repo-a" });
+
+    await indexCommand(makeOptions([repoA], { kvStore, graphStore, searchStore }));
+
+    // --- Run 2: Incremental -- only a.ts changed ---
+    vi.clearAllMocks();
+
+    mockDetectChanges.mockResolvedValue(
+      makeChangeSet({ repo: "repo-a", commitHash: "naminc2", previousCommitHash: "naminc1", modifiedFiles: ["src/a.ts"] }),
+    );
+    mockClassifyFiles.mockReturnValue([makeClassified("src/a.ts", "repo-a")]);
+    mockParseFiles.mockResolvedValue(
+      makeParseResult([
+        { ...makeParsedFile("src/a.ts", "repo-a"), symbols: [symbolA], contentHash: "a2" },
+      ], ["src/a.ts"]),
+    );
+    mockExtractDepGraph.mockReturnValue({ ...emptyDepGraph, repo: "repo-a" });
+
+    await indexCommand(makeOptions([repoA], { kvStore, graphStore, searchStore }));
+
+    // Naming analysis should see both files (b.ts symbols loaded from cache)
+    const call = mockAnalyzeNaming.mock.calls[0]!;
+    const symbolsMap = call[0] as Map<string, unknown>;
+    expect(symbolsMap.size).toBe(2);
+    expect(symbolsMap.has("src/a.ts")).toBe(true);
+    expect(symbolsMap.has("src/b.ts")).toBe(true);
   });
 });
