@@ -177,7 +177,7 @@ import { detectChanges, classifyFiles } from "@mma/ingestion";
 import { parseFiles } from "@mma/parsing";
 import { extractDependencyGraph } from "@mma/structural";
 import { tier1Summarize } from "@mma/summarization";
-import { inferServicesWithMeta } from "@mma/heuristics";
+import { inferServicesWithMeta, scanForFlags } from "@mma/heuristics";
 
 const mockReadFile = readFile as ReturnType<typeof vi.fn>;
 const mockDetectChanges = detectChanges as ReturnType<typeof vi.fn>;
@@ -186,6 +186,7 @@ const mockParseFiles = parseFiles as ReturnType<typeof vi.fn>;
 const mockExtractDepGraph = extractDependencyGraph as ReturnType<typeof vi.fn>;
 const mockTier1Summarize = tier1Summarize as ReturnType<typeof vi.fn>;
 const mockInferServices = inferServicesWithMeta as ReturnType<typeof vi.fn>;
+const mockScanForFlags = scanForFlags as ReturnType<typeof vi.fn>;
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -762,7 +763,75 @@ describe("indexCommand", () => {
   });
 
   // -----------------------------------------------------------------------
-  // Test 13: pipelineComplete flag prevents recovery on fully-completed repo
+  // Test 13: Incremental indexing -- flag scanning merges with cached flags
+  // -----------------------------------------------------------------------
+  it("incremental index merges new flags with cached flags from unchanged files", async () => {
+    // --- Run 1: Full index with flags in two files ---
+    mockDetectChanges.mockResolvedValue(
+      makeChangeSet({ repo: "repo-a", commitHash: "flag1", addedFiles: ["src/a.ts", "src/b.ts"] }),
+    );
+    mockClassifyFiles.mockReturnValue([
+      makeClassified("src/a.ts", "repo-a"),
+      makeClassified("src/b.ts", "repo-a"),
+    ]);
+    mockParseFiles.mockResolvedValue(
+      makeParseResult([
+        { ...makeParsedFile("src/a.ts", "repo-a"), contentHash: "a1" },
+        { ...makeParsedFile("src/b.ts", "repo-a"), contentHash: "b1" },
+      ], ["src/a.ts", "src/b.ts"]),
+    );
+    mockExtractDepGraph.mockReturnValue({ ...emptyDepGraph, repo: "repo-a" });
+
+    // scanForFlags returns flags from both files
+    mockScanForFlags.mockReturnValue({
+      repo: "repo-a",
+      flags: [
+        { name: "DARK_MODE", locations: [{ repo: "repo-a", module: "src/a.ts" }], sdk: "launchdarkly" },
+        { name: "NEW_UI", locations: [{ repo: "repo-a", module: "src/b.ts" }], sdk: "launchdarkly" },
+      ],
+    });
+
+    await indexCommand(makeOptions([repoA], { kvStore, graphStore, searchStore }));
+
+    const flags1 = JSON.parse((await kvStore.get("flags:repo-a"))!);
+    expect(flags1.flags).toHaveLength(2);
+
+    // --- Run 2: Incremental -- modify a.ts only, b.ts unchanged ---
+    vi.clearAllMocks();
+
+    mockDetectChanges.mockResolvedValue(
+      makeChangeSet({ repo: "repo-a", commitHash: "flag2", previousCommitHash: "flag1", modifiedFiles: ["src/a.ts"] }),
+    );
+    mockClassifyFiles.mockReturnValue([makeClassified("src/a.ts", "repo-a")]);
+    mockParseFiles.mockResolvedValue(
+      makeParseResult([{ ...makeParsedFile("src/a.ts", "repo-a"), contentHash: "a2" }], ["src/a.ts"]),
+    );
+    mockExtractDepGraph.mockReturnValue({ ...emptyDepGraph, repo: "repo-a" });
+
+    // scanForFlags only sees a.ts tree -- returns updated flag for a.ts
+    mockScanForFlags.mockReturnValue({
+      repo: "repo-a",
+      flags: [
+        { name: "DARK_MODE", locations: [{ repo: "repo-a", module: "src/a.ts" }], sdk: "launchdarkly" },
+        { name: "BETA_FEATURE", locations: [{ repo: "repo-a", module: "src/a.ts" }], sdk: "launchdarkly" },
+      ],
+    });
+
+    await indexCommand(makeOptions([repoA], { kvStore, graphStore, searchStore }));
+
+    // Should have 3 flags: DARK_MODE (a.ts), NEW_UI (b.ts, cached), BETA_FEATURE (a.ts, new)
+    const flags2 = JSON.parse((await kvStore.get("flags:repo-a"))!);
+    const flagNames = flags2.flags.map((f: { name: string }) => f.name).sort();
+    expect(flagNames).toEqual(["BETA_FEATURE", "DARK_MODE", "NEW_UI"]);
+
+    // NEW_UI should still reference b.ts (unchanged file, preserved from cache)
+    const newUiFlag = flags2.flags.find((f: { name: string }) => f.name === "NEW_UI");
+    expect(newUiFlag.locations).toHaveLength(1);
+    expect(newUiFlag.locations[0].module).toBe("src/b.ts");
+  });
+
+  // -----------------------------------------------------------------------
+  // Test 14: pipelineComplete flag prevents recovery on fully-completed repo
   // -----------------------------------------------------------------------
   it("skips recovery when pipelineComplete is set", async () => {
     // Simulate a fully completed previous run

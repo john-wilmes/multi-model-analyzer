@@ -16,6 +16,7 @@ import type {
   InferredService,
   DetectedPattern,
   FlagInventory,
+  LogicalLocation,
   LogTemplateIndex,
   MethodPurposeMap,
   SymbolInfo,
@@ -669,9 +670,9 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
           }
         }
 
-        const filePaths = repoClassified.length > 0
-          ? repoClassified.map((f) => f.path)
-          : (parsedFiles ?? []).map((pf) => pf.path);
+        const filePaths = parsedFiles && parsedFiles.length > 0
+          ? parsedFiles.map((pf) => pf.path)
+          : repoClassified.map((f) => f.path);
         const servicesResult = inferServicesWithMeta({
           repo: repo.name,
           filePaths,
@@ -722,7 +723,37 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
 
         // 5c: Feature flag scanning
         if (trees && trees.size > 0) {
-          const flagInventory = scanForFlags(trees, repo.name);
+          let flagInventory = scanForFlags(trees, repo.name);
+
+          // Incremental mode: merge with cached flags for files not re-scanned
+          if (!options.forceFullReindex) {
+            const cachedFlagJson = await kvStore.get(`flags:${repo.name}`);
+            if (cachedFlagJson) {
+              try {
+                const cached = JSON.parse(cachedFlagJson) as FlagInventory;
+                const scannedFiles = new Set(trees.keys());
+                const mergedFlagMap = new Map<string, { name: string; sdk?: string; defaultValue?: unknown; locations: LogicalLocation[] }>();
+                // Keep cached flag locations from files not re-scanned
+                for (const flag of cached.flags) {
+                  const kept = flag.locations.filter(loc => !scannedFiles.has(loc.module));
+                  if (kept.length > 0) {
+                    mergedFlagMap.set(flag.name, { name: flag.name, sdk: flag.sdk, defaultValue: flag.defaultValue, locations: [...kept] });
+                  }
+                }
+                // Add new flag results from scanned files
+                for (const flag of flagInventory.flags) {
+                  const existing = mergedFlagMap.get(flag.name);
+                  if (existing) {
+                    existing.locations.push(...flag.locations);
+                  } else {
+                    mergedFlagMap.set(flag.name, { name: flag.name, sdk: flag.sdk, defaultValue: flag.defaultValue, locations: [...flag.locations] });
+                  }
+                }
+                flagInventory = { repo: repo.name, flags: [...mergedFlagMap.values()] };
+              } catch { /* skip malformed cache */ }
+            }
+          }
+
           flagsByRepo.set(repo.name, flagInventory);
           await kvStore.set(`flags:${repo.name}`, JSON.stringify(flagInventory));
           log(`    ${flagInventory.flags.length} feature flags found`);
@@ -730,6 +761,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
           // 5d: Log statement extraction
           const logIndex = extractLogStatements(trees, repo.name);
           logIndexByRepo.set(repo.name, logIndex);
+          await kvStore.set(`logTemplates:${repo.name}`, JSON.stringify(logIndex));
           log(`    ${logIndex.templates.length} log templates extracted`);
         } else {
           log(`    skipping flag scan and log extraction (no tree-sitter trees)`);
