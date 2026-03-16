@@ -1,8 +1,8 @@
 /**
  * Kuzu-backed graph store.
  *
- * Uses native Kuzu graph schema: Symbol node table + Edge relationship table.
- * Enables native Cypher recursive traversal for BFS.
+ * Uses native Kuzu graph schema: Symbol node table + 7 typed relationship
+ * tables (one per EdgeKind). Enables native Cypher recursive traversal for BFS.
  */
 
 import type { GraphEdge, EdgeKind } from "@mma/core";
@@ -11,7 +11,39 @@ import kuzu from "kuzu";
 import { single } from "./kuzu-common.js";
 
 // ---------------------------------------------------------------------------
-// Helper
+// Constants
+// ---------------------------------------------------------------------------
+
+/** Maps EdgeKind to its Kuzu relationship table name. */
+const EDGE_TABLE: Record<EdgeKind, string> = {
+  "calls": "Calls",
+  "imports": "Imports",
+  "extends": "Extends",
+  "implements": "Implements",
+  "depends-on": "DependsOn",
+  "contains": "Contains",
+  "service-call": "ServiceCall",
+};
+
+/** All EdgeKind values in a stable order. */
+const ALL_EDGE_KINDS: EdgeKind[] = [
+  "calls", "imports", "extends", "implements",
+  "depends-on", "contains", "service-call",
+];
+
+/** Reverse mapping: table name → EdgeKind. */
+const TABLE_TO_KIND: Record<string, EdgeKind> = Object.fromEntries(
+  ALL_EDGE_KINDS.map((k) => [EDGE_TABLE[k], k]),
+) as Record<string, EdgeKind>;
+
+/** Multi-label pattern for matching all edge types in Cypher. */
+const ALL_LABELS = ALL_EDGE_KINDS.map((k) => EDGE_TABLE[k]).join("|");
+
+/** Base return columns (kind is added per-query as a literal). */
+const RETURN_BASE = "s.id AS source, t.id AS target, r.metadata AS metadata";
+
+// ---------------------------------------------------------------------------
+// Helpers
 // ---------------------------------------------------------------------------
 
 function toGraphEdge(row: Record<string, unknown>): GraphEdge {
@@ -23,16 +55,22 @@ function toGraphEdge(row: Record<string, unknown>): GraphEdge {
       metadata = {};
     }
   }
+  const rawKind = row["kind"] as string;
   return {
     source: row["source"] as string,
     target: row["target"] as string,
-    kind: row["kind"] as EdgeKind,
+    kind: (TABLE_TO_KIND[rawKind] ?? rawKind) as EdgeKind,
     ...(metadata ? { metadata } : {}),
   };
 }
 
-const RETURN_COLS =
-  "s.id AS source, t.id AS target, r.kind AS kind, r.metadata AS metadata";
+function buildUnionAll(
+  template: (table: string, kind: EdgeKind) => string,
+): string {
+  return ALL_EDGE_KINDS
+    .map((k) => template(EDGE_TABLE[k], k))
+    .join(" UNION ALL ");
+}
 
 // ---------------------------------------------------------------------------
 // KuzuGraphStore
@@ -43,16 +81,22 @@ export class KuzuGraphStore implements GraphStore {
 
   // Prepared statements cached at construction time.
   private readonly stmtMergeSymbol: InstanceType<typeof kuzu.PreparedStatement>;
-  private readonly stmtInsertEdge: InstanceType<typeof kuzu.PreparedStatement>;
+
+  // Per-kind prepared statements
+  private readonly stmtInsertEdge: Map<EdgeKind, InstanceType<typeof kuzu.PreparedStatement>>;
+  private readonly stmtByKind: Map<EdgeKind, InstanceType<typeof kuzu.PreparedStatement>>;
+  private readonly stmtByKindAndRepo: Map<EdgeKind, InstanceType<typeof kuzu.PreparedStatement>>;
+  private readonly stmtCountByKindAndRepo: Map<EdgeKind, InstanceType<typeof kuzu.PreparedStatement>>;
+  private readonly stmtClearKind: Map<EdgeKind, InstanceType<typeof kuzu.PreparedStatement>>;
+
+  // Cross-kind UNION ALL statements
   private readonly stmtBySource: InstanceType<typeof kuzu.PreparedStatement>;
   private readonly stmtBySourceAndRepo: InstanceType<typeof kuzu.PreparedStatement>;
   private readonly stmtByTarget: InstanceType<typeof kuzu.PreparedStatement>;
   private readonly stmtByTargetAndRepo: InstanceType<typeof kuzu.PreparedStatement>;
-  private readonly stmtByKind: InstanceType<typeof kuzu.PreparedStatement>;
-  private readonly stmtByKindAndRepo: InstanceType<typeof kuzu.PreparedStatement>;
-  private readonly stmtCountByKindAndRepo: InstanceType<typeof kuzu.PreparedStatement>;
+
+  // Clear all (DETACH DELETE)
   private readonly stmtClearAll: InstanceType<typeof kuzu.PreparedStatement>;
-  private readonly stmtClearRepo: InstanceType<typeof kuzu.PreparedStatement>;
 
   constructor(conn: InstanceType<typeof kuzu.Connection>) {
     this.conn = conn;
@@ -63,42 +107,83 @@ export class KuzuGraphStore implements GraphStore {
       "MERGE (s:Symbol {id: $id})",
     );
 
-    this.stmtInsertEdge = conn.prepareSync(
-      "MATCH (s:Symbol {id: $s}), (t:Symbol {id: $t}) " +
-        "CREATE (s)-[:Edge {kind: $k, metadata: $m, repo: $r}]->(t)",
+    // Per-kind maps
+    this.stmtInsertEdge = new Map();
+    this.stmtByKind = new Map();
+    this.stmtByKindAndRepo = new Map();
+    this.stmtCountByKindAndRepo = new Map();
+    this.stmtClearKind = new Map();
+
+    for (const kind of ALL_EDGE_KINDS) {
+      const table = EDGE_TABLE[kind];
+
+      this.stmtInsertEdge.set(
+        kind,
+        conn.prepareSync(
+          `MATCH (s:Symbol {id: $s}), (t:Symbol {id: $t}) CREATE (s)-[:${table} {metadata: $m, repo: $r}]->(t)`,
+        ),
+      );
+
+      this.stmtByKind.set(
+        kind,
+        conn.prepareSync(
+          `MATCH (s:Symbol)-[r:${table}]->(t:Symbol) RETURN ${RETURN_BASE}, '${kind}' AS kind`,
+        ),
+      );
+
+      this.stmtByKindAndRepo.set(
+        kind,
+        conn.prepareSync(
+          `MATCH (s:Symbol)-[r:${table}]->(t:Symbol) WHERE r.repo = $r RETURN ${RETURN_BASE}, '${kind}' AS kind`,
+        ),
+      );
+
+      this.stmtCountByKindAndRepo.set(
+        kind,
+        conn.prepareSync(
+          `MATCH (s:Symbol)-[r:${table}]->(t:Symbol) RETURN r.repo AS repo, count(r) AS cnt`,
+        ),
+      );
+
+      this.stmtClearKind.set(
+        kind,
+        conn.prepareSync(
+          `MATCH (s:Symbol)-[r:${table}]->(t:Symbol) WHERE r.repo = $r DELETE r`,
+        ),
+      );
+    }
+
+    // UNION ALL statements for cross-kind queries
+    this.stmtBySource = conn.prepareSync(
+      buildUnionAll(
+        (table, kind) =>
+          `MATCH (s:Symbol {id: $s})-[r:${table}]->(t:Symbol) RETURN ${RETURN_BASE}, '${kind}' AS kind`,
+      ),
     );
 
-    this.stmtBySource = conn.prepareSync(
-      `MATCH (s:Symbol {id: $s})-[r:Edge]->(t:Symbol) RETURN ${RETURN_COLS}`,
-    );
     this.stmtBySourceAndRepo = conn.prepareSync(
-      `MATCH (s:Symbol {id: $s})-[r:Edge]->(t:Symbol) WHERE r.repo = $r RETURN ${RETURN_COLS}`,
+      buildUnionAll(
+        (table, kind) =>
+          `MATCH (s:Symbol {id: $s})-[r:${table}]->(t:Symbol) WHERE r.repo = $r RETURN ${RETURN_BASE}, '${kind}' AS kind`,
+      ),
     );
 
     this.stmtByTarget = conn.prepareSync(
-      `MATCH (s:Symbol)-[r:Edge]->(t:Symbol {id: $t}) RETURN ${RETURN_COLS}`,
+      buildUnionAll(
+        (table, kind) =>
+          `MATCH (s:Symbol)-[r:${table}]->(t:Symbol {id: $t}) RETURN ${RETURN_BASE}, '${kind}' AS kind`,
+      ),
     );
+
     this.stmtByTargetAndRepo = conn.prepareSync(
-      `MATCH (s:Symbol)-[r:Edge]->(t:Symbol {id: $t}) WHERE r.repo = $r RETURN ${RETURN_COLS}`,
-    );
-
-    this.stmtByKind = conn.prepareSync(
-      `MATCH (s:Symbol)-[r:Edge]->(t:Symbol) WHERE r.kind = $k RETURN ${RETURN_COLS}`,
-    );
-    this.stmtByKindAndRepo = conn.prepareSync(
-      `MATCH (s:Symbol)-[r:Edge]->(t:Symbol) WHERE r.kind = $k AND r.repo = $r RETURN ${RETURN_COLS}`,
-    );
-
-    this.stmtCountByKindAndRepo = conn.prepareSync(
-      "MATCH (s:Symbol)-[r:Edge]->(t:Symbol) WHERE r.kind = $k " +
-        "RETURN r.repo AS repo, count(r) AS cnt",
+      buildUnionAll(
+        (table, kind) =>
+          `MATCH (s:Symbol)-[r:${table}]->(t:Symbol {id: $t}) WHERE r.repo = $r RETURN ${RETURN_BASE}, '${kind}' AS kind`,
+      ),
     );
 
     this.stmtClearAll = conn.prepareSync(
       "MATCH (s:Symbol) DETACH DELETE s",
-    );
-    this.stmtClearRepo = conn.prepareSync(
-      "MATCH (s:Symbol)-[r:Edge]->(t:Symbol) WHERE r.repo = $r DELETE r",
     );
   }
 
@@ -120,17 +205,17 @@ export class KuzuGraphStore implements GraphStore {
         this.conn.executeSync(this.stmtMergeSymbol, { id });
       }
 
-      // Pass 2: CREATE relationships
+      // Pass 2: CREATE relationships dispatched by kind
       for (const edge of edges) {
         const repo =
           typeof edge.metadata?.["repo"] === "string"
             ? edge.metadata["repo"]
             : "";
         const meta = edge.metadata ? JSON.stringify(edge.metadata) : "";
-        this.conn.executeSync(this.stmtInsertEdge, {
+        const stmt = this.stmtInsertEdge.get(edge.kind)!;
+        this.conn.executeSync(stmt, {
           s: edge.source,
           t: edge.target,
-          k: edge.kind,
           m: meta,
           r: repo,
         });
@@ -173,23 +258,25 @@ export class KuzuGraphStore implements GraphStore {
     repo?: string,
     options?: EdgeQueryOptions,
   ): Promise<GraphEdge[]> {
+    const table = EDGE_TABLE[kind];
+
     if (options?.limit !== undefined) {
       // Kuzu does not support parameterised LIMIT; interpolate the number
       // directly. `limit` is always a number (type-enforced), so this is safe.
       const limitClause = `LIMIT ${options.limit}`;
       const cypher = repo
-        ? `MATCH (s:Symbol)-[r:Edge]->(t:Symbol) WHERE r.kind = $k AND r.repo = $r RETURN ${RETURN_COLS} ${limitClause}`
-        : `MATCH (s:Symbol)-[r:Edge]->(t:Symbol) WHERE r.kind = $k RETURN ${RETURN_COLS} ${limitClause}`;
+        ? `MATCH (s:Symbol)-[r:${table}]->(t:Symbol) WHERE r.repo = $r RETURN ${RETURN_BASE}, '${kind}' AS kind ${limitClause}`
+        : `MATCH (s:Symbol)-[r:${table}]->(t:Symbol) RETURN ${RETURN_BASE}, '${kind}' AS kind ${limitClause}`;
       const stmt = this.conn.prepareSync(cypher);
       const result = repo
-        ? this.conn.executeSync(stmt, { k: kind, r: repo })
-        : this.conn.executeSync(stmt, { k: kind });
+        ? this.conn.executeSync(stmt, { r: repo })
+        : this.conn.executeSync(stmt, {});
       return single(result).getAllSync().map(toGraphEdge);
     }
 
     const result = repo
-      ? this.conn.executeSync(this.stmtByKindAndRepo, { k: kind, r: repo })
-      : this.conn.executeSync(this.stmtByKind, { k: kind });
+      ? this.conn.executeSync(this.stmtByKindAndRepo.get(kind)!, { r: repo })
+      : this.conn.executeSync(this.stmtByKind.get(kind)!, {});
     return single(result).getAllSync().map(toGraphEdge);
   }
 
@@ -198,7 +285,7 @@ export class KuzuGraphStore implements GraphStore {
   // -------------------------------------------------------------------------
 
   async getEdgeCountsByKindAndRepo(kind: EdgeKind): Promise<Map<string, number>> {
-    const result = this.conn.executeSync(this.stmtCountByKindAndRepo, { k: kind });
+    const result = this.conn.executeSync(this.stmtCountByKindAndRepo.get(kind)!, {});
     const rows = single(result).getAllSync() as Array<Record<string, unknown>>;
     const counts = new Map<string, number>();
     for (const row of rows) {
@@ -238,6 +325,8 @@ export class KuzuGraphStore implements GraphStore {
   /**
    * Native recursive BFS via Kuzu's variable-length relationship patterns.
    * Single Cypher query replaces the N+1 application-level loop.
+   * Uses multi-label pattern to traverse all 7 typed edge tables.
+   * label(rs[i]) returns the table name, which toGraphEdge maps to EdgeKind.
    */
   private traverseBFSNative(
     start: string,
@@ -249,21 +338,21 @@ export class KuzuGraphStore implements GraphStore {
       const safeRepo = repo.replace(/'/g, "''");
       cypher =
         `MATCH path = (start:Symbol {id: $start})` +
-        `-[e:Edge*1..${maxDepth} (r, _ | WHERE r.repo = '${safeRepo}')]->` +
+        `-[e:${ALL_LABELS}*1..${maxDepth} (r, _ | WHERE r.repo = '${safeRepo}')]->` +
         `(end:Symbol) ` +
         `WITH nodes(path) AS ns, rels(path) AS rs ` +
         `UNWIND range(0, size(rs)-1) AS i ` +
         `RETURN DISTINCT ns[i].id AS source, ns[i+1].id AS target, ` +
-        `rs[i].kind AS kind, rs[i].metadata AS metadata`;
+        `label(rs[i]) AS kind, rs[i].metadata AS metadata`;
     } else {
       cypher =
         `MATCH path = (start:Symbol {id: $start})` +
-        `-[:Edge*1..${maxDepth}]->` +
+        `-[:${ALL_LABELS}*1..${maxDepth}]->` +
         `(end:Symbol) ` +
         `WITH nodes(path) AS ns, rels(path) AS rs ` +
         `UNWIND range(0, size(rs)-1) AS i ` +
         `RETURN DISTINCT ns[i].id AS source, ns[i+1].id AS target, ` +
-        `rs[i].kind AS kind, rs[i].metadata AS metadata`;
+        `label(rs[i]) AS kind, rs[i].metadata AS metadata`;
     }
 
     const stmt = this.conn.prepareSync(cypher);
@@ -323,7 +412,9 @@ export class KuzuGraphStore implements GraphStore {
 
   async clear(repo?: string): Promise<void> {
     if (repo) {
-      this.conn.executeSync(this.stmtClearRepo, { r: repo });
+      for (const kind of ALL_EDGE_KINDS) {
+        this.conn.executeSync(this.stmtClearKind.get(kind)!, { r: repo });
+      }
     } else {
       this.conn.executeSync(this.stmtClearAll, {});
     }

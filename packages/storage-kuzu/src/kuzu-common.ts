@@ -43,18 +43,47 @@ export interface KuzuStoreOptions {
 // Schema versioning
 // ---------------------------------------------------------------------------
 
+/** v3 typed relationship table names (one per EdgeKind). */
+export const V3_REL_TABLES = [
+  "Calls", "Imports", "Extends", "Implements",
+  "DependsOn", "Contains", "ServiceCall",
+];
+
+/** Maps EdgeKind string values to v3 table names (for migration). */
+const KIND_TO_TABLE: Record<string, string> = {
+  "calls": "Calls",
+  "imports": "Imports",
+  "extends": "Extends",
+  "implements": "Implements",
+  "depends-on": "DependsOn",
+  "contains": "Contains",
+  "service-call": "ServiceCall",
+};
+
 /**
  * Detect the current schema version of the Kuzu database by probing tables.
- * Returns 2 for v2 (Symbol node + Edge rel), 1 for v1 (flat Edge node), 0 for fresh.
+ * Returns 3 for v3 (typed rel tables), 2 for v2 (Symbol node + generic Edge rel),
+ * 1 for v1 (flat Edge node), 0 for fresh.
  *
  * Detection is based on table existence:
- * - Symbol node table exists → v2
+ * - Typed Imports rel table exists → v3
+ * - Symbol node table exists (but no typed rels) → v2
  * - Edge node table with `source` column exists → v1
  * - Neither → fresh (v0)
  */
 export function detectSchemaVersion(
   conn: InstanceType<typeof kuzu.Connection>,
 ): number {
+  // Check for v3: typed rel tables (probe Imports)
+  try {
+    single(
+      conn.querySync("MATCH (s:Symbol)-[:Imports]->(t) RETURN s.id LIMIT 0"),
+    ).getAllSync();
+    return 3;
+  } catch {
+    // Imports rel table doesn't exist
+  }
+
   // Check for v2: Symbol node table exists
   try {
     single(
@@ -145,8 +174,68 @@ export function migrateV1ToV2(
 }
 
 /**
+ * Migrate from v2 (Symbol nodes + generic Edge rel) to v3 (Symbol nodes + 7 typed rels).
+ * Reads all edges from the generic Edge rel table, drops it, creates typed tables,
+ * re-inserts edges dispatched by kind.
+ */
+export function migrateV2ToV3(
+  conn: InstanceType<typeof kuzu.Connection>,
+): void {
+  // 1. Read all edges from generic Edge rel table
+  const result = single(
+    conn.querySync(
+      "MATCH (s:Symbol)-[r:Edge]->(t:Symbol) RETURN s.id AS source, t.id AS target, " +
+        "r.kind AS kind, r.metadata AS metadata, r.repo AS repo",
+    ),
+  );
+  const rows = result.getAllSync() as Array<Record<string, unknown>>;
+
+  // 2. Drop generic Edge rel table
+  conn.querySync("DROP TABLE Edge");
+
+  // 3. Create 7 typed rel tables
+  for (const table of V3_REL_TABLES) {
+    conn.querySync(
+      `CREATE REL TABLE IF NOT EXISTS ${table}(FROM Symbol TO Symbol, metadata STRING, repo STRING)`,
+    );
+  }
+
+  // 4. Re-insert edges dispatched by kind
+  if (rows.length > 0) {
+    conn.querySync("BEGIN TRANSACTION");
+    try {
+      const stmts = new Map<string, InstanceType<typeof kuzu.PreparedStatement>>();
+      for (const table of V3_REL_TABLES) {
+        stmts.set(
+          table,
+          conn.prepareSync(
+            `MATCH (s:Symbol {id: $s}), (t:Symbol {id: $t}) CREATE (s)-[:${table} {metadata: $m, repo: $r}]->(t)`,
+          ),
+        );
+      }
+
+      for (const row of rows) {
+        const kind = row["kind"] as string;
+        const table = KIND_TO_TABLE[kind];
+        if (!table) continue;
+        conn.executeSync(stmts.get(table)!, {
+          s: row["source"] as string,
+          t: row["target"] as string,
+          m: (row["metadata"] as string) ?? "",
+          r: (row["repo"] as string) ?? "",
+        });
+      }
+      conn.querySync("COMMIT");
+    } catch (e) {
+      conn.querySync("ROLLBACK");
+      throw e;
+    }
+  }
+}
+
+/**
  * Initialize the Kuzu schema — version-aware.
- * Fresh: creates v2 schema. V1: migrates. V2: no-op.
+ * Fresh: creates v3 schema directly. V1: migrates v1→v2→v3. V2: migrates v2→v3. V3+: no-op.
  */
 function initSchema(conn: InstanceType<typeof kuzu.Connection>): void {
   // KV table always needed (used for version tracking + KVStore)
@@ -157,18 +246,22 @@ function initSchema(conn: InstanceType<typeof kuzu.Connection>): void {
   const version = detectSchemaVersion(conn);
 
   if (version === 0) {
-    // Fresh database — create v2 schema directly
+    // Fresh database — create v3 schema directly
     conn.querySync(
       "CREATE NODE TABLE IF NOT EXISTS Symbol(id STRING PRIMARY KEY)",
     );
-    conn.querySync(
-      "CREATE REL TABLE IF NOT EXISTS Edge(FROM Symbol TO Symbol, " +
-        "kind STRING, metadata STRING, repo STRING)",
-    );
+    for (const table of V3_REL_TABLES) {
+      conn.querySync(
+        `CREATE REL TABLE IF NOT EXISTS ${table}(FROM Symbol TO Symbol, metadata STRING, repo STRING)`,
+      );
+    }
   } else if (version === 1) {
     migrateV1ToV2(conn);
+    migrateV2ToV3(conn);
+  } else if (version === 2) {
+    migrateV2ToV3(conn);
   }
-  // version >= 2: schema is current
+  // version >= 3: schema is current
 
   // SearchStore table + FTS extension
   conn.querySync(

@@ -336,6 +336,43 @@ describe("KuzuGraphStore", () => {
     });
   });
 
+  describe("hyphenated edge kinds", () => {
+    it("round-trips hyphenated edge kinds (depends-on, service-call)", async () => {
+      await graphStore.addEdges([
+        edge("a", "b", "depends-on", "r1"),
+        edge("c", "d", "service-call", "r1"),
+      ]);
+
+      const depEdges = await graphStore.getEdgesByKind("depends-on");
+      expect(depEdges).toHaveLength(1);
+      expect(depEdges[0]!.kind).toBe("depends-on");
+
+      const svcEdges = await graphStore.getEdgesByKind("service-call");
+      expect(svcEdges).toHaveLength(1);
+      expect(svcEdges[0]!.kind).toBe("service-call");
+
+      // Also verify cross-kind queries return correct kinds
+      const fromA = await graphStore.getEdgesFrom("a");
+      expect(fromA).toHaveLength(1);
+      expect(fromA[0]!.kind).toBe("depends-on");
+    });
+  });
+
+  describe("BFS mixed kinds", () => {
+    it("traverses edges of mixed kinds", async () => {
+      await graphStore.addEdges([
+        edge("a", "b", "imports", "r1"),
+        edge("b", "c", "calls", "r1"),
+        edge("c", "d", "extends", "r1"),
+      ]);
+
+      const result = await graphStore.traverseBFS("a", 3);
+      expect(result).toHaveLength(3);
+      const kinds = result.map((e) => e.kind).sort();
+      expect(kinds).toEqual(["calls", "extends", "imports"]);
+    });
+  });
+
   describe("clear", () => {
     it("removes all edges", async () => {
       await graphStore.addEdges(FIXTURE_EDGES);

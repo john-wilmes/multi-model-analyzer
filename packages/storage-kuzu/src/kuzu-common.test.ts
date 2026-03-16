@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { createKuzuStores, detectSchemaVersion, migrateV1ToV2, single } from "./kuzu-common.js";
+import { createKuzuStores, detectSchemaVersion, migrateV1ToV2, migrateV2ToV3, single } from "./kuzu-common.js";
 import type { KuzuStores } from "./kuzu-common.js";
 import kuzu from "kuzu";
 
@@ -179,7 +179,7 @@ describe("schema versioning", () => {
     }
   });
 
-  it("detects version 2 after createKuzuStores", async () => {
+  it("detects version 3 after createKuzuStores", async () => {
     const stores = createKuzuStores({ dbPath: ":memory:" });
     try {
       await stores.graphStore.addEdges([
@@ -262,6 +262,78 @@ describe("schema versioning", () => {
         conn.querySync("MATCH (s:Symbol)-[r:Edge]->(t:Symbol) RETURN s.id"),
       ).getAllSync() as Array<Record<string, unknown>>;
       expect(rows).toHaveLength(0);
+    } finally {
+      try { conn.closeSync(); } catch { /* ignore */ }
+      try { db.closeSync(); } catch { /* ignore */ }
+    }
+  });
+
+  it("migrates v2 to v3 preserving edges", () => {
+    const db = new kuzu.Database(":memory:");
+    db.initSync();
+    const conn = new kuzu.Connection(db);
+    conn.initSync();
+    try {
+      // Create v2 schema manually
+      conn.querySync(
+        "CREATE NODE TABLE IF NOT EXISTS KV(key STRING PRIMARY KEY, value STRING)",
+      );
+      conn.querySync(
+        "CREATE NODE TABLE IF NOT EXISTS Symbol(id STRING PRIMARY KEY)",
+      );
+      conn.querySync(
+        "CREATE REL TABLE IF NOT EXISTS Edge(FROM Symbol TO Symbol, " +
+          "kind STRING, metadata STRING, repo STRING)",
+      );
+
+      // Insert symbols and edges via v2 schema
+      conn.querySync("MERGE (s:Symbol {id: 'a'})");
+      conn.querySync("MERGE (s:Symbol {id: 'b'})");
+      conn.querySync("MERGE (s:Symbol {id: 'c'})");
+      conn.querySync("MERGE (s:Symbol {id: 'd'})");
+      conn.querySync(
+        "MATCH (s:Symbol {id: 'a'}), (t:Symbol {id: 'b'}) " +
+          "CREATE (s)-[:Edge {kind: 'imports', metadata: '{\"repo\":\"r1\"}', repo: 'r1'}]->(t)",
+      );
+      conn.querySync(
+        "MATCH (s:Symbol {id: 'b'}), (t:Symbol {id: 'c'}) " +
+          "CREATE (s)-[:Edge {kind: 'depends-on', metadata: '{\"repo\":\"r1\"}', repo: 'r1'}]->(t)",
+      );
+      conn.querySync(
+        "MATCH (s:Symbol {id: 'c'}), (t:Symbol {id: 'd'}) " +
+          "CREATE (s)-[:Edge {kind: 'service-call', metadata: '{\"repo\":\"r1\"}', repo: 'r1'}]->(t)",
+      );
+
+      expect(detectSchemaVersion(conn)).toBe(2);
+      migrateV2ToV3(conn);
+      expect(detectSchemaVersion(conn)).toBe(3);
+
+      // Verify imports edge queryable via typed Imports table
+      const importRows = single(
+        conn.querySync(
+          "MATCH (s:Symbol {id: 'a'})-[r:Imports]->(t:Symbol) RETURN t.id AS target",
+        ),
+      ).getAllSync() as Array<Record<string, unknown>>;
+      expect(importRows).toHaveLength(1);
+      expect(importRows[0]!["target"]).toBe("b");
+
+      // Verify hyphenated depends-on → DependsOn
+      const depRows = single(
+        conn.querySync(
+          "MATCH (s:Symbol {id: 'b'})-[r:DependsOn]->(t:Symbol) RETURN t.id AS target",
+        ),
+      ).getAllSync() as Array<Record<string, unknown>>;
+      expect(depRows).toHaveLength(1);
+      expect(depRows[0]!["target"]).toBe("c");
+
+      // Verify hyphenated service-call → ServiceCall
+      const svcRows = single(
+        conn.querySync(
+          "MATCH (s:Symbol {id: 'c'})-[r:ServiceCall]->(t:Symbol) RETURN t.id AS target",
+        ),
+      ).getAllSync() as Array<Record<string, unknown>>;
+      expect(svcRows).toHaveLength(1);
+      expect(svcRows[0]!["target"]).toBe("d");
     } finally {
       try { conn.closeSync(); } catch { /* ignore */ }
       try { db.closeSync(); } catch { /* ignore */ }
