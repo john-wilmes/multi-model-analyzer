@@ -89,6 +89,9 @@ export class KuzuGraphStore implements GraphStore {
   private readonly stmtCountByKindAndRepo: Map<EdgeKind, InstanceType<typeof kuzu.PreparedStatement>>;
   private readonly stmtClearKind: Map<EdgeKind, InstanceType<typeof kuzu.PreparedStatement>>;
 
+  // Lazily-cached prepared statements for getEdgesByKind with LIMIT
+  private readonly stmtByKindLimited: Map<string, InstanceType<typeof kuzu.PreparedStatement>>;
+
   // Cross-kind UNION ALL statements
   private readonly stmtBySource: InstanceType<typeof kuzu.PreparedStatement>;
   private readonly stmtBySourceAndRepo: InstanceType<typeof kuzu.PreparedStatement>;
@@ -117,6 +120,7 @@ export class KuzuGraphStore implements GraphStore {
     this.stmtCountByKindAndRepo = new Map();
     this.stmtClearKind = new Map();
     this.stmtDeleteByFileAndRepo = new Map();
+    this.stmtByKindLimited = new Map();
 
     for (const kind of ALL_EDGE_KINDS) {
       const table = EDGE_TABLE[kind];
@@ -274,11 +278,16 @@ export class KuzuGraphStore implements GraphStore {
     if (options?.limit !== undefined) {
       // Kuzu does not support parameterised LIMIT; interpolate the number
       // directly. `limit` is always a number (type-enforced), so this is safe.
-      const limitClause = `LIMIT ${options.limit}`;
-      const cypher = repo
-        ? `MATCH (s:Symbol)-[r:${table}]->(t:Symbol) WHERE r.repo = $r RETURN ${RETURN_BASE}, '${kind}' AS kind ${limitClause}`
-        : `MATCH (s:Symbol)-[r:${table}]->(t:Symbol) RETURN ${RETURN_BASE}, '${kind}' AS kind ${limitClause}`;
-      const stmt = this.conn.prepareSync(cypher);
+      const cacheKey = `${kind}:${repo ?? ""}:${options.limit}`;
+      let stmt = this.stmtByKindLimited.get(cacheKey);
+      if (!stmt) {
+        const limitClause = `LIMIT ${options.limit}`;
+        const cypher = repo
+          ? `MATCH (s:Symbol)-[r:${table}]->(t:Symbol) WHERE r.repo = $r RETURN ${RETURN_BASE}, '${kind}' AS kind ${limitClause}`
+          : `MATCH (s:Symbol)-[r:${table}]->(t:Symbol) RETURN ${RETURN_BASE}, '${kind}' AS kind ${limitClause}`;
+        stmt = this.conn.prepareSync(cypher);
+        this.stmtByKindLimited.set(cacheKey, stmt);
+      }
       const result = repo
         ? this.conn.executeSync(stmt, { r: repo })
         : this.conn.executeSync(stmt, {});
