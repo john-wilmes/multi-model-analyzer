@@ -1102,6 +1102,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
           const catalog = buildServiceCatalog(services6c, svcSummaries, svcLogIndex);
           const docs = generateDocumentation(catalog, svcSummaries);
           await kvStore.set(`docs:functional:${repo.name}`, docs);
+          await kvStore.set(`catalog:${repo.name}`, JSON.stringify(catalog));
           log(`  [${repo.name}] [functional]: ${catalog.length} catalog entries, ${docs.length} chars of documentation`);
         } catch (error) {
           console.error(`  Failed to build service catalog for ${repo.name}:`, error);

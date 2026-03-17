@@ -30,6 +30,7 @@ import { validateCommand } from "./commands/validate-cmd.js";
 import { compressCommand, dashboardCommand, maybeDecompress } from "./commands/dashboard-cmd.js";
 import { baselineCreateCommand, baselineCheckCommand } from "./commands/baseline-cmd.js";
 import { deltaCommand } from "./commands/delta-cmd.js";
+import { catalogCommand } from "./commands/catalog-cmd.js";
 import { printJson, printTable, printSarif, validateFormat, validateReportFormat } from "./formatter.js";
 import { parseWatchInterval, watchLoop } from "./watch.js";
 
@@ -72,6 +73,7 @@ async function main(): Promise<void> {
       port: { type: "string", default: "3000" },
       backend: { type: "string" },
       "exit-code": { type: "boolean", default: false },
+      repo: { type: "string" },
     },
   });
 
@@ -468,6 +470,26 @@ async function main(): Promise<void> {
     return;
   }
 
+  // catalog command: generate Backstage catalog-info.yaml from service catalog
+  if (command === "catalog") {
+    if (!existsSync(dbPath)) {
+      console.error(`Database not found: ${dbPath}`);
+      console.error("Run 'mma index' first to create the analysis database.");
+      process.exit(1);
+    }
+    const stores = await createStores({ backend: earlyBackend, dbPath, readonly: true });
+    try {
+      await catalogCommand({
+        kvStore: stores.kvStore,
+        repo: values.repo,
+        outputDir: values.output,
+      });
+    } finally {
+      stores.close();
+    }
+    return;
+  }
+
   // report command bypasses config -- only needs the DB (read-only)
   if (command === "report") {
     if (!existsSync(dbPath)) {
@@ -769,6 +791,8 @@ Usage:
                                                 Generate anonymized report (default: json)
   mma practices [--db path] [--format json|table|markdown] [-o file]
                                                 Best-practices recommendations (default: markdown)
+  mma catalog [--db path] [--repo name] [-o dir]
+                                                Export Backstage catalog-info.yaml (default: stdout)
   mma compress [--db path]                      Gzip the analysis database
   mma dashboard [--db path] [--port 3000]       Serve local web dashboard
 
@@ -794,6 +818,7 @@ Options:
   --force-full-reindex  Clear and rebuild graph for each repo (default: incremental)
   --backend       Storage backend: sqlite (default) or kuzu
   --exit-code     Exit with code 1 if new/updated findings exist (use with delta)
+  --repo          Filter catalog export to a single repo name (use with catalog)
   -h, --help      Show this help message
   --version       Show version number
 `);
