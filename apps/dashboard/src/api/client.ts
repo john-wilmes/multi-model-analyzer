@@ -148,6 +148,16 @@ export async function fetchTemporalCoupling(): Promise<CoupledPairRow[]> {
   return fetchJson(`${BASE}/api/temporal-coupling`);
 }
 
+export interface RepoTemporalCoupling {
+  pairs: CoupledPairRow[];
+  commitsAnalyzed: number;
+  commitsSkipped: number;
+}
+
+export async function fetchTemporalCouplingByRepo(repo: string): Promise<RepoTemporalCoupling> {
+  return fetchJson(`${BASE}/api/temporal-coupling/${encodeURIComponent(repo)}`);
+}
+
 export async function fetchAtdiByRepo(repo: string): Promise<AtdiRepoScore | null> {
   return fetchJson(`${BASE}/api/atdi/${encodeURIComponent(repo)}`);
 }

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { fetchMetrics, fetchFindings, fetchDsm, fetchAtdiByRepo, fetchDebtByRepo, type DsmData, type AtdiRepoScore, type RepoDebtSummary } from '../api/client.ts';
+import { fetchMetrics, fetchFindings, fetchDsm, fetchAtdiByRepo, fetchDebtByRepo, fetchTemporalCouplingByRepo, type DsmData, type AtdiRepoScore, type RepoDebtSummary, type RepoTemporalCoupling } from '../api/client.ts';
 import ZoneChart, { type ModuleMetrics } from './ZoneChart.tsx';
 import DsmChart from './DsmChart.tsx';
 import AtdiGauge from './AtdiGauge.tsx';
@@ -38,6 +38,7 @@ export default function RepoDetail() {
   const [dsm, setDsm] = useState<DsmData | null>(null);
   const [atdi, setAtdi] = useState<AtdiRepoScore | null>(null);
   const [debt, setDebt] = useState<RepoDebtSummary | null>(null);
+  const [coupling, setCoupling] = useState<RepoTemporalCoupling | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -48,8 +49,9 @@ export default function RepoDetail() {
       fetchDsm(repo),
       fetchAtdiByRepo(repo),
       fetchDebtByRepo(repo),
+      fetchTemporalCouplingByRepo(repo).catch(() => null),
     ])
-      .then(([metricsData, findingsData, dsmData, atdiData, debtData]) => {
+      .then(([metricsData, findingsData, dsmData, atdiData, debtData, couplingData]) => {
         const ms = (metricsData as unknown[])
           .map(toModuleMetrics)
           .filter((m): m is ModuleMetrics => m !== null);
@@ -58,6 +60,7 @@ export default function RepoDetail() {
         setDsm(dsmData as DsmData);
         setAtdi(atdiData);
         setDebt(debtData);
+        setCoupling(couplingData);
       })
       .catch((err: unknown) => console.error("Failed to fetch repo data:", err))
       .finally(() => setLoading(false));
@@ -171,6 +174,54 @@ export default function RepoDetail() {
         </div>
       )}
 
+      {/* Dependency graph link */}
+      <Link
+        to={`/graph/${encodeURIComponent(repo)}`}
+        className="text-sm text-blue-600 hover:underline"
+      >
+        View dependency graph &rarr;
+      </Link>
+
+      {/* Temporal Coupling */}
+      {coupling && coupling.pairs.length > 0 && (
+        <div className="bg-white rounded-lg shadow-sm border p-4">
+          <h3 className="text-base font-semibold text-slate-700 mb-1">
+            Temporal Coupling
+          </h3>
+          <p className="text-xs text-slate-500 mb-3">
+            {coupling.commitsAnalyzed} commits analyzed &middot; Top 10 co-changing file pairs
+          </p>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs text-slate-500 border-b">
+                <th className="pb-2 pr-3">File A</th>
+                <th className="pb-2 pr-3">File B</th>
+                <th className="pb-2 pr-3 text-right">Co-changes</th>
+                <th className="pb-2 text-right">Confidence</th>
+              </tr>
+            </thead>
+            <tbody>
+              {coupling.pairs
+                .slice()
+                .sort((a, b) => b.coChangeCount - a.coChangeCount)
+                .slice(0, 10)
+                .map((p, i) => (
+                  <tr key={i} className="border-b last:border-0">
+                    <td className="py-2 pr-3 font-mono text-xs text-slate-600 truncate max-w-[200px]" title={p.fileA}>
+                      {shortenPath(p.fileA)}
+                    </td>
+                    <td className="py-2 pr-3 font-mono text-xs text-slate-600 truncate max-w-[200px]" title={p.fileB}>
+                      {shortenPath(p.fileB)}
+                    </td>
+                    <td className="py-2 pr-3 text-right text-slate-700">{p.coChangeCount}</td>
+                    <td className="py-2 text-right text-slate-700">{(p.confidence * 100).toFixed(0)}%</td>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       {/* Top findings */}
       <div className="bg-white rounded-lg shadow-sm border p-4">
         <div className="flex items-center justify-between mb-3">
@@ -215,6 +266,12 @@ export default function RepoDetail() {
       </div>
     </div>
   );
+}
+
+function shortenPath(filePath: string): string {
+  const parts = filePath.split('/');
+  if (parts.length <= 2) return filePath;
+  return parts.slice(-2).join('/');
 }
 
 function SeverityBadge({ level }: { level?: string }) {
