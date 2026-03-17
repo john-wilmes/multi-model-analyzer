@@ -384,6 +384,30 @@ async function handleApi(
     return sendJson(res, result);
   }
 
+  // GET /api/atdi
+  if (path === "/api/atdi") {
+    const json = await kvStore.get("atdi:system");
+    if (!json) return sendJson(res, null);
+    try {
+      return sendJson(res, JSON.parse(json) as unknown);
+    } catch {
+      return sendJson(res, null);
+    }
+  }
+
+  // GET /api/atdi/:repo
+  const atdiMatch = path.match(/^\/api\/atdi\/(.+)$/);
+  if (atdiMatch) {
+    const repo = decodeURIComponent(atdiMatch[1]!);
+    const json = await kvStore.get(`atdi:${repo}`);
+    if (!json) return sendJson(res, null);
+    try {
+      return sendJson(res, JSON.parse(json) as unknown);
+    } catch {
+      return sendJson(res, null);
+    }
+  }
+
   return sendError(res, "Not found", 404);
 }
 

@@ -24,6 +24,7 @@ import type {
   ControlFlowGraph,
   CallGraph,
   ArchitecturalRule,
+  RepoMetricsSummary,
 } from "@mma/core";
 import { detectChanges, classifyFiles, getFileContent, getHeadCommit, isBareRepo, getCommitHistory } from "@mma/ingestion";
 import { parseFiles } from "@mma/parsing";
@@ -44,7 +45,7 @@ import {
   computeHotspots,
 } from "@mma/heuristics";
 import type { PackageJsonInfo } from "@mma/heuristics";
-import { computeBaseline, hotspotFindings } from "@mma/diagnostics";
+import { computeBaseline, hotspotFindings, computeRepoAtdi, computeSystemAtdi } from "@mma/diagnostics";
 import { computePageRank, pageRankToSarif } from "@mma/query";
 import { runCorrelation } from "@mma/correlation";
 import type { KVStore, GraphStore, SearchStore } from "@mma/storage";
@@ -1228,6 +1229,57 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
   }));
 
   tracer.record("sarifResults", allSarifResults.length);
+  tracer.endPhase();
+  // Compute Architectural Technical Debt Index (ATDI) scores
+  tracer.startPhase("ATDI");
+  {
+    const repoAtdiScores: import("@mma/diagnostics").AtdiScore[] = [];
+    for (const repo of repos) {
+      // Read metrics summary (pain/uselessness zone counts + avgDistance)
+      const summaryJson = await kvStore.get(`metricsSummary:${repo.name}`);
+      let moduleCount = 0;
+      let painZoneCount = 0;
+      let uselessnessZoneCount = 0;
+      let avgDistance = 0;
+      if (summaryJson) {
+        try {
+          const s = JSON.parse(summaryJson) as RepoMetricsSummary;
+          moduleCount = s.moduleCount;
+          painZoneCount = s.painZoneCount;
+          uselessnessZoneCount = s.uselessnessZoneCount;
+          avgDistance = s.avgDistance;
+        } catch { /* ignore malformed */ }
+      }
+
+      // Count SARIF findings by severity for this repo
+      let errorCount = 0;
+      let warningCount = 0;
+      let noteCount = 0;
+      const repoSarifJson = await kvStore.get(`sarif:repo:${repo.name}`);
+      if (repoSarifJson) {
+        try {
+          const results = JSON.parse(repoSarifJson) as import("@mma/core").SarifResult[];
+          for (const r of results) {
+            if (r.level === "error") errorCount++;
+            else if (r.level === "warning") warningCount++;
+            else if (r.level === "note") noteCount++;
+          }
+        } catch { /* ignore malformed */ }
+      }
+
+      const atdi = computeRepoAtdi(
+        repo.name, moduleCount, painZoneCount, uselessnessZoneCount,
+        avgDistance, errorCount, warningCount, noteCount,
+      );
+      repoAtdiScores.push(atdi);
+      await kvStore.set(`atdi:${repo.name}`, JSON.stringify(atdi));
+      log(`  [ATDI] ${repo.name}: ${atdi.score}/100 (modules=${atdi.moduleCount}, errors=${errorCount}, warnings=${warningCount}, notes=${noteCount})`);
+    }
+
+    const systemAtdi = computeSystemAtdi(repoAtdiScores);
+    await kvStore.set("atdi:system", JSON.stringify(systemAtdi));
+    log(`  [ATDI] System score: ${systemAtdi.score}/100 across ${repoAtdiScores.length} repos`);
+  }
   tracer.endPhase();
 
   // Store pipeline trace for observability

@@ -11,3 +11,6 @@ export type { BaselineResult } from "./baseline.js";
 
 export { hotspotFindings } from "./sarif-hotspot.js";
 export type { HotspotEntry } from "./sarif-hotspot.js";
+
+export { computeRepoAtdi, computeSystemAtdi } from "./atdi.js";
+export type { AtdiScore, SystemAtdi } from "./atdi.js";
