@@ -135,6 +135,125 @@ describe("executeMultiRepoQuery", () => {
   });
 });
 
+describe("findCrossRepoDependencies — canonical ID fast path", () => {
+  it("detects cross-repo edge via canonical ID target", async () => {
+    const store = new InMemoryGraphStore();
+    // Edge from repoA file importing a canonical target in repoB
+    const e: GraphEdge = {
+      source: "src/service.ts",
+      target: "repoB:src/index.ts",
+      kind: "imports",
+      metadata: { repo: "repoA" },
+    };
+    await store.addEdges([e]);
+
+    const result = await findCrossRepoDependencies(store, { sourceRepo: "repoA" });
+
+    expect(result.totalCrossRepoEdges).toBe(1);
+    expect(result.dependencies).toHaveLength(1);
+    expect(result.dependencies[0]!.sourceRepo).toBe("repoA");
+    expect(result.dependencies[0]!.targetRepo).toBe("repoB");
+  });
+
+  it("skips intra-repo edges even with canonical IDs", async () => {
+    const store = new InMemoryGraphStore();
+    // Edge within same repo — canonical target has same repo as source
+    const e: GraphEdge = {
+      source: "src/a.ts",
+      target: "repoA:src/b.ts",
+      kind: "imports",
+      metadata: { repo: "repoA" },
+    };
+    await store.addEdges([e]);
+
+    const result = await findCrossRepoDependencies(store, { sourceRepo: "repoA" });
+
+    expect(result.totalCrossRepoEdges).toBe(0);
+    expect(result.dependencies).toHaveLength(0);
+  });
+
+  it("returns null target repo for relative paths (no cross-repo)", async () => {
+    const store = new InMemoryGraphStore();
+    const e: GraphEdge = {
+      source: "src/a.ts",
+      target: "./utils.ts",
+      kind: "imports",
+      metadata: { repo: "repoA" },
+    };
+    await store.addEdges([e]);
+
+    const result = await findCrossRepoDependencies(store, { sourceRepo: "repoA" });
+
+    // Relative paths should be skipped (inferTargetRepo returns null)
+    expect(result.totalCrossRepoEdges).toBe(0);
+  });
+
+  it("metadata.targetRepo takes precedence over canonical ID target", async () => {
+    const store = new InMemoryGraphStore();
+    // metadata.targetRepo = "repoC" overrides the canonical repo "repoB" in the target
+    const e: GraphEdge = {
+      source: "src/a.ts",
+      target: "repoB:src/index.ts",
+      kind: "imports",
+      metadata: { repo: "repoA", targetRepo: "repoC" },
+    };
+    await store.addEdges([e]);
+
+    const result = await findCrossRepoDependencies(store);
+
+    // In multi-repo.ts line 51: metadata.targetRepo is checked first, then inferTargetRepo.
+    // So metadata.targetRepo = "repoC" wins.
+    expect(result.dependencies).toHaveLength(1);
+    expect(result.dependencies[0]!.targetRepo).toBe("repoC");
+  });
+
+  it("filters by targetRepo option with canonical IDs", async () => {
+    const store = new InMemoryGraphStore();
+    await store.addEdges([
+      { source: "a.ts", target: "repoB:src/b.ts", kind: "imports", metadata: { repo: "repoA" } },
+      { source: "a.ts", target: "repoC:src/c.ts", kind: "imports", metadata: { repo: "repoA" } },
+    ]);
+
+    const result = await findCrossRepoDependencies(store, { sourceRepo: "repoA", targetRepo: "repoB" });
+
+    expect(result.totalCrossRepoEdges).toBe(1);
+    expect(result.dependencies[0]!.targetRepo).toBe("repoB");
+  });
+
+  it("detects cross-repo edge via scoped package heuristic (non-canonical)", async () => {
+    const store = new InMemoryGraphStore();
+    const e: GraphEdge = {
+      source: "src/app.ts",
+      target: "@nestjs/core",
+      kind: "imports",
+      metadata: { repo: "my-app" },
+    };
+    await store.addEdges([e]);
+
+    const result = await findCrossRepoDependencies(store, { sourceRepo: "my-app" });
+
+    expect(result.totalCrossRepoEdges).toBe(1);
+    expect(result.dependencies[0]!.targetRepo).toBe("@nestjs/core");
+  });
+
+  it("handles symbol-level canonical IDs (repo:path#symbol)", async () => {
+    const store = new InMemoryGraphStore();
+    const e: GraphEdge = {
+      source: "src/controller.ts#AppController",
+      target: "repoB:src/auth.ts#AuthService.validate",
+      kind: "calls",
+      metadata: { repo: "repoA" },
+    };
+    await store.addEdges([e]);
+
+    const result = await findCrossRepoDependencies(store);
+
+    // "calls" edges are not imported by findCrossRepoDependencies (only imports/depends-on)
+    // so this should return 0
+    expect(result.totalCrossRepoEdges).toBe(0);
+  });
+});
+
 describe("routeQuery — multi-repo prefix", () => {
   it("extracts repos:A,B,C prefix into repos array", () => {
     const result = routeQuery("repos:api,web,shared what depends on Logger");

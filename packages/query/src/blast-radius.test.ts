@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { computeBlastRadius } from "./blast-radius.js";
 import { InMemoryGraphStore } from "@mma/storage";
 import type { GraphEdge } from "@mma/core";
+import type { CrossRepoGraph } from "@mma/correlation";
 
 function importEdge(source: string, target: string, repo = "test"): GraphEdge {
   return { source, target, kind: "imports", metadata: { repo } };
@@ -194,5 +195,58 @@ describe("computeBlastRadius", () => {
 
     const result = await computeBlastRadius(["b.ts"], store, { maxDepth: 0 });
     expect(result.totalAffected).toBe(0);
+  });
+
+  it("expands blast radius across repo boundaries when crossRepoGraph provided", async () => {
+    const store = new InMemoryGraphStore();
+    // Intra-repo edges for repoA
+    await store.addEdges([
+      importEdge("src/a.ts", "src/target.ts", "repoA"),
+    ]);
+    // Intra-repo edges for repoB (b.ts imports entry.ts)
+    await store.addEdges([
+      importEdge("src/b.ts", "src/entry.ts", "repoB"),
+    ]);
+
+    // Cross-repo graph: repoA:src/a.ts -> repoB:src/entry.ts
+    const crossRepoGraph: CrossRepoGraph = {
+      edges: [{
+        edge: { source: "src/a.ts", target: "src/entry.ts", kind: "imports", metadata: {} },
+        sourceRepo: "repoA",
+        targetRepo: "repoB",
+        packageName: "repoB",
+      }],
+      repoPairs: new Set(["repoA->repoB"]),
+      downstreamMap: new Map([["repoA", new Set(["repoB"])]]),
+      upstreamMap: new Map([["repoB", new Set(["repoA"])]]),
+    };
+
+    const result = await computeBlastRadius(
+      ["src/target.ts"],
+      store,
+      { repo: "repoA", crossRepoGraph },
+    );
+
+    // Intra-repo: src/a.ts affected
+    expect(result.totalAffected).toBe(1);
+    expect(result.affectedFiles[0]!.path).toBe("src/a.ts");
+
+    // Cross-repo: repoB files affected
+    expect(result.crossRepoAffected).toBeDefined();
+    expect(result.crossRepoAffected!.has("repoB")).toBe(true);
+    const repoBAffected = result.crossRepoAffected!.get("repoB")!;
+    expect(repoBAffected.length).toBeGreaterThanOrEqual(1);
+    // Should include at least entry.ts and b.ts
+    const repoBPaths = repoBAffected.map(f => f.path);
+    expect(repoBPaths).toContain("src/entry.ts");
+    expect(repoBPaths).toContain("src/b.ts");
+  });
+
+  it("returns no crossRepoAffected when crossRepoGraph is not provided", async () => {
+    const store = new InMemoryGraphStore();
+    await store.addEdges([importEdge("a.ts", "b.ts")]);
+
+    const result = await computeBlastRadius(["b.ts"], store);
+    expect(result.crossRepoAffected).toBeUndefined();
   });
 });

@@ -231,6 +231,76 @@ describe("buildCrossRepoGraph", () => {
     expect(graph.edges[0]!.targetRepo).toBe("repo-b");
   });
 
+  it("resolves cross-repo edge from canonical ID target without packageRoots", async () => {
+    // repoA imports something from repoB via canonical ID — no packageRoots entry needed
+    await store.addEdges([
+      {
+        source: "src/service.ts",
+        target: "repo-b:src/index.ts",
+        kind: "imports",
+        metadata: { repo: "repo-a" },
+      },
+    ]);
+
+    const graph = await buildCrossRepoGraph(store, repos, new Map());
+
+    expect(graph.edges).toHaveLength(1);
+    expect(graph.edges[0]!.sourceRepo).toBe("repo-a");
+    expect(graph.edges[0]!.targetRepo).toBe("repo-b");
+    expect(graph.repoPairs.has("repo-a->repo-b")).toBe(true);
+    expect(graph.downstreamMap.get("repo-a")?.has("repo-b")).toBe(true);
+    expect(graph.upstreamMap.get("repo-b")?.has("repo-a")).toBe(true);
+  });
+
+  it("skips self-edges where canonical target repo matches source repo", async () => {
+    await store.addEdges([
+      {
+        source: "src/a.ts",
+        target: "repo-a:src/b.ts",
+        kind: "imports",
+        metadata: { repo: "repo-a" },
+      },
+    ]);
+
+    const graph = await buildCrossRepoGraph(store, repos, new Map());
+
+    expect(graph.edges).toHaveLength(0);
+  });
+
+  it("canonical ID takes precedence over metadata.targetRepo", async () => {
+    // graph-builder.ts resolveTargetRepo checks canonical ID first (line 56),
+    // then falls back to metadata.targetRepo (line 63). Canonical ID wins.
+    await store.addEdges([
+      {
+        source: "src/a.ts",
+        target: "repo-b:src/lib.ts",
+        kind: "imports",
+        metadata: { repo: "repo-a", targetRepo: "repo-c" },
+      },
+    ]);
+
+    const graph = await buildCrossRepoGraph(store, repos, new Map());
+
+    expect(graph.edges).toHaveLength(1);
+    expect(graph.edges[0]!.targetRepo).toBe("repo-b");
+  });
+
+  it("resolves symbol-level canonical ID (repo:path#symbol) to correct target repo", async () => {
+    await store.addEdges([
+      {
+        source: "src/controller.ts#AppController",
+        target: "repo-b:src/auth.ts#AuthService",
+        kind: "calls",
+        metadata: { repo: "repo-a" },
+      },
+    ]);
+
+    // buildCrossRepoGraph only queries imports and depends-on, not calls
+    const graph = await buildCrossRepoGraph(store, repos, new Map());
+
+    expect(graph.edges).toHaveLength(0);
+  });
+
   it("does not match a repo whose localPath is a prefix of another repo name", async () => {
     // Regression test for the prefix-ambiguity bug: a bare startsWith check would
     // incorrectly match /repos/repo-b against /repos/repo-b-extra/src/file.ts.

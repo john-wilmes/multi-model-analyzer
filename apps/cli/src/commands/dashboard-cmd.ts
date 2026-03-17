@@ -18,6 +18,8 @@ import type {
 import type { KVStore, GraphStore } from "@mma/storage";
 import { getSarifResultsPaginated, discoverRepos } from "@mma/storage";
 import { practicesCommand } from "./practices-cmd.js";
+import { computeCrossRepoImpact } from "@mma/correlation";
+import type { CrossRepoGraph } from "@mma/correlation";
 
 // ---------------------------------------------------------------------------
 // compress
@@ -328,10 +330,37 @@ async function handleApi(
       return result;
     }
 
+    // Optional cross-repo expansion
+    let crossRepoDeps: Record<string, Array<{ path: string; depth: number }>> | undefined;
+    if (query.single["crossRepo"] === "true" && repo) {
+      const raw = await kvStore.get("correlation:graph");
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw) as {
+            edges: CrossRepoGraph["edges"];
+            repoPairs: string[];
+            downstreamMap: [string, string[]][];
+            upstreamMap: [string, string[]][];
+          };
+          // Find cross-repo edges originating from this module's repo
+          crossRepoDeps = {};
+          for (const e of parsed.edges) {
+            if (e.sourceRepo === repo && e.edge.source === modulePath) {
+              if (!crossRepoDeps[e.targetRepo]) crossRepoDeps[e.targetRepo] = [];
+              const bucket = crossRepoDeps[e.targetRepo]!;
+              bucket.push({ path: e.edge.target, depth: 1 });
+            }
+          }
+          if (Object.keys(crossRepoDeps).length === 0) crossRepoDeps = undefined;
+        } catch { /* ignore parse errors */ }
+      }
+    }
+
     return sendJson(res, {
       root,
       dependencies: bfs(modulePath, fwd),
       dependents: bfs(modulePath, rev),
+      crossRepoDeps,
     });
   }
 
@@ -432,7 +461,86 @@ async function handleApi(
     }
   }
 
+  // GET /api/cross-repo-graph?repo=X
+  if (path === "/api/cross-repo-graph") {
+    const raw = await kvStore.get("correlation:graph");
+    if (!raw) return sendJson(res, { error: "No correlation data. Run 'mma index' with 2+ repos first." });
+    try {
+      const parsed = JSON.parse(raw) as {
+        edges: CrossRepoGraph["edges"];
+        repoPairs: string[];
+        downstreamMap: [string, string[]][];
+        upstreamMap: [string, string[]][];
+      };
+      const repoFilter = query.single["repo"];
+      const edges = repoFilter
+        ? parsed.edges.filter((e) => e.sourceRepo === repoFilter || e.targetRepo === repoFilter)
+        : parsed.edges;
+      return sendJson(res, {
+        edges,
+        repoPairs: parsed.repoPairs,
+        downstreamMap: parsed.downstreamMap,
+        upstreamMap: parsed.upstreamMap,
+      });
+    } catch {
+      return sendJson(res, { error: "Corrupted correlation data." });
+    }
+  }
+
+  // POST /api/cross-repo-impact  body: { files: string[], repo: string }
+  if (path === "/api/cross-repo-impact" && req.method === "POST") {
+    try {
+      const body = await readBody(req);
+      const { files, repo: impactRepo } = JSON.parse(body) as { files: string[]; repo: string };
+      if (!files || !impactRepo) {
+        return sendError(res, "Missing 'files' or 'repo' in request body", 400);
+      }
+      const raw = await kvStore.get("correlation:graph");
+      if (!raw) return sendJson(res, { error: "No correlation data. Run 'mma index' with 2+ repos first." });
+      const parsed = JSON.parse(raw) as {
+        edges: CrossRepoGraph["edges"];
+        repoPairs: string[];
+        downstreamMap: [string, string[]][];
+        upstreamMap: [string, string[]][];
+      };
+      const graph = deserializeGraph(parsed);
+      const impact = await computeCrossRepoImpact(files, impactRepo, graphStore, graph);
+      return sendJson(res, {
+        changedFiles: impact.changedFiles,
+        changedRepo: impact.changedRepo,
+        affectedWithinRepo: impact.affectedWithinRepo,
+        affectedAcrossRepos: Object.fromEntries(impact.affectedAcrossRepos),
+        reposReached: impact.reposReached,
+      });
+    } catch (err) {
+      return sendError(res, err instanceof Error ? err.message : String(err), 400);
+    }
+  }
+
   return sendError(res, "Not found", 404);
+}
+
+function readBody(req: IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("end", () => resolve(Buffer.concat(chunks).toString()));
+    req.on("error", reject);
+  });
+}
+
+function deserializeGraph(raw: {
+  edges: CrossRepoGraph["edges"];
+  repoPairs: string[];
+  downstreamMap: [string, string[]][];
+  upstreamMap: [string, string[]][];
+}): CrossRepoGraph {
+  return {
+    edges: raw.edges,
+    repoPairs: new Set(raw.repoPairs),
+    downstreamMap: new Map(raw.downstreamMap.map(([k, v]) => [k, new Set(v)])),
+    upstreamMap: new Map(raw.upstreamMap.map(([k, v]) => [k, new Set(v)])),
+  };
 }
 
 export async function dashboardCommand(options: DashboardOptions): Promise<void> {

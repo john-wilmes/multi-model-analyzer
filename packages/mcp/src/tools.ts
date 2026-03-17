@@ -318,10 +318,24 @@ export function registerTools(server: McpServer, stores: Stores): void {
       repo: z.string().optional().describe("Filter to a specific repository name"),
       maxDepth: z.number().optional().describe("Max traversal depth (default 5)"),
       includeCallGraph: z.boolean().optional().describe("Include call graph edges in traversal (default true)"),
+      crossRepo: z.boolean().optional().describe("Expand impact to downstream repos via cross-repo correlation (default false)"),
     },
-  }, async ({ files, repo, maxDepth, includeCallGraph }) => {
+  }, async ({ files, repo, maxDepth, includeCallGraph, crossRepo }) => {
+    let crossRepoGraph: CrossRepoGraph | undefined;
+    if (crossRepo) {
+      const raw = await kvStore.get("correlation:graph");
+      if (raw) {
+        const parsed = JSON.parse(raw) as {
+          edges: CrossRepoGraph["edges"];
+          repoPairs: string[];
+          downstreamMap: [string, string[]][];
+          upstreamMap: [string, string[]][];
+        };
+        crossRepoGraph = deserializeGraph(parsed);
+      }
+    }
     const result = await computeBlastRadius(files, graphStore, {
-      maxDepth, includeCallGraph, repo,
+      maxDepth, includeCallGraph, repo, crossRepoGraph,
     }, searchStore);
     return jsonResult(result);
   });
