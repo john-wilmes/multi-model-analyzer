@@ -13,7 +13,7 @@ import { single } from "./kuzu-common.js";
 
 function sanitizeQuery(query: string): string {
   const tokens = query
-    .replace(/[^\w\s]/g, " ")
+    .replace(/[^\w\s-]/g, " ")
     .split(/\s+/)
     .filter((t) => t.length > 0);
   return tokens.join(" ");

@@ -122,7 +122,7 @@ export async function discoverRepos(kvStore: KVStore): Promise<string[]> {
   const commitKeys = await kvStore.keys("commit:");
   for (const key of commitKeys) {
     const repoName = key.slice("commit:".length);
-    if (repoName) repoSet.add(repoName);
+    if (repoName && !repoName.includes(":")) repoSet.add(repoName);
   }
 
   return [...repoSet].sort();

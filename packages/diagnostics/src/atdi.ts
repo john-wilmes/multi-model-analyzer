@@ -93,8 +93,8 @@ export function computeRepoAtdi(
 /**
  * Compute a system-wide ATDI score as a weighted average by module count.
  *
- * Repos with zero modules contribute zero weight and are included in
- * repoScores but do not affect the overall score.
+ * Repos with zero modules are given a minimum weight of 1 and are included in
+ * repoScores but contribute only minimally to the overall score.
  */
 export function computeSystemAtdi(repoScores: readonly AtdiScore[]): SystemAtdi {
   let totalWeight = 0;

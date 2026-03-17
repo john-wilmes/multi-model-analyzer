@@ -112,7 +112,7 @@ export interface SystemAtdi {
 }
 
 export async function fetchAtdi(): Promise<SystemAtdi | null> {
-  return fetchJson(`${BASE}/api/atdi`);
+  return fetchJson<SystemAtdi>(`${BASE}/api/atdi`).catch(() => null);
 }
 
 export interface CrossRepoEdge {
@@ -159,7 +159,7 @@ export async function fetchTemporalCouplingByRepo(repo: string): Promise<RepoTem
 }
 
 export async function fetchAtdiByRepo(repo: string): Promise<AtdiRepoScore | null> {
-  return fetchJson(`${BASE}/api/atdi/${encodeURIComponent(repo)}`);
+  return fetchJson<AtdiRepoScore>(`${BASE}/api/atdi/${encodeURIComponent(repo)}`).catch(() => null);
 }
 
 export interface RepoDebtSummary {
@@ -171,5 +171,5 @@ export interface RepoDebtSummary {
 }
 
 export async function fetchDebtByRepo(repo: string): Promise<RepoDebtSummary | null> {
-  return fetchJson(`${BASE}/api/debt/${encodeURIComponent(repo)}`);
+  return fetchJson<RepoDebtSummary>(`${BASE}/api/debt/${encodeURIComponent(repo)}`).catch(() => null);
 }

@@ -46,9 +46,9 @@ export default function RepoDetail() {
     Promise.all([
       fetchMetrics(repo),
       fetchFindings({ repo, limit: '10' }),
-      fetchDsm(repo),
-      fetchAtdiByRepo(repo),
-      fetchDebtByRepo(repo),
+      fetchDsm(repo).catch(() => null),
+      fetchAtdiByRepo(repo).catch(() => null),
+      fetchDebtByRepo(repo).catch(() => null),
       fetchTemporalCouplingByRepo(repo).catch(() => null),
     ])
       .then(([metricsData, findingsData, dsmData, atdiData, debtData, couplingData]) => {
@@ -57,7 +57,7 @@ export default function RepoDetail() {
           .filter((m): m is ModuleMetrics => m !== null);
         setMetrics(ms);
         setFindings((findingsData.results ?? []) as Finding[]);
-        setDsm(dsmData as DsmData);
+        setDsm(dsmData as DsmData | null);
         setAtdi(atdiData);
         setDebt(debtData);
         setCoupling(couplingData);
@@ -141,7 +141,7 @@ export default function RepoDetail() {
             </div>
             <DebtBreakdownChart
               categories={Object.entries(debt.byRule).map(([ruleId, { count, minutes }]): DebtCategory => ({
-                category: ruleId.includes('/') ? ruleId.split('/').pop()! : ruleId,
+                category: ruleId.includes('/') ? ruleId.split('/').pop() ?? ruleId : ruleId,
                 debtMinutes: minutes,
                 debtHours: Math.round(minutes / 60),
                 findingCount: count,

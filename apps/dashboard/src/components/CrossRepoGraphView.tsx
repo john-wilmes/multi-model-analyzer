@@ -54,10 +54,12 @@ export default function CrossRepoGraphView() {
   const repoFilter = searchParams.get('repo') ?? undefined;
 
   useEffect(() => {
+    let cancelled = false;
     fetchCrossRepoGraph(repoFilter)
-      .then((d) => setData(d))
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Failed to load'))
-      .finally(() => setLoading(false));
+      .then((d) => { if (!cancelled) setData(d); })
+      .catch((err: unknown) => { if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load'); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
   }, [repoFilter]);
 
   useEffect(() => {

@@ -119,7 +119,7 @@ export interface Recommendation {
 }
 
 export interface AtdiScore {
-  score: number;           // 0-100
+  score: number;           // 0-100, higher = healthier (lower debt)
   trend: "worsening" | "stable" | "improving";
   newFindingCount: number;
   totalFindingCount: number;
@@ -721,7 +721,9 @@ function computeAtdi(
     structuralDebt = Math.min(30, structuralDebt);
   }
 
-  const score = Math.round(Math.min(100, Math.max(0, findingDebt + structuralDebt)) * 10) / 10;
+  // Invert so higher = healthier (consistent with executive score and atdi.ts).
+  const debtTotal = Math.min(100, Math.max(0, findingDebt + structuralDebt));
+  const score = Math.round((100 - debtTotal) * 10) / 10;
 
   // Trend
   const totalFindingCount = results.length;

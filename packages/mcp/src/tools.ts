@@ -248,18 +248,25 @@ export function registerTools(server: McpServer, stores: Stores): void {
 
     if (includePaths && graph.edges.length > 0) {
       const repoList = [...new Set(graph.edges.flatMap((e) => [e.sourceRepo, e.targetRepo]))];
-      const paths: Record<string, unknown[]> = {};
-      for (const src of repoList) {
-        for (const tgt of repoList) {
-          if (src !== tgt) {
-            const found = findDependencyPaths(src, tgt, graph);
-            if (found.length > 0) {
-              paths[`${src}->${tgt}`] = found;
+      if (repoList.length > 20) {
+        result["pathsSkipped"] = true;
+        result["pathsSkippedReason"] =
+          `Path computation skipped: ${repoList.length} repos exceeds the 20-repo limit. ` +
+          "Filter by repo or reduce scope to enable path results.";
+      } else {
+        const paths: Record<string, unknown[]> = {};
+        for (const src of repoList) {
+          for (const tgt of repoList) {
+            if (src !== tgt) {
+              const found = findDependencyPaths(src, tgt, graph);
+              if (found.length > 0) {
+                paths[`${src}->${tgt}`] = found;
+              }
             }
           }
         }
+        result["paths"] = paths;
       }
-      result["paths"] = paths;
     }
 
     return jsonResult(result);

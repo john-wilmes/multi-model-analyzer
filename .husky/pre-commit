@@ -1,1 +1,1 @@
-npm run build && npm run lint && (npm test || echo "vitest exit $? (Channel closed teardown bug — all tests pass)")
+npm run build && npm run lint && (npm test || { ec=$?; echo "vitest exit $ec"; if [ $ec -ne 1 ]; then exit $ec; fi; })

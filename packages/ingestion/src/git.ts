@@ -238,7 +238,8 @@ export async function getCommitHistory(
     }
 
     return results;
-  } catch {
+  } catch (e) {
+    console.warn(`[git] getCommitHistory failed for ${repoPath}: ${e instanceof Error ? e.message : String(e)}`);
     return [];
   }
 }

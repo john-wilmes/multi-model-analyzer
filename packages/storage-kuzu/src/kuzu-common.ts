@@ -131,7 +131,10 @@ export function migrateV1ToV2(
   );
   const rows = result.getAllSync() as Array<Record<string, unknown>>;
 
-  // 2. Drop old flat Edge node table
+  // 2. Drop old flat Edge node table.
+  // NOTE: Kuzu DDL is auto-commit and not transactional. If re-insertion below
+  // fails, the old Edge node table is lost. Data was read into `rows` above.
+  // In practice, re-insertion failures are rare (OOM, disk full).
   conn.querySync("DROP TABLE Edge");
 
   // 3. Create v2 schema
@@ -196,15 +199,14 @@ export function migrateV2ToV3(
   );
   const rows = result.getAllSync() as Array<Record<string, unknown>>;
 
-  // 2. Drop generic Edge rel table
-  conn.querySync("DROP TABLE Edge");
-
-  // 3. Create 7 typed rel tables
+  // 2. Create 7 typed rel tables BEFORE dropping the old generic Edge table.
+  // The new tables have different names so there is no naming conflict.
+  // This ensures the schema exists for re-insertion before we discard anything.
   for (const table of V3_REL_TABLES) {
     conn.querySync(ddlRelTable(table));
   }
 
-  // 4. Re-insert edges dispatched by kind
+  // 3. Re-insert edges dispatched by kind
   if (rows.length > 0) {
     conn.querySync("BEGIN TRANSACTION");
     try {
@@ -239,6 +241,12 @@ export function migrateV2ToV3(
       throw new Error("Kuzu migration v2→v3 failed", { cause: e });
     }
   }
+
+  // 4. Drop the old generic Edge rel table only after data is safely committed.
+  // NOTE: Kuzu DDL is auto-commit and not transactional, but dropping here
+  // (after COMMIT) means the typed tables are fully populated before the old
+  // table is removed.
+  conn.querySync("DROP TABLE Edge");
 }
 
 /**

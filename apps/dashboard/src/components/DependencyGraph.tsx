@@ -39,12 +39,14 @@ export default function DependencyGraph() {
 
   useEffect(() => {
     if (!name) return;
+    let cancelled = false;
     setLoading(true);
     setError(null);
     fetchGraph(name, selectedKind)
-      .then((d) => setEdges(d.edges as Edge[]))
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Failed to load'))
-      .finally(() => setLoading(false));
+      .then((d) => { if (!cancelled) setEdges(d.edges as Edge[]); })
+      .catch((err: unknown) => { if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load'); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
   }, [name, selectedKind]);
 
   useEffect(() => {
@@ -161,7 +163,8 @@ export default function DependencyGraph() {
     // Click node: navigate to module detail
     cy.on('tap', 'node', (evt) => {
       const moduleId = evt.target.data('id') as string;
-      navigate(`/repo/${encodeURIComponent(name!)}/module/${encodeURIComponent(moduleId)}`);
+      if (!name) return;
+      navigate(`/repo/${encodeURIComponent(name)}/module/${encodeURIComponent(moduleId)}`);
     });
 
     cyInstanceRef.current = cy;

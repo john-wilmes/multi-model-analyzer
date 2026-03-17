@@ -131,7 +131,7 @@ export function renderDeltaMarkdown(result: DeltaResult, range: string): string 
     for (const f of result.newFindings) {
       const severity = levelLabel(f.level);
       const rule = f.ruleId;
-      const msg = f.message.text.replace(/\|/g, "\\|");
+      const msg = (f.message?.text ?? "").replace(/\|/g, "\\|");
       const file = firstFqn(f);
       push(`| ${severity} | ${rule} | ${msg} | ${file} |`);
     }
@@ -145,7 +145,7 @@ export function renderDeltaMarkdown(result: DeltaResult, range: string): string 
     for (const f of result.updatedFindings) {
       const severity = levelLabel(f.level);
       const rule = f.ruleId;
-      const msg = f.message.text.replace(/\|/g, "\\|");
+      const msg = (f.message?.text ?? "").replace(/\|/g, "\\|");
       const file = firstFqn(f);
       push(`| ${severity} | ${rule} | ${msg} | ${file} |`);
     }
