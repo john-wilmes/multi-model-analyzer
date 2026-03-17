@@ -20,7 +20,7 @@ export { evaluateArchRules, globMatch } from "./arch-rules.js";
 export { validateArchRules, ARCH_RULES_JSON_SCHEMA } from "./arch-rules-schema.js";
 export type { RawArchRule, ValidationError } from "./arch-rules-schema.js";
 
-export { detectTemporalCoupling, detectTemporalCouplingWithMeta, temporalCouplingToSarif } from "./temporal-coupling.js";
+export { detectTemporalCoupling, detectTemporalCouplingWithMeta, temporalCouplingToSarif, groupByCommit } from "./temporal-coupling.js";
 export type { CommitInfo, CoupledPair, TemporalCouplingOptions, TemporalCouplingResult } from "./temporal-coupling.js";
 
 export { withinWindow, extractPairs } from "./git-history.js";

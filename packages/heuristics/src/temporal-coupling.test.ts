@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { detectTemporalCoupling, detectTemporalCouplingWithMeta, temporalCouplingToSarif } from "./temporal-coupling.js";
+import { detectTemporalCoupling, detectTemporalCouplingWithMeta, temporalCouplingToSarif, groupByCommit } from "./temporal-coupling.js";
 import type { CommitInfo } from "./temporal-coupling.js";
 
 function commit(hash: string, files: string[]): CommitInfo {
@@ -186,5 +186,25 @@ describe("detectTemporalCouplingWithMeta", () => {
     expect(filledResult.meta.confidenceStats!.min).toBeGreaterThanOrEqual(0);
     expect(filledResult.meta.confidenceStats!.max).toBeLessThanOrEqual(1);
     expect(filledResult.meta.confidenceStats!.mean).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("groupByCommit", () => {
+  it("groups flat file changes into CommitInfo[]", () => {
+    const flat = [
+      { hash: "c1", filePath: "a.ts" },
+      { hash: "c1", filePath: "b.ts" },
+      { hash: "c2", filePath: "c.ts" },
+      { hash: "c1", filePath: "d.ts" },
+      { hash: "c2", filePath: "e.ts" },
+    ];
+    const result = groupByCommit(flat);
+    expect(result).toHaveLength(2);
+    expect(result[0]).toEqual({ hash: "c1", files: ["a.ts", "b.ts", "d.ts"] });
+    expect(result[1]).toEqual({ hash: "c2", files: ["c.ts", "e.ts"] });
+  });
+
+  it("returns empty array for empty input", () => {
+    expect(groupByCommit([])).toEqual([]);
   });
 });

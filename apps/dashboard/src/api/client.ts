@@ -133,3 +133,17 @@ export async function fetchCrossRepoGraph(repo?: string): Promise<CrossRepoGraph
   const qs = repo ? `?repo=${encodeURIComponent(repo)}` : '';
   return fetchJson(`${BASE}/api/cross-repo-graph${qs}`);
 }
+
+export interface CoupledPairRow {
+  fileA: string;
+  fileB: string;
+  coChangeCount: number;
+  supportA: number;
+  supportB: number;
+  confidence: number;
+  repo: string;
+}
+
+export async function fetchTemporalCoupling(): Promise<CoupledPairRow[]> {
+  return fetchJson(`${BASE}/api/temporal-coupling`);
+}

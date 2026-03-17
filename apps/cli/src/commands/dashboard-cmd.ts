@@ -413,6 +413,39 @@ async function handleApi(
     return sendJson(res, result);
   }
 
+  // GET /api/temporal-coupling
+  if (path === "/api/temporal-coupling") {
+    const keys = await kvStore.keys("temporal-coupling:");
+    const allPairs: Array<unknown> = [];
+    for (const key of keys) {
+      const repo = key.slice("temporal-coupling:".length);
+      const json = await kvStore.get(key);
+      if (json) {
+        try {
+          const data = JSON.parse(json) as { pairs: Array<unknown> };
+          for (const p of data.pairs ?? []) {
+            allPairs.push({ ...(p as Record<string, unknown>), repo });
+          }
+        } catch { /* skip malformed */ }
+      }
+    }
+    (allPairs as Array<Record<string, unknown>>).sort((a, b) => (b["coChangeCount"] as number) - (a["coChangeCount"] as number));
+    return sendJson(res, allPairs);
+  }
+
+  // GET /api/temporal-coupling/:repo
+  const tcRepoMatch = path.match(/^\/api\/temporal-coupling\/(.+)$/);
+  if (tcRepoMatch) {
+    const repo = decodeURIComponent(tcRepoMatch[1]!);
+    const json = await kvStore.get(`temporal-coupling:${repo}`);
+    if (!json) return sendJson(res, { pairs: [], commitsAnalyzed: 0, commitsSkipped: 0 });
+    try {
+      return sendJson(res, JSON.parse(json) as unknown);
+    } catch {
+      return sendJson(res, { pairs: [], commitsAnalyzed: 0, commitsSkipped: 0 });
+    }
+  }
+
   // GET /api/atdi
   if (path === "/api/atdi") {
     const json = await kvStore.get("atdi:system");

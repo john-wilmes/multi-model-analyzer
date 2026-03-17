@@ -7,6 +7,7 @@ import ModuleDetail from './components/ModuleDetail.tsx';
 import FindingsTable from './components/FindingsTable.tsx';
 import DependencyGraph from './components/DependencyGraph.tsx';
 import CrossRepoGraphView from './components/CrossRepoGraphView.tsx';
+import TemporalCouplingView from './views/TemporalCouplingView.tsx';
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -57,6 +58,7 @@ export default function App() {
             <Route path="/findings" element={<FindingsTable />} />
             <Route path="/graph/:name" element={<DependencyGraph />} />
             <Route path="/cross-repo" element={<CrossRepoGraphView />} />
+            <Route path="/temporal-coupling" element={<TemporalCouplingView />} />
           </Route>
         </Routes>
       </BrowserRouter>

@@ -46,6 +46,22 @@ export interface TemporalCouplingResult {
 /**
  * Analyze commit history to find temporally coupled file pairs.
  */
+/**
+ * Group flat file-change records (from getCommitHistory) into CommitInfo[].
+ */
+export function groupByCommit(changes: readonly { hash: string; filePath: string }[]): CommitInfo[] {
+  const map = new Map<string, string[]>();
+  for (const c of changes) {
+    let files = map.get(c.hash);
+    if (!files) { files = []; map.set(c.hash, files); }
+    files.push(c.filePath);
+  }
+  return Array.from(map, ([hash, files]) => ({ hash, files }));
+}
+
+/**
+ * Analyze commit history to find temporally coupled file pairs.
+ */
 export function detectTemporalCoupling(
   commits: readonly CommitInfo[],
   options?: TemporalCouplingOptions,

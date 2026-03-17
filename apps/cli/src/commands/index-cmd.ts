@@ -43,8 +43,11 @@ import {
   extractServiceTopology,
   evaluateArchRules,
   computeHotspots,
+  groupByCommit,
+  detectTemporalCoupling,
+  temporalCouplingToSarif,
 } from "@mma/heuristics";
-import type { PackageJsonInfo } from "@mma/heuristics";
+import type { PackageJsonInfo, CommitInfo } from "@mma/heuristics";
 import { computeBaseline, hotspotFindings, computeRepoAtdi, computeSystemAtdi, annotateDebt, summarizeDebt } from "@mma/diagnostics";
 import { computePageRank, pageRankToSarif } from "@mma/query";
 import { runCorrelation } from "@mma/correlation";
@@ -126,7 +129,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     let totalFindings = 0;
     for (const repo of repos) {
       const counts: Record<string, number> = {};
-      for (const key of ["config", "fault", "deadExports", "arch", "instability", "blastRadius", "hotspot"] as const) {
+      for (const key of ["config", "fault", "deadExports", "arch", "instability", "blastRadius", "hotspot", "temporal-coupling"] as const) {
         const json = await kvStore.get(`sarif:${key}:${repo.name}`);
         if (json) {
           try {
@@ -660,6 +663,27 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       }
     }
 
+    // --- Phase 4f: Temporal coupling ---
+    {
+      const pf4f = parsedFilesByRepo.get(repo.name);
+      if (pf4f && pf4f.length > 0) {
+        log(`  [${repo.name}] Computing temporal coupling...`);
+        try {
+          const start = performance.now();
+          const fileChanges = await getCommitHistory(repo.localPath, 200);
+          const commits: CommitInfo[] = groupByCommit(fileChanges);
+          const tcResult = detectTemporalCoupling(commits);
+          const tcSarif = temporalCouplingToSarif(tcResult, repo.name);
+          await kvStore.set(`temporal-coupling:${repo.name}`, JSON.stringify(tcResult));
+          await kvStore.set(`sarif:temporal-coupling:${repo.name}`, JSON.stringify(tcSarif));
+          const elapsed = Math.round(performance.now() - start);
+          log(`  [${repo.name}] ${tcResult.pairs.length} coupled pairs, ${tcSarif.length} findings (${elapsed}ms)`);
+        } catch (error) {
+          console.error(`  Failed to compute temporal coupling for ${repo.name}:`, error);
+        }
+      }
+    }
+
     // --- Phase 5: Heuristic analysis ---
     const depGraph = depGraphByRepo.get(repo.name);
     const parsedFiles = parsedFilesByRepo.get(repo.name);
@@ -1153,7 +1177,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
   for (const repo of repos) {
     const repoResults: import("@mma/core").SarifResult[] = [];
     const counts: Record<string, number> = {};
-    for (const key of ["config", "fault", "deadExports", "arch", "instability", "blastRadius", "hotspot"] as const) {
+    for (const key of ["config", "fault", "deadExports", "arch", "instability", "blastRadius", "hotspot", "temporal-coupling"] as const) {
       const json = await kvStore.get(`sarif:${key}:${repo.name}`);
       if (json) {
         try {

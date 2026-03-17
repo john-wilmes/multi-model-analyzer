@@ -153,7 +153,7 @@ const CATEGORY_WEIGHTS: Record<string, number> = {
   structural: 5,
   config: 5,
   "blast-radius": 0,
-  temporal: 0,
+  temporal: 8,
   hotspot: 15,
 };
 
@@ -304,12 +304,12 @@ const RULE_METADATA: Record<string, RuleMeta> = {
   },
   "temporal-coupling/co-change": {
     category: "temporal",
-    interpretation: "Two modules are frequently changed together, suggesting hidden coupling.",
-    action: "Investigate whether these modules should be merged, or make their coupling explicit via a shared abstraction.",
+    interpretation: "Two files change together frequently, indicating a hidden dependency.",
+    action: "Co-locate the files, extract a shared abstraction, or document the coupling.",
     guideRef: "`temporal-coupling/co-change` in findings-guide.md",
     effort: "medium",
     categoryWeight: CATEGORY_WEIGHTS["temporal"]!,
-    debtMinutes: 90,
+    debtMinutes: 45,
   },
   "vuln/reachable-dependency": {
     category: "vulnerability",
