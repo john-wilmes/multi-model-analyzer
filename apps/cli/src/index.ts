@@ -17,7 +17,7 @@ import type { RepoConfig, ArchitecturalRule } from "@mma/core";
 import { createStores } from "@mma/storage";
 import type { StorageBackend } from "@mma/storage";
 import { validateArchRules } from "@mma/heuristics";
-import type { RawArchRule } from "@mma/heuristics";
+import type { RawArchRule, Advisory } from "@mma/heuristics";
 import { indexCommand } from "./commands/index-cmd.js";
 import { queryCommand } from "./commands/query-cmd.js";
 import { serveCommand } from "./commands/serve-cmd.js";
@@ -41,6 +41,7 @@ interface CliConfig {
   readonly rules?: readonly RawArchRule[];
   readonly baselinePath?: string;
   readonly backend?: StorageBackend;
+  readonly advisories?: readonly Advisory[];
 }
 
 async function main(): Promise<void> {
@@ -697,6 +698,7 @@ async function main(): Promise<void> {
           narrateOnly: values["narrate-only"],
           narrateForce: values["force"],
           forceFullReindex: values["force-full-reindex"],
+          advisories: config.advisories,
         } as const;
 
         if (values.watch) {

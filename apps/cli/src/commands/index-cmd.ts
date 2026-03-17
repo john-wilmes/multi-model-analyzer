@@ -58,6 +58,8 @@ import type { KVStore, GraphStore, SearchStore } from "@mma/storage";
 import {
   tier1Summarize,
   tier2Summarize,
+  shouldEscalateToTier3,
+  tier3BatchSummarize,
   tier4BatchSummarize,
   SONNET_DEFAULTS,
   narrateAll,
@@ -1080,6 +1082,31 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
           }
         }
 
+        // Tier 3: Haiku LLM for low-confidence method summaries
+        let tier3Count = 0;
+        if (options.anthropicApiKey) {
+          const tier3Candidates = [...summaryMap.entries()]
+            .filter(([, s]) => shouldEscalateToTier3(s, undefined))
+            .map(([entityId, s]) => ({
+              entityId,
+              description: s.description,
+              context: entityId,
+            }));
+          if (tier3Candidates.length > 0) {
+            log(`    Tier 3 (Haiku): upgrading ${tier3Candidates.length} low-confidence summaries`);
+            const tier3Results = await tier3BatchSummarize(
+              tier3Candidates,
+              options.anthropicApiKey,
+            );
+            for (const s of tier3Results) {
+              if (s.confidence > 0) {
+                summaryMap.set(s.entityId, s);
+                tier3Count++;
+              }
+            }
+          }
+        }
+
         // Tier 4: Sonnet for service-level summaries
         let tier4Count = 0;
         if (options.anthropicApiKey) {
@@ -1125,6 +1152,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         const tierBreakdown = [
           `${tier1Count} tier-1`,
           `${tier2Total} tier-2 (${tier2Upgraded} upgraded)`,
+          tier3Count > 0 ? `${tier3Count} tier-3` : null,
           tier4Count > 0 ? `${tier4Count} tier-4` : null,
         ].filter(Boolean).join(", ");
         log(`  [${repo.name}] Summaries: ${tierBreakdown}, ${summaryMap.size} total`);

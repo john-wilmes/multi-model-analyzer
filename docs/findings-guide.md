@@ -428,8 +428,6 @@ Hotspot analysis identifies files that are both frequently modified and structur
 
 Source: `packages/heuristics/src/vuln-match.ts`
 
-> **Note:** The vulnerability SARIF converter is defined but not yet wired into the CLI aggregation pipeline. These results are available programmatically but do not appear in `sarif:latest` by default.
-
 ### `vuln/reachable-dependency`
 
 **Severity:** error if severity is `critical` or `high`; warning otherwise

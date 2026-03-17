@@ -76,6 +76,11 @@ mma merge      Combine multiple anonymized export DBs
 mma validate   Statistical validation of SARIF findings quality
 mma affected   Blast radius for a rev range
 mma serve      MCP server for IDE integration (stdio)
+mma baseline   Manage baseline snapshots for incremental indexing
+mma delta      Show diff of findings between two runs
+mma catalog    Inspect the inferred service catalog
+mma dashboard  Launch the web dashboard UI
+mma compress   Compress/prune the SQLite DB to reduce disk usage
 ```
 
 ## Example: Prioritized Practices Report
@@ -145,7 +150,7 @@ Repos --> Ingestion --> Parsing --> Structural Analysis --> Heuristic Analysis
 |------|--------|------|---------|
 | 1 | Templates from AST | Free | "Accepts (patientId: string), returns Promise" |
 | 2 | Heuristics from naming | Free | "Fetches appointments for a patient" |
-| 3 | qwen2.5-coder:1.5b via Ollama | Free (local) | "Queries appointment table, maps results, handles pagination" |
+| 3 | Claude Haiku API | API tokens | "Queries appointment table, maps results, handles pagination" |
 | 4 | Claude Sonnet API | API tokens | "The Scheduler service manages appointment booking across provider calendars" |
 
 ## Architecture
@@ -176,8 +181,7 @@ Monorepo with npm workspaces:
 - macOS, Linux, or Windows (WSL2)
 
 Optional:
-- [Ollama](https://ollama.com/) for tier 3 summarization (free, local)
-- Anthropic API key for tier 4 summarization
+- Anthropic API key for tier 3 (Haiku) and tier 4 (Sonnet) summarization
 
 ## Data Handling
 
