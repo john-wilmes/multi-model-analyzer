@@ -24,6 +24,7 @@ Reference for all diagnostics produced by Multi-Model Analyzer. Each finding app
 | `arch/dependency-direction` | configurable | Architecture | Import violates denied directional pair |
 | `temporal-coupling/co-change` | warning/note | Temporal Coupling | Files change together suspiciously often |
 | `vuln/reachable-dependency` | error/warning | Vulnerability | Vulnerable package is imported in code |
+| `hotspot/high-churn-complexity` | warning/note | Hotspot | File with high churn and complexity |
 | `blast-radius/high-pagerank` | note | Blast Radius | File has high transitive importance |
 
 ## Reading SARIF Output
@@ -336,6 +337,45 @@ Confidence = `max(supportA, supportB)` where support is the proportion of one fi
 - Test file + implementation file pairs are expected to co-change.
 - Configuration files that are updated alongside the code they configure.
 - Files that changed together during a large refactor but don't have an ongoing relationship.
+
+---
+
+## Hotspot Analysis
+
+Source: `packages/heuristics/src/hotspots.ts`, `packages/diagnostics/src/sarif-hotspot.ts`
+
+Hotspot analysis identifies files that are both frequently modified and structurally complex — prime candidates for bugs, merge conflicts, and difficult maintenance.
+
+### `hotspot/high-churn-complexity`
+
+**Severity:** warning if score >= 50, note if score >= 25
+
+**What it means:** A file has a high combination of git churn (commit frequency) and code complexity (symbol count). Files that change often and contain many symbols are statistically more likely to harbour bugs and create maintenance bottlenecks.
+
+**Trigger:** The hotspot score must meet the threshold:
+- **Churn** = number of distinct commits that touched the file (from `git log`)
+- **Complexity proxy** = number of parsed symbols in the file
+- **Raw score** = `churn × symbolCount`
+- **Normalized score** = `(rawScore / maxRawScore) × 100`, rounded to an integer (0–100 scale, relative to the highest-scoring file in the repo)
+- Files with zero symbols are excluded (config files, docs, etc.)
+- Default warning threshold: **50**; note threshold: **25** (half of warning)
+
+**Message format:** `File has high churn (<churn> commits) and complexity (<symbolCount> symbols) — hotspot score <score>/100`
+
+**Properties:** `churn`, `symbolCount`, `hotspotScore`
+
+**Action:**
+1. **Refactor:** Break large files into smaller, focused modules to reduce both complexity and merge conflict risk.
+2. **Increase test coverage:** High-churn files benefit most from comprehensive tests since they change frequently.
+3. **Establish code ownership:** Assign clear ownership to prevent drive-by edits that increase churn without improving quality.
+4. **Review commit patterns:** Determine whether high churn reflects active development (acceptable) or repeated bug fixes (problematic).
+
+**When to ignore:**
+- Entry point files or barrel exports (`index.ts`) that grow naturally as the project adds modules.
+- Files undergoing a planned refactor — churn will be temporarily elevated.
+- Generated files that are committed to the repo (consider adding them to `.gitignore` instead).
+
+**Practices report:** Category weight 15, effort "high", debt estimate 240 minutes (4 hours) per finding.
 
 ---
 
