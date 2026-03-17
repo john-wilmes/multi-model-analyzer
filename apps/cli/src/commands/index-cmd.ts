@@ -46,8 +46,11 @@ import {
   groupByCommit,
   detectTemporalCoupling,
   temporalCouplingToSarif,
+  matchAdvisories,
+  checkVulnReachability,
+  vulnReachabilityToSarif,
 } from "@mma/heuristics";
-import type { PackageJsonInfo, CommitInfo } from "@mma/heuristics";
+import type { PackageJsonInfo, CommitInfo, Advisory, InstalledPackage } from "@mma/heuristics";
 import { computeBaseline, hotspotFindings, computeRepoAtdi, computeSystemAtdi, annotateDebt, summarizeDebt } from "@mma/diagnostics";
 import { computePageRank, pageRankToSarif } from "@mma/query";
 import { runCorrelation } from "@mma/correlation";
@@ -100,6 +103,7 @@ export interface IndexOptions {
   readonly narrateOnly?: boolean;
   readonly narrateForce?: boolean;
   readonly forceFullReindex?: boolean;
+  readonly advisories?: readonly Advisory[];
 }
 
 export interface IndexResult {
@@ -129,7 +133,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     let totalFindings = 0;
     for (const repo of repos) {
       const counts: Record<string, number> = {};
-      for (const key of ["config", "fault", "deadExports", "arch", "instability", "blastRadius", "hotspot", "temporal-coupling"] as const) {
+      for (const key of ["config", "fault", "deadExports", "arch", "instability", "blastRadius", "hotspot", "temporal-coupling", "vuln"] as const) {
         const json = await kvStore.get(`sarif:${key}:${repo.name}`);
         if (json) {
           try {
@@ -860,6 +864,22 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
           log(`    PageRank: ${prResult.ranked.length} nodes scored, ${prSarif.length} high-risk`);
         }
 
+        // 5i: Vulnerability reachability
+        if (options.advisories && options.advisories.length > 0) {
+          const installed: InstalledPackage[] = [];
+          for (const [, pj] of packageJsons) {
+            for (const [name, version] of Object.entries(pj.dependencies ?? {})) {
+              const clean = version.replace(/^[~^>=<v ]+/, "");
+              if (clean && clean !== "*") installed.push({ name, version: clean });
+            }
+          }
+          const vulnMatches = matchAdvisories(installed, options.advisories);
+          const reachability = checkVulnReachability(vulnMatches, depGraph?.edges ?? []);
+          const vulnSarif = vulnReachabilityToSarif(reachability, repo.name);
+          await kvStore.set(`sarif:vuln:${repo.name}`, JSON.stringify(vulnSarif));
+          log(`    ${vulnSarif.length} reachable vulnerabilities found`);
+        }
+
         log(`  [${repo.name}] Phase 5: ${Math.round(performance.now() - phase5Start)}ms`);
       } catch (error) {
         console.error(`  Failed to run heuristics for ${repo.name}:`, error);
@@ -1177,7 +1197,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
   for (const repo of repos) {
     const repoResults: import("@mma/core").SarifResult[] = [];
     const counts: Record<string, number> = {};
-    for (const key of ["config", "fault", "deadExports", "arch", "instability", "blastRadius", "hotspot", "temporal-coupling"] as const) {
+    for (const key of ["config", "fault", "deadExports", "arch", "instability", "blastRadius", "hotspot", "temporal-coupling", "vuln"] as const) {
       const json = await kvStore.get(`sarif:${key}:${repo.name}`);
       if (json) {
         try {
