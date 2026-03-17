@@ -25,8 +25,8 @@ Thumbs.db
 *.swp
 *.swo
 
-# Generated WASM grammars (built from node_modules)
-packages/parsing/wasm/
+# WASM grammars — vendored in git (3.3MB total, avoids build-time dependency)
+# Refreshed by: npm run build:wasm -w packages/parsing
 
 # Test coverage
 coverage/

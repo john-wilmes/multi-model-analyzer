@@ -5,6 +5,10 @@
 - Node.js 22+
 - npm
 
+### Optional dependencies
+
+- **Kuzu graph database** — The `packages/storage-kuzu` package uses [Kuzu](https://kuzudb.com/), an embedded graph database with prebuilt native binaries for Linux x64, macOS (x64/arm64), and Windows x64. It is installed automatically via npm. If Kuzu fails to install on your platform, mma falls back to SQLite-based storage (`packages/storage`) with full functionality.
+
 ## Getting Started
 
 ```bash
@@ -53,7 +57,8 @@ Build before testing -- tests run against compiled output.
 - TypeScript strict mode, ESM throughout
 - Each package follows `src/` -> `dist/` layout with composite project references
 - Barrel exports via `src/index.ts` in each package
-- Do not commit generated files: `dist/`, `*.tsbuildinfo`, `packages/parsing/wasm/`
+- Do not commit generated files: `dist/`, `*.tsbuildinfo`
+- tree-sitter WASM grammars in `packages/parsing/wasm/` are vendored in git. To refresh after updating tree-sitter packages: `npm run build:wasm -w packages/parsing`
 
 ## Pull Requests
 
@@ -74,4 +79,4 @@ Open an issue on GitHub with:
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the Apache License 2.0.
+By contributing, you agree that your contributions will be licensed under the MIT License.

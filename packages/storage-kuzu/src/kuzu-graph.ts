@@ -355,7 +355,7 @@ export class KuzuGraphStore implements GraphStore {
   ): GraphEdge[] {
     let cypher: string;
     if (repo) {
-      const safeRepo = repo.replace(/'/g, "''");
+      const safeRepo = repo.replace(/\\/g, '\\\\').replace(/'/g, "''");
       cypher =
         `MATCH path = (start:Symbol {id: $start})` +
         `-[e:${ALL_LABELS}*1..${maxDepth} (r, _ | WHERE r.repo = '${safeRepo}')]->` +

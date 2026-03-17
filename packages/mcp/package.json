@@ -1,6 +1,6 @@
 {
   "name": "@mma/mcp",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -16,7 +16,7 @@
   },
   "dependencies": {
     "@mma/core": "*",
-    "@mma/correlation": "0.1.0",
+    "@mma/correlation": "1.0.0",
     "@mma/query": "*",
     "@mma/storage": "*",
     "@modelcontextprotocol/sdk": "^1.12.0",

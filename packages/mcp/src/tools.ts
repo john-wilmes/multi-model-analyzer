@@ -459,7 +459,10 @@ async function dispatchRoute(
         return await getCircularDeps(kvStore, repo);
       }
       if (decision.extractedEntities.length > 0) {
-        const entity = decision.extractedEntities[0]!;
+        const entity = decision.extractedEntities[0];
+        if (!entity) {
+          return { error: "No entity could be extracted from the query." };
+        }
         const isCallees = /\bcallees?\b/.test(q) || /\bwhat does .+ call\b/.test(q);
         const isDeps = q.includes("depend");
         if (isDeps) {

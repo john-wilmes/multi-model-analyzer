@@ -218,16 +218,20 @@ export function migrateV2ToV3(
         );
       }
 
+      let skippedEdges = 0;
       for (const row of rows) {
         const kind = row["kind"] as string;
         const table = KIND_TO_TABLE[kind];
-        if (!table) continue;
+        if (!table) { skippedEdges++; continue; }
         conn.executeSync(stmts.get(table)!, {
           s: row["source"] as string,
           t: row["target"] as string,
           m: (row["metadata"] as string) ?? "",
           r: (row["repo"] as string) ?? "",
         });
+      }
+      if (skippedEdges > 0) {
+        console.warn(`[kuzu-migrate] Skipped ${skippedEdges} edges with unknown kinds during v2→v3 migration`);
       }
       conn.querySync("COMMIT");
     } catch (e) {

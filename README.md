@@ -161,16 +161,19 @@ Monorepo with npm workspaces:
 | `packages/heuristics` | Service inference, pattern detection, feature flags, log mining |
 | `packages/summarization` | 4-tier description generation |
 | `packages/storage` | Graph DB, search (FTS5/BM25), KV store (SQLite) |
+| `packages/storage-kuzu` | Graph DB backend (Kuzu, optional) |
+| `packages/correlation` | Cross-repo service correlation |
 | `packages/models/*` | Config model, fault model, functional model |
 | `packages/diagnostics` | SARIF emission, redaction, aggregation |
 | `packages/query` | Natural language query routing |
 | `packages/mcp` | MCP server for IDE integration |
 | `apps/cli` | CLI entry point |
+| `apps/dashboard` | Web dashboard (React) |
 
 ## Prerequisites
 
 - Node.js 22+
-- macOS or Linux
+- macOS, Linux, or Windows (WSL2)
 
 Optional:
 - [Ollama](https://ollama.com/) for tier 3 summarization (free, local)
@@ -266,4 +269,4 @@ npm run lint           # ESLint
 
 ## License
 
-[Apache 2.0](LICENSE)
+[MIT](LICENSE)

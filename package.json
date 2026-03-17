@@ -1,6 +1,15 @@
 {
   "name": "multi-model-analyzer",
-  "version": "0.1.0",
+  "version": "1.0.0",
+  "description": "Static analysis toolchain for large TypeScript/JavaScript codebases. Extracts symbols, dependency graphs, call graphs, and architectural patterns without runtime LLM calls.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/john-wilmes/multi-model-analyzer.git"
+  },
+  "homepage": "https://github.com/john-wilmes/multi-model-analyzer",
+  "keywords": ["static-analysis", "typescript", "architecture", "dependency-graph", "call-graph", "sarif", "code-quality", "mcp"],
+  "author": "John Wilmes",
   "type": "module",
   "bin": {
     "mma": "apps/cli/dist/index.js"

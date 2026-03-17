@@ -91,7 +91,7 @@ export class KuzuSearchStore implements SearchStore {
       // Fix 5 (search): LIMIT does not accept parameters in Kuzu; interpolate
       // the number directly. `limit` is always a number, so this is safe.
       const repoFilter =
-        repo !== undefined ? ` AND node.repo = "${repo.replace(/"/g, '\\"')}"` : "";
+        repo !== undefined ? ` AND node.repo = "${repo.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"` : "";
       const cypher =
         `CALL QUERY_FTS_INDEX("SearchDoc", "search_idx", $q, conjunctive := false)` +
         ` WHERE score > 0${repoFilter}` +

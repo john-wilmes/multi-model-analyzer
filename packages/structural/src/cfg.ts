@@ -141,6 +141,11 @@ function buildCfgFromStatement(
       // nodeId already has kind "throw" from statementKind(); no extra node needed
       return [];
 
+    case "break_statement":
+    case "continue_statement":
+      // break/continue transfer control out of the current block; no fall-through
+      return [];
+
     default:
       return [nodeId];
   }
@@ -415,6 +420,9 @@ function statementKind(nodeType: string): CfgNodeKind {
       return "throw";
     case "return_statement":
       return "return";
+    case "break_statement":
+    case "continue_statement":
+      return "statement";
     default:
       return "statement";
   }

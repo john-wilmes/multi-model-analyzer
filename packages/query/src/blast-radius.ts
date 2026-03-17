@@ -172,8 +172,10 @@ export async function computeBlastRadius(
 
         // Add discovered files to crossRepoAffected
         const existing = crossRepoAffected.get(targetRepo)!;
+        const existingSeen = new Set(existing.map(f => f.path));
         for (const file of targetVisited) {
-          if (!existing.some(f => f.path === file)) {
+          if (!existingSeen.has(file)) {
+            existingSeen.add(file);
             const depthInTarget = seedDepth; // approximate
             existing.push({
               path: file,
