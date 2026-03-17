@@ -33,6 +33,7 @@ export interface PracticesReport {
   readonly structural: StructuralHealth;
   readonly scorecard: CategoryScorecard;
   readonly recommendations: Recommendation[];
+  readonly atdi: AtdiScore;
 }
 
 export interface ExecutiveSummary {
@@ -92,6 +93,20 @@ export interface Recommendation {
   readonly rationale: string;
   readonly effort: string;
   readonly guideRef?: string;
+}
+
+export interface AtdiScore {
+  score: number;           // 0-100
+  trend: "worsening" | "stable" | "improving";
+  newFindingCount: number;
+  totalFindingCount: number;
+  categoryBreakdown: AtdiCategoryBreakdown[];
+}
+
+export interface AtdiCategoryBreakdown {
+  category: string;
+  contribution: number;    // points toward total score
+  findingDensity: number;  // weighted findings per module
 }
 
 // ---------------------------------------------------------------------------
@@ -548,6 +563,69 @@ function synthesizeRecommendations(
   return recs.slice(0, 7);
 }
 
+function computeAtdi(
+  results: readonly SarifResult[],
+  structural: StructuralHealth,
+): AtdiScore {
+  // Total modules across all repos (fallback to 1 to avoid division by zero)
+  const totalModules = structural.repos.reduce((s, r) => s + r.moduleCount, 0) || 1;
+
+  // Finding debt per category (0-70 cap)
+  const byCategory = new Map<string, { errors: number; warnings: number; notes: number }>();
+  for (const r of results) {
+    const { category } = getMeta(r.ruleId);
+    const existing = byCategory.get(category) ?? { errors: 0, warnings: 0, notes: 0 };
+    if (r.level === "error") existing.errors++;
+    else if (r.level === "warning") existing.warnings++;
+    else existing.notes++;
+    byCategory.set(category, existing);
+  }
+
+  const categoryBreakdown: AtdiCategoryBreakdown[] = [];
+  let findingDebt = 0;
+
+  for (const [category, counts] of byCategory) {
+    const weight = CATEGORY_WEIGHTS[category] ?? 0;
+    const weighted = (counts.errors * 3 + counts.warnings * 1 + counts.notes * 0.3) / totalModules;
+    const contribution = weighted * weight;
+    findingDebt += contribution;
+    categoryBreakdown.push({
+      category,
+      contribution: Math.round(contribution * 100) / 100,
+      findingDensity: Math.round(weighted * 1000) / 1000,
+    });
+  }
+  findingDebt = Math.min(70, findingDebt);
+
+  // Structural debt (0-30 cap)
+  let structuralDebt = 0;
+  if (structural.repos.length > 0) {
+    const repoDebt = structural.repos.map((r) =>
+      r.avgDistance * 15 + (r.painZonePct / 100) * 10 + (r.uselessnessPct / 100) * 5,
+    );
+    structuralDebt = repoDebt.reduce((s, v) => s + v, 0) / structural.repos.length;
+    structuralDebt = Math.min(30, structuralDebt);
+  }
+
+  const score = Math.round(Math.min(100, Math.max(0, findingDebt + structuralDebt)) * 10) / 10;
+
+  // Trend
+  const totalFindingCount = results.length;
+  const newFindingCount = results.filter((r) => r.baselineState === "new").length;
+  const absentCount = results.filter((r) => r.baselineState === "absent").length;
+
+  let trend: AtdiScore["trend"];
+  if (newFindingCount > totalFindingCount * 0.2) {
+    trend = "worsening";
+  } else if (absentCount > 0) {
+    trend = "improving";
+  } else {
+    trend = "stable";
+  }
+
+  return { score, trend, newFindingCount, totalFindingCount, categoryBreakdown };
+}
+
 // ---------------------------------------------------------------------------
 // Renderers
 // ---------------------------------------------------------------------------
@@ -576,6 +654,19 @@ export function renderPracticesMarkdown(report: PracticesReport): string {
   if (report.executive.topActions.length > 0) {
     push("### Top Actions");
     report.executive.topActions.forEach((a, i) => push(`${i + 1}. ${a}`));
+    push("");
+  }
+
+  // --- Technical Debt Index ---
+  push("## Technical Debt Index", "");
+  push(`**ATDI: ${report.atdi.score}/100** (${report.atdi.trend})`, "");
+  push(`New findings: ${report.atdi.newFindingCount} | Total: ${report.atdi.totalFindingCount}`, "");
+  if (report.atdi.categoryBreakdown.length > 0) {
+    push("| Category | Contribution | Density |");
+    push("|----------|-------------|---------|");
+    for (const row of report.atdi.categoryBreakdown) {
+      push(`| ${row.category} | ${row.contribution} | ${row.findingDensity} |`);
+    }
     push("");
   }
 
@@ -676,6 +767,7 @@ export function renderPracticesTable(report: PracticesReport): string {
     `Practices Report — Grade: ${report.executive.grade} (${report.executive.score}/100) — ${report.repoCount} repo(s)`,
   );
   push(report.executive.headline);
+  push(`ATDI: ${report.atdi.score}/100 (${report.atdi.trend})`);
   push("");
 
   // Scorecard table
@@ -761,6 +853,7 @@ export async function practicesCommand(
   const executive: ExecutiveSummary = { ...rawExec, topActions };
 
   const recommendations = synthesizeRecommendations(findings, structural);
+  const atdi = computeAtdi(results, structural);
 
   // Apply topN to fixNow tier if requested
   const cappedFindings: PrioritizedFindings =
@@ -773,7 +866,7 @@ export async function practicesCommand(
       : findings;
 
   const report: PracticesReport = {
-    schemaVersion: "1.0",
+    schemaVersion: "1.1",
     generatedAt: new Date().toISOString(),
     repoCount: repos.length,
     executive,
@@ -781,6 +874,7 @@ export async function practicesCommand(
     structural,
     scorecard,
     recommendations,
+    atdi,
   };
 
   // Render

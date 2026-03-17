@@ -13,6 +13,20 @@ interface RepoSummary {
   avgAbstractness?: number;
 }
 
+interface AtdiCategoryBreakdown {
+  category: string;
+  contribution: number;
+  findingDensity: number;
+}
+
+interface AtdiScore {
+  score: number;
+  trend: "worsening" | "stable" | "improving";
+  newFindingCount: number;
+  totalFindingCount: number;
+  categoryBreakdown: AtdiCategoryBreakdown[];
+}
+
 interface PracticesData {
   executive?: {
     grade?: string;
@@ -34,6 +48,7 @@ interface PracticesData {
     warningCount: number;
     noteCount: number;
   }>;
+  atdi?: AtdiScore;
 }
 
 interface MetricsSummaryEntry {
@@ -138,6 +153,69 @@ export default function Overview() {
               )}
             </div>
           </div>
+        </div>
+      )}
+
+      {/* ATDI panel */}
+      {practices?.atdi && (
+        <div className="bg-white rounded-lg shadow-sm border p-4">
+          <h2 className="text-lg font-semibold text-slate-800 mb-3">Technical Debt Index</h2>
+          <div className="flex items-center gap-4 mb-3">
+            <span
+              className={`text-4xl font-bold ${
+                practices.atdi.score <= 20
+                  ? 'text-green-400'
+                  : practices.atdi.score <= 60
+                  ? 'text-yellow-400'
+                  : 'text-red-400'
+              }`}
+            >
+              {practices.atdi.score}
+              <span className="text-lg font-normal text-slate-500">/100</span>
+            </span>
+            <span
+              className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                practices.atdi.trend === 'improving'
+                  ? 'bg-green-100 text-green-700'
+                  : practices.atdi.trend === 'worsening'
+                  ? 'bg-red-100 text-red-700'
+                  : 'bg-slate-100 text-slate-600'
+              }`}
+            >
+              {practices.atdi.trend}
+            </span>
+            <span className="text-sm text-slate-500">
+              {practices.atdi.newFindingCount} new / {practices.atdi.totalFindingCount} total findings
+            </span>
+          </div>
+          {practices.atdi.categoryBreakdown.length > 0 && (
+            <div className="space-y-1">
+              {practices.atdi.categoryBreakdown
+                .slice()
+                .sort((a, b) => b.contribution - a.contribution)
+                .map((row) => {
+                  const maxContrib = Math.max(
+                    ...practices.atdi!.categoryBreakdown.map((r) => r.contribution),
+                    1,
+                  );
+                  const pct = Math.round((row.contribution / maxContrib) * 100);
+                  return (
+                    <div key={row.category} className="flex items-center gap-2 text-xs">
+                      <span className="w-28 text-slate-600 truncate">{row.category}</span>
+                      <div className="flex-1 bg-slate-100 rounded h-2">
+                        <div
+                          className="bg-blue-400 h-2 rounded"
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                      <span className="w-12 text-right text-slate-500">
+                        {row.contribution.toFixed(1)}
+                      </span>
+                    </div>
+                  );
+                })}
+            </div>
+          )}
         </div>
       )}
 

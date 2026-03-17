@@ -95,7 +95,7 @@ describe("practicesCommand", () => {
 
     const report = await generatePractices(kv);
 
-    expect(report.schemaVersion).toBe("1.0");
+    expect(report.schemaVersion).toBe("1.1");
     expect(report.repoCount).toBe(2);
     expect(report.executive.grade).toHaveLength(1);
     expect(report.executive.score).toBeGreaterThanOrEqual(0);
@@ -426,5 +426,117 @@ describe("practicesCommand", () => {
 
     expect(report.structural.repos.length).toBeGreaterThan(0);
     expect(report.structural.repos[0]!.repo).toBe("my-real-project");
+  });
+});
+
+describe("ATDI score", () => {
+  let kv: InMemoryKVStore;
+
+  beforeEach(() => {
+    kv = makeKvStore();
+  });
+
+  it("score is 0 for empty database", async () => {
+    const report = await generatePractices(kv);
+    expect(report.atdi.score).toBe(0);
+  });
+
+  it("score increases with more errors", async () => {
+    await seedMetrics(kv, "repo-a");
+    await seedSarif(kv, [
+      { ruleId: "fault/silent-failure", level: "error" },
+      { ruleId: "fault/unhandled-error-path", level: "error" },
+    ]);
+
+    const report = await generatePractices(kv);
+    expect(report.atdi.score).toBeGreaterThan(0);
+  });
+
+  it("large codebase scores lower than small codebase with same findings", async () => {
+    // Small codebase: 5 modules
+    await seedMetrics(kv, "small-repo", { moduleCount: 5 });
+    await seedSarif(kv, [
+      { ruleId: "fault/silent-failure", level: "error" },
+      { ruleId: "fault/unhandled-error-path", level: "warning" },
+    ]);
+    const smallReport = await generatePractices(kv);
+
+    // Large codebase: 500 modules, same findings
+    const kv2 = makeKvStore();
+    await seedMetrics(kv2, "large-repo", { moduleCount: 500 });
+    await seedSarif(kv2, [
+      { ruleId: "fault/silent-failure", level: "error" },
+      { ruleId: "fault/unhandled-error-path", level: "warning" },
+    ]);
+    const largeReport = await generatePractices(kv2);
+
+    expect(largeReport.atdi.score).toBeLessThan(smallReport.atdi.score);
+  });
+
+  it("worsening trend when >20% findings are new", async () => {
+    await seedMetrics(kv, "repo-a");
+    // 3 new out of 4 total = 75% new > 20%
+    await seedSarif(kv, [
+      { ruleId: "fault/silent-failure", level: "warning", baselineState: "new" },
+      { ruleId: "fault/silent-failure", level: "warning", baselineState: "new" },
+      { ruleId: "fault/silent-failure", level: "warning", baselineState: "new" },
+      { ruleId: "fault/unhandled-error-path", level: "warning" },
+    ]);
+
+    const report = await generatePractices(kv);
+    expect(report.atdi.trend).toBe("worsening");
+  });
+
+  it("stable trend when <=20% new and no absent findings", async () => {
+    await seedMetrics(kv, "repo-a");
+    // 1 new out of 10 total = 10% new <= 20%, no absent
+    const results: Array<{ ruleId: string; level: "warning" }> = Array.from({ length: 9 }, () => ({
+      ruleId: "fault/silent-failure",
+      level: "warning" as const,
+    }));
+    await seedSarif(kv, [
+      ...results,
+      { ruleId: "fault/silent-failure", level: "warning", baselineState: "new" },
+    ]);
+
+    const report = await generatePractices(kv);
+    expect(report.atdi.trend).toBe("stable");
+  });
+
+  it("score is bounded at 100 when flooded with errors", async () => {
+    await seedMetrics(kv, "repo-a", { moduleCount: 1 });
+    // 200 errors across high-weight categories
+    const manyErrors = Array.from({ length: 200 }, (_, i) => ({
+      ruleId: i % 2 === 0 ? "vuln/reachable-dependency" : "fault/silent-failure",
+      level: "error" as const,
+    }));
+    await seedSarif(kv, manyErrors);
+
+    const report = await generatePractices(kv);
+    expect(report.atdi.score).toBeLessThanOrEqual(100);
+  });
+
+  it("report JSON includes atdi field", async () => {
+    await seedMetrics(kv, "json-repo");
+    await seedSarif(kv, [{ ruleId: "structural/dead-export", level: "warning" }]);
+
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await practicesCommand({ kvStore: kv, format: "json" });
+
+      expect(logSpy).toHaveBeenCalled();
+      const output = logSpy.mock.calls[0]![0] as string;
+      const parsed = JSON.parse(output) as Record<string, unknown>;
+
+      expect(parsed).toHaveProperty("atdi");
+      const atdi = parsed["atdi"] as Record<string, unknown>;
+      expect(typeof atdi["score"]).toBe("number");
+      expect(["worsening", "stable", "improving"]).toContain(atdi["trend"]);
+      expect(typeof atdi["newFindingCount"]).toBe("number");
+      expect(typeof atdi["totalFindingCount"]).toBe("number");
+      expect(Array.isArray(atdi["categoryBreakdown"])).toBe(true);
+    } finally {
+      logSpy.mockRestore();
+    }
   });
 });
