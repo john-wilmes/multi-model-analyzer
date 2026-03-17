@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { fetchRepos, fetchMetricsSummary, fetchPractices, fetchHotspots, fetchAllMetrics, type ModuleMetric } from '../api/client.ts';
+import { fetchRepos, fetchMetricsSummary, fetchPractices, fetchHotspots, fetchAllMetrics, fetchAtdi, type ModuleMetric, type SystemAtdi } from '../api/client.ts';
 import CrossRepoChart, { type RepoPoint } from './CrossRepoChart.tsx';
 import MainSequenceChart from './MainSequenceChart.tsx';
+import AtdiGauge from './AtdiGauge.tsx';
+import AtdiByRepoChart from './AtdiByRepoChart.tsx';
+import DebtBreakdownChart from './DebtBreakdownChart.tsx';
 
 interface RepoSummary {
   name: string;
@@ -106,12 +109,14 @@ export default function Overview() {
   const [practices, setPractices] = useState<PracticesData | null>(null);
   const [hotspots, setHotspots] = useState<HotspotEntry[]>([]);
   const [moduleMetrics, setModuleMetrics] = useState<ModuleMetric[]>([]);
+  const [atdiData, setAtdiData] = useState<SystemAtdi | null>(null);
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
 
   useEffect(() => {
-    Promise.all([fetchRepos(), fetchMetricsSummary(), fetchPractices(), fetchHotspots(), fetchAllMetrics()])
-      .then(([reposData, metricsSummary, practicesData, hotspotsData, allMetricsData]) => {
+    Promise.all([fetchRepos(), fetchMetricsSummary(), fetchPractices(), fetchHotspots(), fetchAllMetrics(), fetchAtdi().catch(() => null)])
+      .then(([reposData, metricsSummary, practicesData, hotspotsData, allMetricsData, atdi]) => {
+        setAtdiData(atdi as SystemAtdi | null);
         setModuleMetrics(allMetricsData as ModuleMetric[]);
         setHotspots((hotspotsData as HotspotEntry[]).slice(0, 10));
         const pd = practicesData as PracticesData;
@@ -195,61 +200,30 @@ export default function Overview() {
       {practices?.atdi && (
         <div className="bg-white rounded-lg shadow-sm border p-4">
           <h2 className="text-lg font-semibold text-slate-800 mb-3">Technical Debt Index</h2>
-          <div className="flex items-center gap-4 mb-3">
-            <span
-              className={`text-4xl font-bold ${
-                practices.atdi.score <= 20
-                  ? 'text-green-400'
-                  : practices.atdi.score <= 60
-                  ? 'text-yellow-400'
-                  : 'text-red-400'
-              }`}
-            >
-              {practices.atdi.score}
-              <span className="text-lg font-normal text-slate-500">/100</span>
-            </span>
-            <span
-              className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                practices.atdi.trend === 'improving'
-                  ? 'bg-green-100 text-green-700'
-                  : practices.atdi.trend === 'worsening'
-                  ? 'bg-red-100 text-red-700'
-                  : 'bg-slate-100 text-slate-600'
-              }`}
-            >
-              {practices.atdi.trend}
-            </span>
-            <span className="text-sm text-slate-500">
-              {practices.atdi.newFindingCount} new / {practices.atdi.totalFindingCount} total findings
-            </span>
-          </div>
-          {practices.atdi.categoryBreakdown.length > 0 && (
-            <div className="space-y-1">
-              {practices.atdi.categoryBreakdown
-                .slice()
-                .sort((a, b) => b.contribution - a.contribution)
-                .map((row) => {
-                  const maxContrib = Math.max(
-                    ...practices.atdi!.categoryBreakdown.map((r) => r.contribution),
-                    1,
-                  );
-                  const pct = Math.round((row.contribution / maxContrib) * 100);
-                  return (
-                    <div key={row.category} className="flex items-center gap-2 text-xs">
-                      <span className="w-28 text-slate-600 truncate">{row.category}</span>
-                      <div className="flex-1 bg-slate-100 rounded h-2">
-                        <div
-                          className="bg-blue-400 h-2 rounded"
-                          style={{ width: `${pct}%` }}
-                        />
-                      </div>
-                      <span className="w-12 text-right text-slate-500">
-                        {row.contribution.toFixed(1)}
-                      </span>
-                    </div>
-                  );
-                })}
+          <div className="flex flex-col items-center mb-3">
+            <AtdiGauge score={practices.atdi.score} size={200} />
+            <div className="flex items-center gap-3 mt-2">
+              <span
+                className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                  practices.atdi.trend === 'improving'
+                    ? 'bg-green-100 text-green-700'
+                    : practices.atdi.trend === 'worsening'
+                    ? 'bg-red-100 text-red-700'
+                    : 'bg-slate-100 text-slate-600'
+                }`}
+              >
+                {practices.atdi.trend}
+              </span>
+              <span className="text-sm text-slate-500">
+                {practices.atdi.newFindingCount} new / {practices.atdi.totalFindingCount} total findings
+              </span>
             </div>
+          </div>
+          {atdiData && atdiData.repoScores.length > 0 && (
+            <>
+              <h3 className="text-sm font-medium text-slate-600 mb-2">Per-Repo Scores</h3>
+              <AtdiByRepoChart repos={atdiData.repoScores.map((r) => ({ repo: r.repo, score: r.score }))} />
+            </>
           )}
         </div>
       )}
@@ -258,7 +232,7 @@ export default function Overview() {
       {practices?.debt && practices.debt.totalDebtMinutes > 0 && (
         <div className="bg-white rounded-lg shadow-sm border p-4">
           <h2 className="text-lg font-semibold text-slate-800 mb-3">Estimated Remediation Cost</h2>
-          <div className="flex items-center gap-4 mb-3">
+          <div className="flex items-center gap-4 mb-4">
             <span
               className={`text-4xl font-bold ${
                 practices.debt.totalDebtHours <= 40
@@ -276,38 +250,7 @@ export default function Overview() {
             </span>
           </div>
           {practices.debt.byCategory.length > 0 && (
-            <div className="space-y-1">
-              {practices.debt.byCategory
-                .slice()
-                .sort((a, b) => b.debtMinutes - a.debtMinutes)
-                .map((cat) => {
-                  const maxDebt = Math.max(
-                    ...practices.debt!.byCategory.map((c) => c.debtMinutes),
-                    1,
-                  );
-                  const pct = Math.round((cat.debtMinutes / maxDebt) * 100);
-                  return (
-                    <div key={cat.category} className="flex items-center gap-2 text-xs">
-                      <span className="w-28 text-slate-600 truncate">{cat.category}</span>
-                      <div className="flex-1 bg-slate-100 rounded h-2">
-                        <div
-                          className={`h-2 rounded ${
-                            practices.debt!.totalDebtHours <= 40
-                              ? 'bg-green-400'
-                              : practices.debt!.totalDebtHours <= 200
-                              ? 'bg-yellow-400'
-                              : 'bg-red-400'
-                          }`}
-                          style={{ width: `${pct}%` }}
-                        />
-                      </div>
-                      <span className="w-12 text-right text-slate-500">
-                        {cat.debtHours}h
-                      </span>
-                    </div>
-                  );
-                })}
-            </div>
+            <DebtBreakdownChart categories={practices.debt.byCategory} />
           )}
         </div>
       )}

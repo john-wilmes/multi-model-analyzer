@@ -88,3 +88,29 @@ export async function fetchDsm(repo: string, kind?: string): Promise<DsmData> {
   const qs = kind ? `?kind=${kind}` : '';
   return fetchJson(`${BASE}/api/dsm/${encodeURIComponent(repo)}${qs}`);
 }
+
+export interface AtdiRepoScore {
+  repo: string;
+  score: number;
+  moduleCount: number;
+  components: {
+    findingsDensity: number;
+    zoneRatio: number;
+    avgDistance: number;
+  };
+  findingCounts: {
+    error: number;
+    warning: number;
+    note: number;
+  };
+}
+
+export interface SystemAtdi {
+  score: number;
+  repoScores: AtdiRepoScore[];
+  computedAt: string;
+}
+
+export async function fetchAtdi(): Promise<SystemAtdi | null> {
+  return fetchJson(`${BASE}/api/atdi`);
+}
