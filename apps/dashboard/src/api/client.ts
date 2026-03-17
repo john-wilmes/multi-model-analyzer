@@ -58,3 +58,7 @@ export async function fetchPractices(): Promise<unknown> {
 export async function fetchPatterns(repo: string): Promise<unknown> {
   return fetchJson(`${BASE}/api/patterns/${encodeURIComponent(repo)}`);
 }
+
+export async function fetchHotspots(): Promise<unknown[]> {
+  return fetchJson(`${BASE}/api/hotspots`);
+}

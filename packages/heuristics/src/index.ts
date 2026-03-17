@@ -28,3 +28,6 @@ export type { CoChangePair } from "./git-history.js";
 
 export { isVulnerable, matchAdvisories, checkVulnReachability, vulnReachabilityToSarif } from "./vuln-match.js";
 export type { Advisory, InstalledPackage, VulnReachabilityResult } from "./vuln-match.js";
+
+export { computeHotspots } from "./hotspots.js";
+export type { FileHotspot, HotspotResult, CommitFileChange as HotspotCommitFileChange } from "./hotspots.js";

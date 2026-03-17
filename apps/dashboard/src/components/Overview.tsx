@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { fetchRepos, fetchMetricsSummary, fetchPractices } from '../api/client.ts';
+import { fetchRepos, fetchMetricsSummary, fetchPractices, fetchHotspots } from '../api/client.ts';
 import CrossRepoChart, { type RepoPoint } from './CrossRepoChart.tsx';
 
 interface RepoSummary {
@@ -82,6 +82,15 @@ interface MetricsSummaryEntry {
   uselessnessZoneCount?: number;
 }
 
+
+interface HotspotEntry {
+  repo: string;
+  filePath: string;
+  churn: number;
+  symbolCount: number;
+  hotspotScore: number;
+}
+
 const GRADE_COLORS: Record<string, string> = {
   A: 'text-green-600',
   B: 'text-lime-600',
@@ -94,12 +103,14 @@ export default function Overview() {
   const [repoSummaries, setRepoSummaries] = useState<RepoSummary[]>([]);
   const [repoPoints, setRepoPoints] = useState<RepoPoint[]>([]);
   const [practices, setPractices] = useState<PracticesData | null>(null);
+  const [hotspots, setHotspots] = useState<HotspotEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
 
   useEffect(() => {
-    Promise.all([fetchRepos(), fetchMetricsSummary(), fetchPractices()])
-      .then(([reposData, metricsSummary, practicesData]) => {
+    Promise.all([fetchRepos(), fetchMetricsSummary(), fetchPractices(), fetchHotspots()])
+      .then(([reposData, metricsSummary, practicesData, hotspotsData]) => {
+        setHotspots((hotspotsData as HotspotEntry[]).slice(0, 10));
         const pd = practicesData as PracticesData;
         setPractices(pd);
         const ms = metricsSummary as Record<string, MetricsSummaryEntry>;
@@ -295,6 +306,48 @@ export default function Overview() {
                 })}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Hotspot Analysis panel */}
+      {hotspots.length > 0 && (
+        <div className="bg-white rounded-lg shadow-sm border p-4">
+          <h2 className="text-lg font-semibold text-slate-800 mb-3">Hotspot Analysis</h2>
+          <p className="text-xs text-slate-500 mb-3">
+            Files with high git churn and high complexity. Top 10 shown.
+          </p>
+          <div className="space-y-2">
+            {hotspots.map((h) => {
+              const barColor =
+                h.hotspotScore > 70
+                  ? 'bg-red-500'
+                  : h.hotspotScore > 40
+                  ? 'bg-yellow-400'
+                  : 'bg-green-400';
+              const shortPath = h.filePath.split('/').slice(-2).join('/');
+              return (
+                <div key={`${h.repo}/${h.filePath}`} className="flex flex-col gap-0.5">
+                  <div className="flex items-center gap-2">
+                    <span className="w-48 text-xs text-slate-700 truncate" title={`[${h.repo}] ${h.filePath}`}>
+                      {shortPath}
+                    </span>
+                    <div className="flex-1 bg-slate-100 rounded h-3">
+                      <div
+                        className={`${barColor} h-3 rounded transition-all`}
+                        style={{ width: `${h.hotspotScore}%` }}
+                      />
+                    </div>
+                    <span className="w-8 text-right text-xs font-medium text-slate-700">
+                      {h.hotspotScore}
+                    </span>
+                  </div>
+                  <span className="text-xs text-slate-400 pl-48">
+                    {h.churn} commits · {h.symbolCount} symbols · {h.repo}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 

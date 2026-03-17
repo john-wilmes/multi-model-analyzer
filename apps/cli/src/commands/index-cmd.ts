@@ -25,7 +25,7 @@ import type {
   CallGraph,
   ArchitecturalRule,
 } from "@mma/core";
-import { detectChanges, classifyFiles, getFileContent, getHeadCommit, isBareRepo } from "@mma/ingestion";
+import { detectChanges, classifyFiles, getFileContent, getHeadCommit, isBareRepo, getCommitHistory } from "@mma/ingestion";
 import { parseFiles } from "@mma/parsing";
 import type { TreeSitterTree } from "@mma/parsing";
 import { extractDependencyGraph, buildControlFlowGraph, createCfgIdCounter, extractCallEdgesFromTreeSitter, computeModuleMetrics, summarizeRepoMetrics, detectDeadExports, detectInstabilityViolations } from "@mma/structural";
@@ -41,9 +41,10 @@ import {
   analyzeNamingWithMeta,
   extractServiceTopology,
   evaluateArchRules,
+  computeHotspots,
 } from "@mma/heuristics";
 import type { PackageJsonInfo } from "@mma/heuristics";
-import { computeBaseline } from "@mma/diagnostics";
+import { computeBaseline, hotspotFindings } from "@mma/diagnostics";
 import { computePageRank, pageRankToSarif } from "@mma/query";
 import { runCorrelation } from "@mma/correlation";
 import type { KVStore, GraphStore, SearchStore } from "@mma/storage";
@@ -124,7 +125,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     let totalFindings = 0;
     for (const repo of repos) {
       const counts: Record<string, number> = {};
-      for (const key of ["config", "fault", "deadExports", "arch", "instability", "blastRadius"] as const) {
+      for (const key of ["config", "fault", "deadExports", "arch", "instability", "blastRadius", "hotspot"] as const) {
         const json = await kvStore.get(`sarif:${key}:${repo.name}`);
         if (json) {
           try {
@@ -634,6 +635,30 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       }
     }
 
+    // --- Phase 4e: Hotspot analysis ---
+    {
+      const pf4e = parsedFilesByRepo.get(repo.name);
+      if (pf4e && pf4e.length > 0) {
+        log(`  [${repo.name}] Computing hotspots...`);
+        try {
+          const start = performance.now();
+          const fileChanges = await getCommitHistory(repo.localPath, 200);
+          const symbolCounts = new Map<string, number>();
+          for (const pf of pf4e) {
+            symbolCounts.set(pf.path, pf.symbols.length);
+          }
+          const hotspotResult = computeHotspots(fileChanges, symbolCounts);
+          const hotspotSarif = hotspotFindings(hotspotResult.hotspots, repo.name);
+          await kvStore.set(`hotspots:${repo.name}`, JSON.stringify(hotspotResult.hotspots));
+          await kvStore.set(`sarif:hotspot:${repo.name}`, JSON.stringify(hotspotSarif));
+          const elapsed = Math.round(performance.now() - start);
+          log(`  [${repo.name}] ${hotspotResult.hotspots.length} hotspots, ${hotspotSarif.length} findings (${elapsed}ms)`);
+        } catch (error) {
+          console.error(`  Failed to compute hotspots for ${repo.name}:`, error);
+        }
+      }
+    }
+
     // --- Phase 5: Heuristic analysis ---
     const depGraph = depGraphByRepo.get(repo.name);
     const parsedFiles = parsedFilesByRepo.get(repo.name);
@@ -1126,7 +1151,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
   for (const repo of repos) {
     const repoResults: import("@mma/core").SarifResult[] = [];
     const counts: Record<string, number> = {};
-    for (const key of ["config", "fault", "deadExports", "arch", "instability", "blastRadius"] as const) {
+    for (const key of ["config", "fault", "deadExports", "arch", "instability", "blastRadius", "hotspot"] as const) {
       const json = await kvStore.get(`sarif:${key}:${repo.name}`);
       if (json) {
         try {

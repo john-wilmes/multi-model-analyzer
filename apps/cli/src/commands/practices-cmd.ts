@@ -154,6 +154,7 @@ const CATEGORY_WEIGHTS: Record<string, number> = {
   config: 5,
   "blast-radius": 0,
   temporal: 0,
+  hotspot: 15,
 };
 
 const RULE_METADATA: Record<string, RuleMeta> = {
@@ -327,6 +328,15 @@ const RULE_METADATA: Record<string, RuleMeta> = {
     effort: "medium",
     categoryWeight: CATEGORY_WEIGHTS["blast-radius"]!,
     debtMinutes: 60,
+  },
+  "hotspot/high-churn-complexity": {
+    category: "hotspot",
+    interpretation: "File is frequently modified and has high complexity — a prime candidate for bugs and difficult maintenance.",
+    action: "Consider refactoring into smaller modules, increasing test coverage, or establishing code ownership.",
+    guideRef: "`hotspot/high-churn-complexity` in findings-guide.md",
+    effort: "high",
+    categoryWeight: CATEGORY_WEIGHTS["hotspot"]!,
+    debtMinutes: 240,
   },
 };
 

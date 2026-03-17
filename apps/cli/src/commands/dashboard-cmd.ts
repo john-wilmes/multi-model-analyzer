@@ -309,6 +309,28 @@ async function handleApi(
     }
   }
 
+
+  // GET /api/hotspots
+  if (path === "/api/hotspots") {
+    const keys = await kvStore.keys("hotspots:");
+    const result: Array<unknown> = [];
+    for (const key of keys) {
+      const repo = key.slice("hotspots:".length);
+      const json = await kvStore.get(key);
+      if (json) {
+        try {
+          const hotspots = JSON.parse(json) as Array<unknown>;
+          for (const h of hotspots) {
+            result.push({ ...(h as Record<string, unknown>), repo });
+          }
+        } catch { /* skip malformed */ }
+      }
+    }
+    // Sort by hotspotScore descending
+    (result as Array<Record<string, unknown>>).sort((a, b) => (b["hotspotScore"] as number) - (a["hotspotScore"] as number));
+    return sendJson(res, result);
+  }
+
   return sendError(res, "Not found", 404);
 }
 

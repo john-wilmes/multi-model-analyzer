@@ -8,3 +8,6 @@ export { aggregateSarifLogs, aggregateRuns, sarifToJson } from "./aggregation.js
 
 export { computeBaseline, fingerprint } from "./baseline.js";
 export type { BaselineResult } from "./baseline.js";
+
+export { hotspotFindings } from "./sarif-hotspot.js";
+export type { HotspotEntry } from "./sarif-hotspot.js";

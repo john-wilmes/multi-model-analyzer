@@ -194,6 +194,54 @@ export async function getChangedFilesInRange(
   };
 }
 
+export interface CommitFileChange {
+  readonly hash: string;
+  readonly filePath: string;
+}
+
+/**
+ * Return a flat list of {hash, filePath} entries from the last `maxCommits`
+ * commits in a (bare) repository.  Lines that look like a 40-hex-char SHA are
+ * treated as commit boundaries; all non-empty lines that follow (until the
+ * next SHA) are file paths.
+ */
+export async function getCommitHistory(
+  repoPath: string,
+  maxCommits: number = 200,
+): Promise<CommitFileChange[]> {
+  try {
+    const { stdout } = await execFileAsync(
+      "git",
+      [
+        "--git-dir", repoPath,
+        "log",
+        "--name-only",
+        `--pretty=format:%H`,
+        `-n`, String(maxCommits),
+      ],
+      { cwd: repoPath, maxBuffer: 50 * 1024 * 1024 },
+    );
+
+    const results: CommitFileChange[] = [];
+    let currentHash = "";
+    const SHA_RE = /^[0-9a-f]{40}$/;
+
+    for (const raw of stdout.split("\n")) {
+      const line = raw.trim();
+      if (!line) continue;
+      if (SHA_RE.test(line)) {
+        currentHash = line;
+      } else if (currentHash) {
+        results.push({ hash: currentHash, filePath: line });
+      }
+    }
+
+    return results;
+  } catch {
+    return [];
+  }
+}
+
 async function exists(path: string): Promise<boolean> {
   try {
     await access(path);
