@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { fetchRepos, fetchMetricsSummary, fetchPractices } from '../api/client.ts';
+import CrossRepoChart, { type RepoPoint } from './CrossRepoChart.tsx';
 
 interface RepoSummary {
   name: string;
@@ -55,6 +56,7 @@ const GRADE_COLORS: Record<string, string> = {
 
 export default function Overview() {
   const [repoSummaries, setRepoSummaries] = useState<RepoSummary[]>([]);
+  const [repoPoints, setRepoPoints] = useState<RepoPoint[]>([]);
   const [practices, setPractices] = useState<PracticesData | null>(null);
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
@@ -85,6 +87,21 @@ export default function Overview() {
           };
         });
         setRepoSummaries(summaries);
+
+        const points: RepoPoint[] = reposData.repos
+          .map((repo) => {
+            const mse = ms[repo];
+            return {
+              name: repo,
+              instability: mse?.avgInstability ?? 0,
+              abstractness: mse?.avgAbstractness ?? 0,
+              moduleCount: mse?.moduleCount ?? 0,
+              painZoneCount: mse?.painZoneCount ?? 0,
+              uselessnessZoneCount: mse?.uselessnessZoneCount ?? 0,
+            };
+          })
+          .filter((p) => p.moduleCount > 0);
+        setRepoPoints(points);
 
         // Store aggregate counts for potential use
         void totalErrors; void totalWarnings; void totalNotes;
@@ -121,6 +138,19 @@ export default function Overview() {
               )}
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Cross-repo main sequence chart */}
+      {repoPoints.length > 0 && (
+        <div className="bg-white rounded-lg shadow-sm border p-4">
+          <h2 className="text-lg font-semibold text-slate-800 mb-2">
+            Architecture Health
+          </h2>
+          <p className="text-xs text-slate-500 mb-3">
+            Each point is a repository. Size reflects module count. Click to drill down.
+          </p>
+          <CrossRepoChart repos={repoPoints} />
         </div>
       )}
 
