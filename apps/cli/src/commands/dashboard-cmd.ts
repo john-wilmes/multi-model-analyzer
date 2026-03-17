@@ -408,6 +408,30 @@ async function handleApi(
     }
   }
 
+  // GET /api/debt
+  if (path === "/api/debt") {
+    const json = await kvStore.get("debt:system");
+    if (!json) return sendJson(res, null);
+    try {
+      return sendJson(res, JSON.parse(json) as unknown);
+    } catch {
+      return sendJson(res, null);
+    }
+  }
+
+  // GET /api/debt/:repo
+  const debtMatch = path.match(/^\/api\/debt\/(.+)$/);
+  if (debtMatch) {
+    const repo = decodeURIComponent(debtMatch[1]!);
+    const json = await kvStore.get(`debt:${repo}`);
+    if (!json) return sendJson(res, null);
+    try {
+      return sendJson(res, JSON.parse(json) as unknown);
+    } catch {
+      return sendJson(res, null);
+    }
+  }
+
   return sendError(res, "Not found", 404);
 }
 

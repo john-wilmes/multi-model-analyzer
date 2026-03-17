@@ -45,7 +45,7 @@ import {
   computeHotspots,
 } from "@mma/heuristics";
 import type { PackageJsonInfo } from "@mma/heuristics";
-import { computeBaseline, hotspotFindings, computeRepoAtdi, computeSystemAtdi } from "@mma/diagnostics";
+import { computeBaseline, hotspotFindings, computeRepoAtdi, computeSystemAtdi, annotateDebt, summarizeDebt } from "@mma/diagnostics";
 import { computePageRank, pageRankToSarif } from "@mma/query";
 import { runCorrelation } from "@mma/correlation";
 import type { KVStore, GraphStore, SearchStore } from "@mma/storage";
@@ -1201,9 +1201,12 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     }
   }
 
-  if (finalResults.length > 0) {
+  // Annotate all results with debtMinutes before writing
+  const annotatedResults = annotateDebt(finalResults);
+
+  if (annotatedResults.length > 0) {
     // Build rule descriptors from the unique ruleIds found in results
-    const ruleIds = [...new Set(finalResults.map(r => r.ruleId))];
+    const ruleIds = [...new Set(annotatedResults.map(r => r.ruleId))];
     const ruleDescriptors: import("@mma/core").SarifReportingDescriptor[] = ruleIds.map(id => ({
       id,
       shortDescription: { text: id.replace("arch/", "Architectural: ").replace(/-/g, " ") },
@@ -1214,11 +1217,41 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       version: "2.1.0",
       runs: [{
         tool: { driver: { name: "multi-model-analyzer", version: "0.1.0", rules: ruleDescriptors } },
-        results: finalResults,
+        results: annotatedResults,
       }],
     };
     await kvStore.set("sarif:latest", JSON.stringify(sarifLog));
-    log(`  Aggregated ${finalResults.length} SARIF results into sarif:latest`);
+    log(`  Aggregated ${annotatedResults.length} SARIF results into sarif:latest`);
+  }
+
+  // Compute and store per-repo debt summaries
+  {
+    const repoDebtSummaries: import("@mma/diagnostics").RepoDebtSummary[] = [];
+    for (const repo of repos) {
+      const repoJson = await kvStore.get(`sarif:repo:${repo.name}`);
+      if (repoJson) {
+        try {
+          const repoResults = JSON.parse(repoJson) as import("@mma/core").SarifResult[];
+          const debtSummary = summarizeDebt(repo.name, repoResults);
+          await kvStore.set(`debt:${repo.name}`, JSON.stringify(debtSummary));
+          repoDebtSummaries.push(debtSummary);
+        } catch {
+          log(`    warning: could not parse sarif:repo:${repo.name} for debt summary`);
+        }
+      }
+    }
+
+    // System-wide debt summary
+    const systemTotalMinutes = repoDebtSummaries.reduce((sum, s) => sum + s.totalMinutes, 0);
+    const systemTotalHours = Math.round((systemTotalMinutes / 60) * 10) / 10;
+    const systemDebt = {
+      totalMinutes: systemTotalMinutes,
+      totalHours: systemTotalHours,
+      repos: repoDebtSummaries,
+      computedAt: new Date().toISOString(),
+    };
+    await kvStore.set("debt:system", JSON.stringify(systemDebt));
+    log(`  Total technical debt: ${systemTotalHours}h across ${repoDebtSummaries.length} repos`);
   }
 
   // Write per-repo index for decomposed reads (always, even when empty)

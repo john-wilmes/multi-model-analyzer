@@ -14,3 +14,6 @@ export type { HotspotEntry } from "./sarif-hotspot.js";
 
 export { computeRepoAtdi, computeSystemAtdi } from "./atdi.js";
 export type { AtdiScore, SystemAtdi } from "./atdi.js";
+
+export { getDebtMinutes, annotateDebt, summarizeDebt, DEFAULT_DEBT_MINUTES } from "./debt.js";
+export type { DebtEstimate, RepoDebtSummary } from "./debt.js";
