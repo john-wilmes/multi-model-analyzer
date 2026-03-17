@@ -168,6 +168,22 @@ async function handleApi(
     return sendJson(res, result);
   }
 
+  // GET /api/metrics-all
+  if (path === "/api/metrics-all") {
+    const keys = await kvStore.keys("metrics:");
+    const result: ModuleMetrics[] = [];
+    for (const key of keys) {
+      const json = await kvStore.get(key);
+      if (json) {
+        try {
+          const metrics = JSON.parse(json) as ModuleMetrics[];
+          result.push(...metrics);
+        } catch { /* skip malformed */ }
+      }
+    }
+    return sendJson(res, result);
+  }
+
   // GET /api/metrics/:repo
   const metricsMatch = path.match(/^\/api\/metrics\/(.+)$/);
   if (metricsMatch) {

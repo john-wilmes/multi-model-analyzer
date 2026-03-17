@@ -62,3 +62,18 @@ export async function fetchPatterns(repo: string): Promise<unknown> {
 export async function fetchHotspots(): Promise<unknown[]> {
   return fetchJson(`${BASE}/api/hotspots`);
 }
+
+export interface ModuleMetric {
+  module: string;
+  repo: string;
+  ca: number;
+  ce: number;
+  instability: number;
+  abstractness: number;
+  distance: number;
+  zone: string;
+}
+
+export async function fetchAllMetrics(): Promise<ModuleMetric[]> {
+  return fetchJson(`${BASE}/api/metrics-all`);
+}

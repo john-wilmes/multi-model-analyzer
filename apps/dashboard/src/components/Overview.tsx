@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { fetchRepos, fetchMetricsSummary, fetchPractices, fetchHotspots } from '../api/client.ts';
+import { fetchRepos, fetchMetricsSummary, fetchPractices, fetchHotspots, fetchAllMetrics, type ModuleMetric } from '../api/client.ts';
 import CrossRepoChart, { type RepoPoint } from './CrossRepoChart.tsx';
+import MainSequenceChart from './MainSequenceChart.tsx';
 
 interface RepoSummary {
   name: string;
@@ -104,12 +105,14 @@ export default function Overview() {
   const [repoPoints, setRepoPoints] = useState<RepoPoint[]>([]);
   const [practices, setPractices] = useState<PracticesData | null>(null);
   const [hotspots, setHotspots] = useState<HotspotEntry[]>([]);
+  const [moduleMetrics, setModuleMetrics] = useState<ModuleMetric[]>([]);
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
 
   useEffect(() => {
-    Promise.all([fetchRepos(), fetchMetricsSummary(), fetchPractices(), fetchHotspots()])
-      .then(([reposData, metricsSummary, practicesData, hotspotsData]) => {
+    Promise.all([fetchRepos(), fetchMetricsSummary(), fetchPractices(), fetchHotspots(), fetchAllMetrics()])
+      .then(([reposData, metricsSummary, practicesData, hotspotsData, allMetricsData]) => {
+        setModuleMetrics(allMetricsData as ModuleMetric[]);
         setHotspots((hotspotsData as HotspotEntry[]).slice(0, 10));
         const pd = practicesData as PracticesData;
         setPractices(pd);
@@ -348,6 +351,19 @@ export default function Overview() {
               );
             })}
           </div>
+        </div>
+      )}
+
+      {/* Module-level main sequence */}
+      {moduleMetrics.length > 0 && (
+        <div className="bg-white rounded-lg shadow-sm border p-4">
+          <h2 className="text-lg font-semibold text-slate-800 mb-2">
+            Main Sequence — All Modules
+          </h2>
+          <p className="text-xs text-slate-500 mb-3">
+            Each point is a module. Color indicates zone classification. Distance from the diagonal measures architectural balance.
+          </p>
+          <MainSequenceChart modules={moduleMetrics} />
         </div>
       )}
 
