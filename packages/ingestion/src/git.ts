@@ -216,6 +216,7 @@ export async function getCommitHistory(
         "--git-dir", repoPath,
         "log",
         "--name-only",
+        "--diff-merges=first-parent",
         `--pretty=format:%H`,
         `-n`, String(maxCommits),
       ],
