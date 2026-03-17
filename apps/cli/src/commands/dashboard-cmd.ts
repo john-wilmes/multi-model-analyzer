@@ -13,6 +13,7 @@ import { join, extname, resolve } from "node:path";
 import type {
   ModuleMetrics,
   RepoMetricsSummary,
+  EdgeKind,
 } from "@mma/core";
 import type { KVStore, GraphStore } from "@mma/storage";
 import { getSarifResultsPaginated, discoverRepos } from "@mma/storage";
@@ -182,6 +183,42 @@ async function handleApi(
       }
     }
     return sendJson(res, result);
+  }
+
+  // GET /api/dsm/:repo
+  const dsmMatch = path.match(/^\/api\/dsm\/(.+)$/);
+  if (dsmMatch) {
+    const repo = decodeURIComponent(dsmMatch[1]!);
+    const edgeKind = (query.single["kind"] ?? "imports") as EdgeKind;
+    const edges = await graphStore.getEdgesByKind(edgeKind, repo);
+
+    // Count connections per module
+    const connCount = new Map<string, number>();
+    for (const e of edges) {
+      connCount.set(e.source, (connCount.get(e.source) ?? 0) + 1);
+      connCount.set(e.target, (connCount.get(e.target) ?? 0) + 1);
+    }
+
+    // Get top 80 modules by connection count
+    let modules = [...connCount.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([name]) => name);
+    if (modules.length > 80) modules = modules.slice(0, 80);
+    modules.sort(); // alphabetical for display
+
+    const idx = new Map(modules.map((m, i) => [m, i]));
+    const n = modules.length;
+    const matrix: number[][] = Array.from({ length: n }, () => new Array(n).fill(0) as number[]);
+
+    for (const e of edges) {
+      const si = idx.get(e.source);
+      const ti = idx.get(e.target);
+      if (si !== undefined && ti !== undefined) {
+        matrix[si]![ti]! += 1;
+      }
+    }
+
+    return sendJson(res, { modules, matrix, edgeKind });
   }
 
   // GET /api/metrics/:repo

@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { fetchMetrics, fetchFindings } from '../api/client.ts';
+import { fetchMetrics, fetchFindings, fetchDsm, type DsmData } from '../api/client.ts';
 import ZoneChart, { type ModuleMetrics } from './ZoneChart.tsx';
+import DsmChart from './DsmChart.tsx';
 
 interface Finding {
   ruleId?: string;
@@ -32,6 +33,7 @@ export default function RepoDetail() {
 
   const [metrics, setMetrics] = useState<ModuleMetrics[]>([]);
   const [findings, setFindings] = useState<Finding[]>([]);
+  const [dsm, setDsm] = useState<DsmData | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -39,13 +41,15 @@ export default function RepoDetail() {
     Promise.all([
       fetchMetrics(repo),
       fetchFindings({ repo, limit: '10' }),
+      fetchDsm(repo),
     ])
-      .then(([metricsData, findingsData]) => {
+      .then(([metricsData, findingsData, dsmData]) => {
         const ms = (metricsData as unknown[])
           .map(toModuleMetrics)
           .filter((m): m is ModuleMetrics => m !== null);
         setMetrics(ms);
         setFindings((findingsData.results ?? []) as Finding[]);
+        setDsm(dsmData as DsmData);
       })
       .catch((err: unknown) => console.error("Failed to fetch repo data:", err))
       .finally(() => setLoading(false));
@@ -93,6 +97,19 @@ export default function RepoDetail() {
             Zone Chart
           </h3>
           <ZoneChart repo={repo} metrics={metrics} />
+        </div>
+      )}
+
+      {/* Dependency Structure Matrix */}
+      {dsm && dsm.modules.length > 0 && (
+        <div className="bg-white rounded-lg shadow-sm border p-4">
+          <h3 className="text-base font-semibold text-slate-700 mb-2">
+            Dependency Structure Matrix
+          </h3>
+          <p className="text-xs text-slate-500 mb-3">
+            Rows import columns. Darker cells indicate more dependencies. {dsm.modules.length} modules shown.
+          </p>
+          <DsmChart data={dsm} />
         </div>
       )}
 

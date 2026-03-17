@@ -77,3 +77,14 @@ export interface ModuleMetric {
 export async function fetchAllMetrics(): Promise<ModuleMetric[]> {
   return fetchJson(`${BASE}/api/metrics-all`);
 }
+
+export interface DsmData {
+  modules: string[];
+  matrix: number[][];
+  edgeKind: string;
+}
+
+export async function fetchDsm(repo: string, kind?: string): Promise<DsmData> {
+  const qs = kind ? `?kind=${kind}` : '';
+  return fetchJson(`${BASE}/api/dsm/${encodeURIComponent(repo)}${qs}`);
+}
