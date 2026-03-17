@@ -147,3 +147,19 @@ export interface CoupledPairRow {
 export async function fetchTemporalCoupling(): Promise<CoupledPairRow[]> {
   return fetchJson(`${BASE}/api/temporal-coupling`);
 }
+
+export async function fetchAtdiByRepo(repo: string): Promise<AtdiRepoScore | null> {
+  return fetchJson(`${BASE}/api/atdi/${encodeURIComponent(repo)}`);
+}
+
+export interface RepoDebtSummary {
+  repo: string;
+  totalMinutes: number;
+  totalHours: number;
+  byRule: Record<string, { count: number; minutes: number }>;
+  bySeverity: Record<string, { count: number; minutes: number }>;
+}
+
+export async function fetchDebtByRepo(repo: string): Promise<RepoDebtSummary | null> {
+  return fetchJson(`${BASE}/api/debt/${encodeURIComponent(repo)}`);
+}

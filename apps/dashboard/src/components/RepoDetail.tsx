@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { fetchMetrics, fetchFindings, fetchDsm, type DsmData } from '../api/client.ts';
+import { fetchMetrics, fetchFindings, fetchDsm, fetchAtdiByRepo, fetchDebtByRepo, type DsmData, type AtdiRepoScore, type RepoDebtSummary } from '../api/client.ts';
 import ZoneChart, { type ModuleMetrics } from './ZoneChart.tsx';
 import DsmChart from './DsmChart.tsx';
+import AtdiGauge from './AtdiGauge.tsx';
+import DebtBreakdownChart, { type DebtCategory } from './DebtBreakdownChart.tsx';
 
 interface Finding {
   ruleId?: string;
@@ -34,6 +36,8 @@ export default function RepoDetail() {
   const [metrics, setMetrics] = useState<ModuleMetrics[]>([]);
   const [findings, setFindings] = useState<Finding[]>([]);
   const [dsm, setDsm] = useState<DsmData | null>(null);
+  const [atdi, setAtdi] = useState<AtdiRepoScore | null>(null);
+  const [debt, setDebt] = useState<RepoDebtSummary | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -42,14 +46,18 @@ export default function RepoDetail() {
       fetchMetrics(repo),
       fetchFindings({ repo, limit: '10' }),
       fetchDsm(repo),
+      fetchAtdiByRepo(repo),
+      fetchDebtByRepo(repo),
     ])
-      .then(([metricsData, findingsData, dsmData]) => {
+      .then(([metricsData, findingsData, dsmData, atdiData, debtData]) => {
         const ms = (metricsData as unknown[])
           .map(toModuleMetrics)
           .filter((m): m is ModuleMetrics => m !== null);
         setMetrics(ms);
         setFindings((findingsData.results ?? []) as Finding[]);
         setDsm(dsmData as DsmData);
+        setAtdi(atdiData);
+        setDebt(debtData);
       })
       .catch((err: unknown) => console.error("Failed to fetch repo data:", err))
       .finally(() => setLoading(false));
@@ -89,6 +97,56 @@ export default function RepoDetail() {
           </div>
         ))}
       </div>
+
+      {/* ATDI Score */}
+      {atdi && (
+        <div className="bg-white rounded-lg shadow-sm border p-4">
+          <h3 className="text-base font-semibold text-slate-700 mb-3">ATDI Score</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-center">
+            <div className="flex justify-center">
+              <AtdiGauge score={atdi.score} size={160} />
+            </div>
+            <div className="space-y-3">
+              {[
+                { label: 'Findings density', value: (atdi.components.findingsDensity * 100).toFixed(0) + '%' },
+                { label: 'Zone ratio', value: (atdi.components.zoneRatio * 100).toFixed(0) + '%' },
+                { label: 'Avg distance', value: atdi.components.avgDistance.toFixed(2) },
+              ].map(({ label, value }) => (
+                <div key={label} className="flex items-center justify-between text-sm">
+                  <span className="text-slate-600">{label}</span>
+                  <span className="font-medium text-slate-800">{value}</span>
+                </div>
+              ))}
+              <div className="flex gap-3 text-xs pt-1">
+                <span className="text-red-600">{atdi.findingCounts.error} errors</span>
+                <span className="text-yellow-600">{atdi.findingCounts.warning} warnings</span>
+                <span className="text-blue-600">{atdi.findingCounts.note} notes</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Technical Debt */}
+      {debt && (
+        <div className="bg-white rounded-lg shadow-sm border p-4">
+          <h3 className="text-base font-semibold text-slate-700 mb-3">Technical Debt</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
+            <div className="flex flex-col items-center justify-center py-4">
+              <p className="text-3xl font-bold text-slate-800">{debt.totalHours}h</p>
+              <p className="text-xs text-slate-500 mt-1">Total remediation effort</p>
+            </div>
+            <DebtBreakdownChart
+              categories={Object.entries(debt.byRule).map(([ruleId, { count, minutes }]): DebtCategory => ({
+                category: ruleId.includes('/') ? ruleId.split('/').pop()! : ruleId,
+                debtMinutes: minutes,
+                debtHours: Math.round(minutes / 60),
+                findingCount: count,
+              }))}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Zone chart */}
       {metrics.length > 0 && (
