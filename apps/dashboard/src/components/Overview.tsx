@@ -27,6 +27,26 @@ interface AtdiScore {
   categoryBreakdown: AtdiCategoryBreakdown[];
 }
 
+interface DebtCategoryEstimate {
+  category: string;
+  debtMinutes: number;
+  debtHours: number;
+  findingCount: number;
+}
+
+interface DebtEstimate {
+  totalDebtMinutes: number;
+  totalDebtHours: number;
+  byCategory: DebtCategoryEstimate[];
+  byRule: Array<{
+    ruleId: string;
+    category: string;
+    findingCount: number;
+    minutesPerInstance: number;
+    totalMinutes: number;
+  }>;
+}
+
 interface PracticesData {
   executive?: {
     grade?: string;
@@ -49,6 +69,7 @@ interface PracticesData {
     noteCount: number;
   }>;
   atdi?: AtdiScore;
+  debt?: DebtEstimate;
 }
 
 interface MetricsSummaryEntry {
@@ -210,6 +231,64 @@ export default function Overview() {
                       </div>
                       <span className="w-12 text-right text-slate-500">
                         {row.contribution.toFixed(1)}
+                      </span>
+                    </div>
+                  );
+                })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Debt Estimate panel */}
+      {practices?.debt && practices.debt.totalDebtMinutes > 0 && (
+        <div className="bg-white rounded-lg shadow-sm border p-4">
+          <h2 className="text-lg font-semibold text-slate-800 mb-3">Estimated Remediation Cost</h2>
+          <div className="flex items-center gap-4 mb-3">
+            <span
+              className={`text-4xl font-bold ${
+                practices.debt.totalDebtHours <= 40
+                  ? 'text-green-500'
+                  : practices.debt.totalDebtHours <= 200
+                  ? 'text-yellow-500'
+                  : 'text-red-500'
+              }`}
+            >
+              {practices.debt.totalDebtHours}
+              <span className="text-lg font-normal text-slate-500">h</span>
+            </span>
+            <span className="text-sm text-slate-500">
+              {(Math.round((practices.debt.totalDebtHours / 6) * 10) / 10).toFixed(1)} days at 6h/day
+            </span>
+          </div>
+          {practices.debt.byCategory.length > 0 && (
+            <div className="space-y-1">
+              {practices.debt.byCategory
+                .slice()
+                .sort((a, b) => b.debtMinutes - a.debtMinutes)
+                .map((cat) => {
+                  const maxDebt = Math.max(
+                    ...practices.debt!.byCategory.map((c) => c.debtMinutes),
+                    1,
+                  );
+                  const pct = Math.round((cat.debtMinutes / maxDebt) * 100);
+                  return (
+                    <div key={cat.category} className="flex items-center gap-2 text-xs">
+                      <span className="w-28 text-slate-600 truncate">{cat.category}</span>
+                      <div className="flex-1 bg-slate-100 rounded h-2">
+                        <div
+                          className={`h-2 rounded ${
+                            practices.debt!.totalDebtHours <= 40
+                              ? 'bg-green-400'
+                              : practices.debt!.totalDebtHours <= 200
+                              ? 'bg-yellow-400'
+                              : 'bg-red-400'
+                          }`}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                      <span className="w-12 text-right text-slate-500">
+                        {cat.debtHours}h
                       </span>
                     </div>
                   );

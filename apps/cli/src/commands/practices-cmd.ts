@@ -34,6 +34,29 @@ export interface PracticesReport {
   readonly scorecard: CategoryScorecard;
   readonly recommendations: Recommendation[];
   readonly atdi: AtdiScore;
+  readonly debt: DebtEstimate;
+}
+
+export interface DebtEstimate {
+  totalDebtMinutes: number;
+  totalDebtHours: number;   // totalDebtMinutes / 60, rounded to 1 decimal
+  byCategory: DebtCategoryEstimate[];
+  byRule: DebtRuleEstimate[];  // top 10 by debt contribution
+}
+
+export interface DebtCategoryEstimate {
+  category: string;
+  debtMinutes: number;
+  debtHours: number;
+  findingCount: number;
+}
+
+export interface DebtRuleEstimate {
+  ruleId: string;
+  category: string;
+  findingCount: number;
+  minutesPerInstance: number;
+  totalMinutes: number;
 }
 
 export interface ExecutiveSummary {
@@ -120,6 +143,7 @@ interface RuleMeta {
   readonly guideRef: string;
   readonly effort: "low" | "medium" | "high";
   readonly categoryWeight: number;
+  readonly debtMinutes: number;
 }
 
 const CATEGORY_WEIGHTS: Record<string, number> = {
@@ -140,6 +164,7 @@ const RULE_METADATA: Record<string, RuleMeta> = {
     guideRef: "`config/dead-flag` in findings-guide.md",
     effort: "low",
     categoryWeight: CATEGORY_WEIGHTS["config"]!,
+    debtMinutes: 15,
   },
   "config/always-on-flag": {
     category: "config",
@@ -148,6 +173,7 @@ const RULE_METADATA: Record<string, RuleMeta> = {
     guideRef: "`config/always-on-flag` in findings-guide.md",
     effort: "low",
     categoryWeight: CATEGORY_WEIGHTS["config"]!,
+    debtMinutes: 15,
   },
   "config/missing-constraint": {
     category: "config",
@@ -156,6 +182,7 @@ const RULE_METADATA: Record<string, RuleMeta> = {
     guideRef: "`config/missing-constraint` in findings-guide.md",
     effort: "low",
     categoryWeight: CATEGORY_WEIGHTS["config"]!,
+    debtMinutes: 20,
   },
   "config/untested-interaction": {
     category: "config",
@@ -164,6 +191,7 @@ const RULE_METADATA: Record<string, RuleMeta> = {
     guideRef: "`config/untested-interaction` in findings-guide.md",
     effort: "medium",
     categoryWeight: CATEGORY_WEIGHTS["config"]!,
+    debtMinutes: 90,
   },
   "config/format-violation": {
     category: "config",
@@ -172,6 +200,7 @@ const RULE_METADATA: Record<string, RuleMeta> = {
     guideRef: "`config/format-violation` in findings-guide.md",
     effort: "low",
     categoryWeight: CATEGORY_WEIGHTS["config"]!,
+    debtMinutes: 15,
   },
   "fault/unhandled-error-path": {
     category: "fault",
@@ -180,6 +209,7 @@ const RULE_METADATA: Record<string, RuleMeta> = {
     guideRef: "`fault/unhandled-error-path` in findings-guide.md",
     effort: "low",
     categoryWeight: CATEGORY_WEIGHTS["fault"]!,
+    debtMinutes: 30,
   },
   "fault/silent-failure": {
     category: "fault",
@@ -188,6 +218,7 @@ const RULE_METADATA: Record<string, RuleMeta> = {
     guideRef: "`fault/silent-failure` in findings-guide.md",
     effort: "low",
     categoryWeight: CATEGORY_WEIGHTS["fault"]!,
+    debtMinutes: 20,
   },
   "fault/missing-error-boundary": {
     category: "fault",
@@ -196,6 +227,7 @@ const RULE_METADATA: Record<string, RuleMeta> = {
     guideRef: "`fault/missing-error-boundary` in findings-guide.md",
     effort: "medium",
     categoryWeight: CATEGORY_WEIGHTS["fault"]!,
+    debtMinutes: 120,
   },
   "fault/cascading-failure-risk": {
     category: "fault",
@@ -204,6 +236,7 @@ const RULE_METADATA: Record<string, RuleMeta> = {
     guideRef: "`fault/cascading-failure-risk` in findings-guide.md",
     effort: "high",
     categoryWeight: CATEGORY_WEIGHTS["fault"]!,
+    debtMinutes: 480,
   },
   "structural/dead-export": {
     category: "structural",
@@ -212,6 +245,7 @@ const RULE_METADATA: Record<string, RuleMeta> = {
     guideRef: "`structural/dead-export` in findings-guide.md",
     effort: "low",
     categoryWeight: CATEGORY_WEIGHTS["structural"]!,
+    debtMinutes: 15,
   },
   "structural/unstable-dependency": {
     category: "structural",
@@ -220,6 +254,7 @@ const RULE_METADATA: Record<string, RuleMeta> = {
     guideRef: "`structural/unstable-dependency` in findings-guide.md",
     effort: "medium",
     categoryWeight: CATEGORY_WEIGHTS["structural"]!,
+    debtMinutes: 120,
   },
   "structural/pain-zone-module": {
     category: "structural",
@@ -228,6 +263,7 @@ const RULE_METADATA: Record<string, RuleMeta> = {
     guideRef: "`structural/pain-zone-module` in findings-guide.md",
     effort: "high",
     categoryWeight: CATEGORY_WEIGHTS["structural"]!,
+    debtMinutes: 240,
   },
   "structural/uselessness-zone-module": {
     category: "structural",
@@ -236,6 +272,7 @@ const RULE_METADATA: Record<string, RuleMeta> = {
     guideRef: "`structural/uselessness-zone-module` in findings-guide.md",
     effort: "medium",
     categoryWeight: CATEGORY_WEIGHTS["structural"]!,
+    debtMinutes: 60,
   },
   "arch/layer-violation": {
     category: "architecture",
@@ -244,6 +281,7 @@ const RULE_METADATA: Record<string, RuleMeta> = {
     guideRef: "`arch/layer-violation` in findings-guide.md",
     effort: "medium",
     categoryWeight: CATEGORY_WEIGHTS["architecture"]!,
+    debtMinutes: 90,
   },
   "arch/forbidden-import": {
     category: "architecture",
@@ -252,6 +290,7 @@ const RULE_METADATA: Record<string, RuleMeta> = {
     guideRef: "`arch/forbidden-import` in findings-guide.md",
     effort: "low",
     categoryWeight: CATEGORY_WEIGHTS["architecture"]!,
+    debtMinutes: 30,
   },
   "arch/dependency-direction": {
     category: "architecture",
@@ -260,6 +299,7 @@ const RULE_METADATA: Record<string, RuleMeta> = {
     guideRef: "`arch/dependency-direction` in findings-guide.md",
     effort: "medium",
     categoryWeight: CATEGORY_WEIGHTS["architecture"]!,
+    debtMinutes: 120,
   },
   "temporal-coupling/co-change": {
     category: "temporal",
@@ -268,6 +308,7 @@ const RULE_METADATA: Record<string, RuleMeta> = {
     guideRef: "`temporal-coupling/co-change` in findings-guide.md",
     effort: "medium",
     categoryWeight: CATEGORY_WEIGHTS["temporal"]!,
+    debtMinutes: 90,
   },
   "vuln/reachable-dependency": {
     category: "vulnerability",
@@ -276,6 +317,7 @@ const RULE_METADATA: Record<string, RuleMeta> = {
     guideRef: "`vuln/reachable-dependency` in findings-guide.md",
     effort: "low",
     categoryWeight: CATEGORY_WEIGHTS["vulnerability"]!,
+    debtMinutes: 30,
   },
   "blast-radius/high-pagerank": {
     category: "blast-radius",
@@ -284,6 +326,7 @@ const RULE_METADATA: Record<string, RuleMeta> = {
     guideRef: "`blast-radius/high-pagerank` in findings-guide.md",
     effort: "medium",
     categoryWeight: CATEGORY_WEIGHTS["blast-radius"]!,
+    debtMinutes: 60,
   },
 };
 
@@ -294,6 +337,7 @@ const DEFAULT_META: RuleMeta = {
   guideRef: "findings-guide.md",
   effort: "medium",
   categoryWeight: 0,
+  debtMinutes: 60,
 };
 
 function inferCategoryFromRuleId(ruleId: string): string {
@@ -563,6 +607,66 @@ function synthesizeRecommendations(
   return recs.slice(0, 7);
 }
 
+function computeDebtEstimate(results: readonly SarifResult[]): DebtEstimate {
+  // Group by ruleId
+  const byRule = new Map<string, { count: number; meta: RuleMeta }>();
+  for (const r of results) {
+    const meta = getMeta(r.ruleId);
+    const existing = byRule.get(r.ruleId);
+    if (existing) {
+      existing.count++;
+    } else {
+      byRule.set(r.ruleId, { count: 1, meta });
+    }
+  }
+
+  // Build per-rule rows
+  const ruleRows: DebtRuleEstimate[] = [];
+  const byCategoryMap = new Map<string, { debtMinutes: number; findingCount: number }>();
+
+  for (const [ruleId, { count, meta }] of byRule) {
+    const totalMinutes = count * meta.debtMinutes;
+    ruleRows.push({
+      ruleId,
+      category: meta.category,
+      findingCount: count,
+      minutesPerInstance: meta.debtMinutes,
+      totalMinutes,
+    });
+
+    const catEntry = byCategoryMap.get(meta.category) ?? { debtMinutes: 0, findingCount: 0 };
+    catEntry.debtMinutes += totalMinutes;
+    catEntry.findingCount += count;
+    byCategoryMap.set(meta.category, catEntry);
+  }
+
+  // Sort by totalMinutes desc, take top 10
+  ruleRows.sort((a, b) => b.totalMinutes - a.totalMinutes);
+  const topRules = ruleRows.slice(0, 10);
+
+  // Build category array
+  const categoryRows: DebtCategoryEstimate[] = [];
+  for (const [category, { debtMinutes, findingCount }] of byCategoryMap) {
+    categoryRows.push({
+      category,
+      debtMinutes,
+      debtHours: Math.round((debtMinutes / 60) * 10) / 10,
+      findingCount,
+    });
+  }
+  categoryRows.sort((a, b) => b.debtMinutes - a.debtMinutes);
+
+  const totalDebtMinutes = ruleRows.reduce((s, r) => s + r.totalMinutes, 0);
+  const totalDebtHours = Math.round((totalDebtMinutes / 60) * 10) / 10;
+
+  return {
+    totalDebtMinutes,
+    totalDebtHours,
+    byCategory: categoryRows,
+    byRule: topRules,
+  };
+}
+
 function computeAtdi(
   results: readonly SarifResult[],
   structural: StructuralHealth,
@@ -670,6 +774,34 @@ export function renderPracticesMarkdown(report: PracticesReport): string {
     push("");
   }
 
+  // --- Estimated Remediation Cost ---
+  push("## Estimated Remediation Cost", "");
+  if (report.debt.totalDebtMinutes > 0) {
+    const days = Math.round((report.debt.totalDebtHours / 6) * 10) / 10;
+    push(`**Total: ${report.debt.totalDebtHours} hours** (${days} days at 6h/day)`, "");
+    if (report.debt.byCategory.length > 0) {
+      push("| Category | Hours | Findings | Avg/Finding |");
+      push("|----------|-------|----------|-------------|");
+      for (const cat of report.debt.byCategory) {
+        const avgMin = (cat.debtMinutes / cat.findingCount).toFixed(0);
+        push(`| ${cat.category} | ${cat.debtHours}h | ${cat.findingCount} | ${avgMin}m |`);
+      }
+      push("");
+    }
+    if (report.debt.byRule.length > 0) {
+      push("Top contributors:");
+      push("| Rule | Count | Per Instance | Total |");
+      push("|------|-------|--------------|-------|");
+      for (const r of report.debt.byRule) {
+        const totalHours = (r.totalMinutes / 60).toFixed(1);
+        push(`| \`${r.ruleId}\` | ${r.findingCount} | ${r.minutesPerInstance}m | ${r.totalMinutes}m (${totalHours}h) |`);
+      }
+      push("");
+    }
+  } else {
+    push("No findings — zero estimated remediation cost.", "");
+  }
+
   // --- Priority Findings ---
   push("## Priority Findings", "");
 
@@ -768,6 +900,8 @@ export function renderPracticesTable(report: PracticesReport): string {
   );
   push(report.executive.headline);
   push(`ATDI: ${report.atdi.score}/100 (${report.atdi.trend})`);
+  const debtDays = Math.round((report.debt.totalDebtHours / 6) * 10) / 10;
+  push(`Estimated Debt: ${report.debt.totalDebtHours} hours (${debtDays} days at 6h/day)`);
   push("");
 
   // Scorecard table
@@ -854,6 +988,7 @@ export async function practicesCommand(
 
   const recommendations = synthesizeRecommendations(findings, structural);
   const atdi = computeAtdi(results, structural);
+  const debt = computeDebtEstimate(results);
 
   // Apply topN to fixNow tier if requested
   const cappedFindings: PrioritizedFindings =
@@ -866,7 +1001,7 @@ export async function practicesCommand(
       : findings;
 
   const report: PracticesReport = {
-    schemaVersion: "1.1",
+    schemaVersion: "1.2",
     generatedAt: new Date().toISOString(),
     repoCount: repos.length,
     executive,
@@ -875,6 +1010,7 @@ export async function practicesCommand(
     scorecard,
     recommendations,
     atdi,
+    debt,
   };
 
   // Render

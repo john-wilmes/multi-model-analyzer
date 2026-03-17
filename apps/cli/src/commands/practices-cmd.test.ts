@@ -95,7 +95,7 @@ describe("practicesCommand", () => {
 
     const report = await generatePractices(kv);
 
-    expect(report.schemaVersion).toBe("1.1");
+    expect(report.schemaVersion).toBe("1.2");
     expect(report.repoCount).toBe(2);
     expect(report.executive.grade).toHaveLength(1);
     expect(report.executive.score).toBeGreaterThanOrEqual(0);
@@ -414,6 +414,7 @@ describe("practicesCommand", () => {
       expect(parsed).toHaveProperty("structural");
       expect(parsed).toHaveProperty("scorecard");
       expect(parsed).toHaveProperty("recommendations");
+      expect(parsed).toHaveProperty("debt");
     } finally {
       logSpy.mockRestore();
     }
@@ -426,6 +427,103 @@ describe("practicesCommand", () => {
 
     expect(report.structural.repos.length).toBeGreaterThan(0);
     expect(report.structural.repos[0]!.repo).toBe("my-real-project");
+  });
+});
+
+describe("Debt estimation", () => {
+  let kv: InMemoryKVStore;
+
+  beforeEach(() => {
+    kv = makeKvStore();
+  });
+
+  it("zero debt for empty database", async () => {
+    const report = await generatePractices(kv);
+    expect(report.debt.totalDebtMinutes).toBe(0);
+    expect(report.debt.totalDebtHours).toBe(0);
+    expect(report.debt.byCategory).toHaveLength(0);
+    expect(report.debt.byRule).toHaveLength(0);
+  });
+
+  it("correct per-rule estimation for fault/silent-failure", async () => {
+    await seedMetrics(kv, "repo-a");
+    await seedSarif(kv, [
+      { ruleId: "fault/silent-failure", level: "error" },
+      { ruleId: "fault/silent-failure", level: "error" },
+      { ruleId: "fault/silent-failure", level: "error" },
+    ]);
+
+    const report = await generatePractices(kv);
+    // fault/silent-failure = 20 min each, 3 instances = 60 total
+    expect(report.debt.totalDebtMinutes).toBe(60);
+    expect(report.debt.totalDebtHours).toBe(1);
+  });
+
+  it("category aggregation is correct for mixed findings", async () => {
+    await seedMetrics(kv, "repo-a");
+    await seedSarif(kv, [
+      { ruleId: "config/dead-flag", level: "note" },        // 15 min each
+      { ruleId: "config/dead-flag", level: "note" },        // 15 min → 30 total for config
+      { ruleId: "fault/silent-failure", level: "warning" }, // 20 min → 20 total for fault
+    ]);
+
+    const report = await generatePractices(kv);
+    expect(report.debt.totalDebtMinutes).toBe(50);
+
+    const configCat = report.debt.byCategory.find(c => c.category === "config");
+    const faultCat = report.debt.byCategory.find(c => c.category === "fault");
+    expect(configCat?.debtMinutes).toBe(30);
+    expect(faultCat?.debtMinutes).toBe(20);
+  });
+
+  it("byRule is limited to top 10", async () => {
+    await seedMetrics(kv, "repo-a");
+    // Seed findings across 12 different rules
+    const manyRules = [
+      "config/dead-flag", "config/always-on-flag", "config/missing-constraint",
+      "config/format-violation", "fault/unhandled-error-path", "fault/silent-failure",
+      "fault/missing-error-boundary", "structural/dead-export", "structural/unstable-dependency",
+      "arch/layer-violation", "arch/forbidden-import", "arch/dependency-direction",
+    ];
+    await seedSarif(kv, manyRules.map(ruleId => ({ ruleId, level: "warning" as const })));
+
+    const report = await generatePractices(kv);
+    expect(report.debt.byRule.length).toBeLessThanOrEqual(10);
+  });
+
+  it("report JSON includes debt field with correct shape", async () => {
+    await seedMetrics(kv, "repo-a");
+    await seedSarif(kv, [{ ruleId: "fault/cascading-failure-risk", level: "error" }]);
+
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await practicesCommand({ kvStore: kv, format: "json" });
+      const output = logSpy.mock.calls[0]![0] as string;
+      const parsed = JSON.parse(output) as Record<string, unknown>;
+
+      expect(parsed).toHaveProperty("debt");
+      const debt = parsed["debt"] as Record<string, unknown>;
+      expect(typeof debt["totalDebtMinutes"]).toBe("number");
+      expect(typeof debt["totalDebtHours"]).toBe("number");
+      expect(Array.isArray(debt["byCategory"])).toBe(true);
+      expect(Array.isArray(debt["byRule"])).toBe(true);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it("days calculation is correct for large debt", async () => {
+    await seedMetrics(kv, "repo-a");
+    // fault/cascading-failure-risk = 480 min each
+    await seedSarif(kv, [
+      { ruleId: "fault/cascading-failure-risk", level: "error" },
+      { ruleId: "fault/cascading-failure-risk", level: "error" },
+    ]);
+
+    const report = await generatePractices(kv);
+    // 2 * 480 = 960 minutes = 16 hours
+    expect(report.debt.totalDebtMinutes).toBe(960);
+    expect(report.debt.totalDebtHours).toBe(16);
   });
 });
 
