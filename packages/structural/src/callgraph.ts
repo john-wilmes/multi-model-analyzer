@@ -6,6 +6,7 @@
  * 2. extractCallEdgesFromTreeSitter -- lightweight AST walk over tree-sitter nodes.
  */
 
+import { makeSymbolId } from "@mma/core";
 import type { CallGraph, GraphEdge } from "@mma/core";
 import type { TsMorphProject, TsMorphSourceFile } from "@mma/parsing";
 
@@ -173,12 +174,12 @@ function collectCallEdges(
   edges: GraphEdge[],
 ): void {
   const source = className
-    ? `${filePath}#${className}.${callerName}`
-    : `${filePath}#${callerName}`;
+    ? makeSymbolId(repo, filePath, `${className}.${callerName}`)
+    : makeSymbolId(repo, filePath, callerName);
 
   function walk(node: TsNode): void {
     if (node.type === "call_expression") {
-      const target = resolveCallTarget(node, filePath, className);
+      const target = resolveCallTarget(node, filePath, className, repo);
       if (target) {
         edges.push({
           source,
@@ -214,6 +215,7 @@ function resolveCallTarget(
   callNode: TsNode,
   filePath: string,
   enclosingClassName: string | undefined,
+  repo: string,
 ): string | null {
   const fnChild = callNode.childForFieldName("function");
   if (!fnChild) return null;
@@ -229,7 +231,7 @@ function resolveCallTarget(
 
     // this.method() -> resolve to ClassName.method
     if (object.type === "this" && enclosingClassName) {
-      return `${filePath}#${enclosingClassName}.${property.text}`;
+      return makeSymbolId(repo, filePath, `${enclosingClassName}.${property.text}`);
     }
 
     // obj.method() -> "obj.method"

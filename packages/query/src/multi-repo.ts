@@ -7,6 +7,7 @@
  */
 
 import type { GraphEdge } from "@mma/core";
+import { extractRepo } from "@mma/core";
 import type { GraphStore, SearchStore } from "@mma/storage";
 import { executeCallersQuery, executeCalleesQuery } from "./structural.js";
 import { executeSearchQuery } from "./search.js";
@@ -143,6 +144,10 @@ export async function executeMultiRepoQuery(
  * Otherwise, assume same repo (returns "unknown").
  */
 function inferTargetRepo(target: string): string | null {
+  // Fast path: canonical ID carries repo inline
+  const repo = extractRepo(target);
+  if (repo) return repo;
+
   // node_modules/@org/pkg/... -> @org/pkg
   if (target.includes("node_modules/")) {
     const parts = target.split("node_modules/")[1]!.split("/");

@@ -197,8 +197,9 @@ export class SqliteGraphStore implements GraphStore {
     const db = this.stmtDeleteBySource.database;
     const txn = db.transaction(() => {
       for (const fp of filePaths) {
-        this.stmtDeleteBySource.run(fp, repo);
-        const escaped = fp.replace(/[%_\\]/g, "\\$&");
+        const canonicalFile = repo + ":" + fp;
+        this.stmtDeleteBySource.run(canonicalFile, repo);
+        const escaped = canonicalFile.replace(/[%_\\]/g, "\\$&");
         this.stmtDeleteBySourcePrefix.run(escaped + "#%", repo);
       }
     });

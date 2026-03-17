@@ -5,6 +5,7 @@
  * (following who-imports-me edges) to identify all transitively affected files.
  */
 
+import { parseSymbolId } from "@mma/core";
 import type { GraphStore, SearchStore } from "@mma/storage";
 
 export interface AffectedFile {
@@ -45,8 +46,11 @@ export async function computeBlastRadius(
         ? results.find((r) => r.metadata?.["repo"] === repo)
         : results[0];
       if (match) {
-        const hashIdx = match.id.indexOf("#");
-        resolvedFiles.add(hashIdx > 0 ? match.id.slice(0, hashIdx) : match.id);
+        const parsed = parseSymbolId(match.id);
+        const fileId = parsed.symbolName
+          ? (parsed.isCanonical ? `${parsed.repo}:${parsed.filePath}` : parsed.filePath)
+          : match.id;
+        resolvedFiles.add(fileId);
       } else {
         resolvedFiles.add(file); // keep original even if unresolved
       }

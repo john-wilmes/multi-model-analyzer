@@ -117,11 +117,11 @@ export class InMemoryGraphStore implements GraphStore {
 
   async deleteEdgesForFiles(repo: string, filePaths: readonly string[]): Promise<void> {
     if (filePaths.length === 0) return;
-    const pathSet = new Set(filePaths);
-    const prefixes = filePaths.map(p => p + "#");
+    const canonicalFiles = new Set(filePaths.map(p => repo + ":" + p));
+    const prefixes = filePaths.map(p => repo + ":" + p + "#");
     this.edges = this.edges.filter(e => {
       if (e.metadata?.["repo"] !== repo) return true;
-      if (pathSet.has(e.source)) return false;
+      if (canonicalFiles.has(e.source)) return false;
       return !prefixes.some(pfx => e.source.startsWith(pfx));
     });
   }

@@ -4,6 +4,7 @@
  */
 
 import type { GraphStore } from "@mma/storage";
+import { extractRepo } from "@mma/core";
 import type { GraphEdge, RepoConfig } from "@mma/core";
 import type { CrossRepoGraph, ResolvedCrossRepoEdge } from "./types.js";
 
@@ -51,6 +52,13 @@ function resolveTargetRepo(
   repos: readonly RepoConfig[],
   packageRoots: ReadonlyMap<string, string>,
 ): { targetRepo: string; packageName: string } | null {
+  // Fast path: canonical ID carries repo inline
+  const targetRepoFromId = extractRepo(edge.target);
+  if (targetRepoFromId) {
+    const packageName = extractPackageName(edge.target) ?? edge.target;
+    return { targetRepo: targetRepoFromId, packageName };
+  }
+
   // Fast path: explicit metadata
   if (typeof edge.metadata?.["targetRepo"] === "string") {
     const targetRepo = edge.metadata["targetRepo"];

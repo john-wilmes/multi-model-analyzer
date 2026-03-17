@@ -49,6 +49,7 @@ export async function computeCrossRepoImpact(
   // to avoid O(files × crossEdges) linear scans in the inner loop.
   const crossEdgeIndex = new Map<string, typeof crossRepoGraph.edges[number][]>();
   for (const edge of crossRepoGraph.edges) {
+    // sourceRepo is also derivable via extractRepo(edge.edge.source) for canonical IDs
     const key = `${edge.sourceRepo}\0${edge.edge.source}`;
     const arr = crossEdgeIndex.get(key);
     if (arr) arr.push(edge);

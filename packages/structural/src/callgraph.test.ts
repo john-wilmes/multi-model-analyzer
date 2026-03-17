@@ -26,7 +26,7 @@ function foo() {
     );
 
     expect(edges).toHaveLength(1);
-    expect(edges[0]!.source).toBe("test.ts#foo");
+    expect(edges[0]!.source).toBe("test-repo:test.ts#foo");
     expect(edges[0]!.target).toBe("bar");
     expect(edges[0]!.kind).toBe("calls");
     expect(edges[0]!.metadata?.["repo"]).toBe("test-repo");
@@ -48,8 +48,8 @@ class MyClass {
     );
 
     expect(edges).toHaveLength(1);
-    expect(edges[0]!.source).toBe("test.ts#MyClass.foo");
-    expect(edges[0]!.target).toBe("test.ts#MyClass.bar");
+    expect(edges[0]!.source).toBe("test-repo:test.ts#MyClass.foo");
+    expect(edges[0]!.target).toBe("test-repo:test.ts#MyClass.bar");
   });
 
   it("extracts calls from arrow functions", () => {
@@ -66,7 +66,7 @@ const handler = () => {
     );
 
     expect(edges).toHaveLength(1);
-    expect(edges[0]!.source).toBe("test.ts#handler");
+    expect(edges[0]!.source).toBe("test-repo:test.ts#handler");
     expect(edges[0]!.target).toBe("doSomething");
   });
 
@@ -140,8 +140,8 @@ function outer() {
     );
 
     // outer calls a(), inner calls b() -- each attributed to its own function
-    const outerEdges = edges.filter((e) => e.source === "test.ts#outer");
-    const innerEdges = edges.filter((e) => e.source === "test.ts#inner");
+    const outerEdges = edges.filter((e) => e.source === "test-repo:test.ts#outer");
+    const innerEdges = edges.filter((e) => e.source === "test-repo:test.ts#inner");
     expect(outerEdges).toHaveLength(1);
     expect(outerEdges[0]!.target).toBe("a");
     expect(innerEdges).toHaveLength(1);

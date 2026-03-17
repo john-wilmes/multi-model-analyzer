@@ -5,6 +5,7 @@
  * For scale: dependency-cruiser integration for circular detection and rule violations.
  */
 
+import { makeFileId } from "@mma/core";
 import type { DependencyGraph, GraphEdge } from "@mma/core";
 import type { TreeSitterNode, TreeSitterTree } from "@mma/parsing";
 
@@ -33,9 +34,12 @@ export function extractDependencyGraph(
     for (const imp of imports) {
       if (opts.ignorePatterns.some((p) => imp.includes(p))) continue;
       const resolved = resolveImportSpecifier(imp, filePath, knownPaths, packageRoots);
+      // Use canonical ID for local files so source and target share the same
+      // namespace (enabling cycle detection). External specifiers stay as-is.
+      const target = knownPaths.has(resolved) ? makeFileId(repo, resolved) : resolved;
       edges.push({
-        source: filePath,
-        target: resolved,
+        source: makeFileId(repo, filePath),
+        target,
         kind: "imports",
         metadata: { repo },
       });

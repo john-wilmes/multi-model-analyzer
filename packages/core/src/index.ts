@@ -123,3 +123,12 @@ export type { PhaseResult } from "./tracer.js";
 export { traceSync, traceAsync, runHeuristic } from "./tracer.js";
 
 export { classifyFileKind } from "./classify.js";
+
+export type { ParsedSymbolId } from "./symbol-id.js";
+export {
+  makeSymbolId,
+  makeFileId,
+  parseSymbolId,
+  extractRepo,
+  canonicalize,
+} from "./symbol-id.js";

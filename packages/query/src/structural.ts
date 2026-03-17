@@ -6,6 +6,7 @@
  */
 
 import type { GraphEdge } from "@mma/core";
+import { parseSymbolId } from "@mma/core";
 import type { GraphStore, SearchStore, TraversalOptions } from "@mma/storage";
 
 export interface StructuralQueryResult {
@@ -160,9 +161,13 @@ async function resolveEntityViaBM25(
   // Return both the full FQN (filePath#Symbol) and just the file path,
   // since import edges target file paths while search uses symbol FQNs.
   const candidates = [hit.id];
-  const hashIdx = hit.id.indexOf("#");
-  if (hashIdx > 0) {
-    candidates.push(hit.id.slice(0, hashIdx));
+  const parsed = parseSymbolId(hit.id);
+  if (parsed.symbolName) {
+    // Return both the full FQN and just the file-level ID
+    const fileId = parsed.isCanonical
+      ? `${parsed.repo}:${parsed.filePath}`
+      : parsed.filePath;
+    candidates.push(fileId);
   }
   return candidates;
 }

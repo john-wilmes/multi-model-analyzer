@@ -253,47 +253,47 @@ describe("InMemoryGraphStore", () => {
   describe("deleteEdgesForFiles", () => {
     it("deletes exact-path edges (imports)", async () => {
       await store.addEdges([
-        edge("src/a.ts", "src/c.ts", "imports", "myrepo"),
-        edge("src/b.ts", "src/c.ts", "imports", "myrepo"),
+        edge("myrepo:src/a.ts", "myrepo:src/c.ts", "imports", "myrepo"),
+        edge("myrepo:src/b.ts", "myrepo:src/c.ts", "imports", "myrepo"),
       ]);
 
       await store.deleteEdgesForFiles("myrepo", ["src/a.ts"]);
 
       const remaining = await store.getEdgesByKind("imports", "myrepo");
       expect(remaining).toHaveLength(1);
-      expect(remaining[0]!.source).toBe("src/b.ts");
+      expect(remaining[0]!.source).toBe("myrepo:src/b.ts");
     });
 
     it("deletes sub-symbol edges (calls via # prefix)", async () => {
       await store.addEdges([
-        edge("src/a.ts#Foo.bar", "src/c.ts", "calls", "myrepo"),
-        edge("src/a.ts#baz",    "src/d.ts", "calls", "myrepo"),
-        edge("src/b.ts#Other",  "src/c.ts", "calls", "myrepo"),
+        edge("myrepo:src/a.ts#Foo.bar", "myrepo:src/c.ts", "calls", "myrepo"),
+        edge("myrepo:src/a.ts#baz",     "myrepo:src/d.ts", "calls", "myrepo"),
+        edge("myrepo:src/b.ts#Other",   "myrepo:src/c.ts", "calls", "myrepo"),
       ]);
 
       await store.deleteEdgesForFiles("myrepo", ["src/a.ts"]);
 
       const remaining = await store.getEdgesByKind("calls", "myrepo");
       expect(remaining).toHaveLength(1);
-      expect(remaining[0]!.source).toBe("src/b.ts#Other");
+      expect(remaining[0]!.source).toBe("myrepo:src/b.ts#Other");
     });
 
     it("does not delete edges from other repos", async () => {
       await store.addEdges([
-        edge("src/a.ts", "src/c.ts", "imports", "repo-a"),
-        edge("src/a.ts", "src/d.ts", "imports", "repo-b"),
+        edge("repo-a:src/a.ts", "repo-a:src/c.ts", "imports", "repo-a"),
+        edge("repo-b:src/a.ts", "repo-b:src/d.ts", "imports", "repo-b"),
       ]);
 
       await store.deleteEdgesForFiles("repo-a", ["src/a.ts"]);
 
       const repoBEdges = await store.getEdgesByKind("imports", "repo-b");
       expect(repoBEdges).toHaveLength(1);
-      expect(repoBEdges[0]!.source).toBe("src/a.ts");
+      expect(repoBEdges[0]!.source).toBe("repo-b:src/a.ts");
     });
 
     it("is a no-op for empty file list", async () => {
       await store.addEdges([
-        edge("src/a.ts", "src/b.ts", "imports", "myrepo"),
+        edge("myrepo:src/a.ts", "myrepo:src/b.ts", "imports", "myrepo"),
       ]);
 
       await store.deleteEdgesForFiles("myrepo", []);
@@ -304,28 +304,28 @@ describe("InMemoryGraphStore", () => {
 
     it("does not delete edges where the file is the target, not the source", async () => {
       await store.addEdges([
-        edge("src/other.ts", "src/a.ts", "imports", "myrepo"),
+        edge("myrepo:src/other.ts", "myrepo:src/a.ts", "imports", "myrepo"),
       ]);
 
       await store.deleteEdgesForFiles("myrepo", ["src/a.ts"]);
 
       const remaining = await store.getEdgesByKind("imports", "myrepo");
       expect(remaining).toHaveLength(1);
-      expect(remaining[0]!.target).toBe("src/a.ts");
+      expect(remaining[0]!.target).toBe("myrepo:src/a.ts");
     });
 
     it("handles multiple files in a single call", async () => {
       await store.addEdges([
-        edge("src/a.ts", "src/c.ts", "imports", "myrepo"),
-        edge("src/b.ts", "src/c.ts", "imports", "myrepo"),
-        edge("src/keep.ts", "src/c.ts", "imports", "myrepo"),
+        edge("myrepo:src/a.ts",    "myrepo:src/c.ts", "imports", "myrepo"),
+        edge("myrepo:src/b.ts",    "myrepo:src/c.ts", "imports", "myrepo"),
+        edge("myrepo:src/keep.ts", "myrepo:src/c.ts", "imports", "myrepo"),
       ]);
 
       await store.deleteEdgesForFiles("myrepo", ["src/a.ts", "src/b.ts"]);
 
       const remaining = await store.getEdgesByKind("imports", "myrepo");
       expect(remaining).toHaveLength(1);
-      expect(remaining[0]!.source).toBe("src/keep.ts");
+      expect(remaining[0]!.source).toBe("myrepo:src/keep.ts");
     });
   });
 });

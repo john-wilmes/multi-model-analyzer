@@ -101,17 +101,17 @@ export interface Config { host: string; }
     const graph = extractDependencyGraph(files, "test-repo");
 
     // Exact edge counts: app imports 2, greeter imports 1, config imports 0
-    const appEdges = graph.edges.filter((e) => e.source === "src/app.ts");
+    const appEdges = graph.edges.filter((e) => e.source === "test-repo:src/app.ts");
     expect(appEdges).toHaveLength(2);
     // Import specifiers are resolved to file paths when matches exist
-    expect(appEdges.map((e) => e.target).sort()).toEqual(["src/config.ts", "src/greeter.ts"]);
+    expect(appEdges.map((e) => e.target).sort()).toEqual(["test-repo:src/config.ts", "test-repo:src/greeter.ts"]);
 
-    const greeterEdges = graph.edges.filter((e) => e.source === "src/greeter.ts");
+    const greeterEdges = graph.edges.filter((e) => e.source === "test-repo:src/greeter.ts");
     expect(greeterEdges).toHaveLength(1);
     // "./logger" has no matching file, falls back to raw specifier
     expect(greeterEdges[0]!.target).toBe("./logger");
 
-    const configEdges = graph.edges.filter((e) => e.source === "src/config.ts");
+    const configEdges = graph.edges.filter((e) => e.source === "test-repo:src/config.ts");
     expect(configEdges).toHaveLength(0);
 
     expect(graph.edges).toHaveLength(3);
@@ -127,8 +127,8 @@ export interface Config { host: string; }
 
     expect(graph.edges).toHaveLength(2);
     // Import specifiers are now resolved to file paths
-    expect(graph.edges.find((e) => e.source === "a.ts" && e.target === "b.ts")).toBeDefined();
-    expect(graph.edges.find((e) => e.source === "b.ts" && e.target === "a.ts")).toBeDefined();
+    expect(graph.edges.find((e) => e.source === "test-repo:a.ts" && e.target === "test-repo:b.ts")).toBeDefined();
+    expect(graph.edges.find((e) => e.source === "test-repo:b.ts" && e.target === "test-repo:a.ts")).toBeDefined();
     // With resolved paths, circular dependencies are detected
     expect(graph.circularDependencies.length).toBeGreaterThan(0);
   });

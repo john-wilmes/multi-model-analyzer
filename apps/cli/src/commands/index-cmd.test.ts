@@ -302,7 +302,7 @@ describe("indexCommand", () => {
   it("cleans up stale data for deleted files", async () => {
     // Pre-populate stores with data for the file that will be deleted
     await graphStore.addEdges([
-      { source: "src/old.ts", target: "src/dep.ts", kind: "imports", metadata: { repo: "repo-a" } },
+      { source: "repo-a:src/old.ts", target: "src/dep.ts", kind: "imports", metadata: { repo: "repo-a" } },
     ]);
     // Phase 0 cleanup calls searchStore.delete() with file paths as IDs.
     // Index a doc with file-path ID to verify it gets cleaned up.
@@ -322,7 +322,7 @@ describe("indexCommand", () => {
     await indexCommand(makeOptions([repoA], { kvStore, graphStore, searchStore }));
 
     // Graph edges cleared for repo (Phase 0 calls graphStore.clear(repo))
-    const edges = await graphStore.getEdgesFrom("src/old.ts");
+    const edges = await graphStore.getEdgesFrom("repo-a:src/old.ts");
     expect(edges).toHaveLength(0);
 
     // Search entry for deleted file removed
@@ -602,8 +602,8 @@ describe("indexCommand", () => {
       makeParseResult(parsedFiles1, ["src/a.ts", "src/b.ts", "src/c.ts"]),
     );
 
-    const edgeAB: GraphEdge = { source: "src/a.ts", target: "src/b.ts", kind: "imports", metadata: { repo: "repo-a" } };
-    const edgeBC: GraphEdge = { source: "src/b.ts", target: "src/c.ts", kind: "imports", metadata: { repo: "repo-a" } };
+    const edgeAB: GraphEdge = { source: "repo-a:src/a.ts", target: "repo-a:src/b.ts", kind: "imports", metadata: { repo: "repo-a" } };
+    const edgeBC: GraphEdge = { source: "repo-a:src/b.ts", target: "repo-a:src/c.ts", kind: "imports", metadata: { repo: "repo-a" } };
     mockExtractDepGraph.mockReturnValue({
       repo: "repo-a",
       edges: [edgeAB, edgeBC],
@@ -615,8 +615,8 @@ describe("indexCommand", () => {
     // Verify full index: 2 import edges
     const edgesAfterRun1 = await graphStore.getEdgesByKind("imports", "repo-a");
     expect(edgesAfterRun1).toHaveLength(2);
-    expect(edgesAfterRun1.some((e: GraphEdge) => e.source === "src/a.ts" && e.target === "src/b.ts")).toBe(true);
-    expect(edgesAfterRun1.some((e: GraphEdge) => e.source === "src/b.ts" && e.target === "src/c.ts")).toBe(true);
+    expect(edgesAfterRun1.some((e: GraphEdge) => e.source === "repo-a:src/a.ts" && e.target === "repo-a:src/b.ts")).toBe(true);
+    expect(edgesAfterRun1.some((e: GraphEdge) => e.source === "repo-a:src/b.ts" && e.target === "repo-a:src/c.ts")).toBe(true);
 
     // Verify symbols cached for all 3 files
     expect(await kvStore.get("symbols:repo-a:src/a.ts")).toBeDefined();
@@ -644,7 +644,7 @@ describe("indexCommand", () => {
     );
 
     // extractDependencyGraph returns new edge for the changed file only
-    const edgeAC: GraphEdge = { source: "src/a.ts", target: "src/c.ts", kind: "imports", metadata: { repo: "repo-a" } };
+    const edgeAC: GraphEdge = { source: "repo-a:src/a.ts", target: "repo-a:src/c.ts", kind: "imports", metadata: { repo: "repo-a" } };
     mockExtractDepGraph.mockReturnValue({
       repo: "repo-a",
       edges: [edgeAC],
@@ -656,10 +656,10 @@ describe("indexCommand", () => {
     // Verify incremental result: a→c and b→c (old a→b removed)
     const edgesIncremental = await graphStore.getEdgesByKind("imports", "repo-a");
     expect(edgesIncremental).toHaveLength(2);
-    expect(edgesIncremental.some((e: GraphEdge) => e.source === "src/a.ts" && e.target === "src/c.ts")).toBe(true);
-    expect(edgesIncremental.some((e: GraphEdge) => e.source === "src/b.ts" && e.target === "src/c.ts")).toBe(true);
+    expect(edgesIncremental.some((e: GraphEdge) => e.source === "repo-a:src/a.ts" && e.target === "repo-a:src/c.ts")).toBe(true);
+    expect(edgesIncremental.some((e: GraphEdge) => e.source === "repo-a:src/b.ts" && e.target === "repo-a:src/c.ts")).toBe(true);
     // Old edge a→b must be gone
-    expect(edgesIncremental.some((e: GraphEdge) => e.source === "src/a.ts" && e.target === "src/b.ts")).toBe(false);
+    expect(edgesIncremental.some((e: GraphEdge) => e.source === "repo-a:src/a.ts" && e.target === "repo-a:src/b.ts")).toBe(false);
 
     // Verify cached symbols include all 3 files (b.ts and c.ts from cache)
     expect(await kvStore.get("symbols:repo-a:src/a.ts")).toBeDefined();
@@ -709,8 +709,8 @@ describe("indexCommand", () => {
     // Full re-index should produce identical edges
     const edgesFullReindex = await graphStore.getEdgesByKind("imports", "repo-a");
     expect(edgesFullReindex).toHaveLength(2);
-    expect(edgesFullReindex.some((e: GraphEdge) => e.source === "src/a.ts" && e.target === "src/c.ts")).toBe(true);
-    expect(edgesFullReindex.some((e: GraphEdge) => e.source === "src/b.ts" && e.target === "src/c.ts")).toBe(true);
+    expect(edgesFullReindex.some((e: GraphEdge) => e.source === "repo-a:src/a.ts" && e.target === "repo-a:src/c.ts")).toBe(true);
+    expect(edgesFullReindex.some((e: GraphEdge) => e.source === "repo-a:src/b.ts" && e.target === "repo-a:src/c.ts")).toBe(true);
   });
 
   // -----------------------------------------------------------------------
@@ -736,8 +736,8 @@ describe("indexCommand", () => {
     mockExtractDepGraph.mockReturnValue({
       repo: "repo-a",
       edges: [
-        { source: "src/a.ts", target: "src/b.ts", kind: "imports", metadata: { repo: "repo-a" } },
-        { source: "src/b.ts", target: "src/c.ts", kind: "imports", metadata: { repo: "repo-a" } },
+        { source: "repo-a:src/a.ts", target: "repo-a:src/b.ts", kind: "imports", metadata: { repo: "repo-a" } },
+        { source: "repo-a:src/b.ts", target: "repo-a:src/c.ts", kind: "imports", metadata: { repo: "repo-a" } },
       ],
       circularDependencies: [],
     });
@@ -757,8 +757,8 @@ describe("indexCommand", () => {
 
     const edgesAfterDelete = await graphStore.getEdgesByKind("imports", "repo-a");
     // b→c edge should be gone (b.ts was source), a→b still exists (a.ts is source)
-    expect(edgesAfterDelete.some((e: GraphEdge) => e.source === "src/b.ts")).toBe(false);
-    expect(edgesAfterDelete.some((e: GraphEdge) => e.source === "src/a.ts" && e.target === "src/b.ts")).toBe(true);
+    expect(edgesAfterDelete.some((e: GraphEdge) => e.source === "repo-a:src/b.ts")).toBe(false);
+    expect(edgesAfterDelete.some((e: GraphEdge) => e.source === "repo-a:src/a.ts" && e.target === "repo-a:src/b.ts")).toBe(true);
     expect(edgesAfterDelete).toHaveLength(1);
 
     // KV symbols for b.ts should be cleaned up
