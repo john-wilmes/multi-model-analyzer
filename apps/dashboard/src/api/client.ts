@@ -114,3 +114,22 @@ export interface SystemAtdi {
 export async function fetchAtdi(): Promise<SystemAtdi | null> {
   return fetchJson(`${BASE}/api/atdi`);
 }
+
+export interface CrossRepoEdge {
+  edge: { source: string; target: string; kind: string };
+  sourceRepo: string;
+  targetRepo: string;
+  packageName: string;
+}
+
+export interface CrossRepoGraphData {
+  edges: CrossRepoEdge[];
+  repoPairs: string[];
+  downstreamMap: [string, string[]][];
+  upstreamMap: [string, string[]][];
+}
+
+export async function fetchCrossRepoGraph(repo?: string): Promise<CrossRepoGraphData> {
+  const qs = repo ? `?repo=${encodeURIComponent(repo)}` : '';
+  return fetchJson(`${BASE}/api/cross-repo-graph${qs}`);
+}

@@ -31,6 +31,9 @@ export default function Layout() {
           <Link to="/findings" className={navClass('/findings')}>
             Findings
           </Link>
+          <Link to="/cross-repo" className={navClass('/cross-repo')}>
+            Cross-Repo Graph
+          </Link>
           {repos.length > 0 && (
             <div className="mt-4">
               <p className="px-3 text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">
