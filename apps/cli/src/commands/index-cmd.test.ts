@@ -988,4 +988,73 @@ describe("indexCommand", () => {
     expect(symbolsMap.has("src/a.ts")).toBe(true);
     expect(symbolsMap.has("src/b.ts")).toBe(true);
   });
+
+  // -----------------------------------------------------------------------
+  // Architectural rules: rules passed in options are forwarded to evaluateArchRules
+  // -----------------------------------------------------------------------
+  it("passes options.rules to evaluateArchRules when rules are provided", async () => {
+    const { evaluateArchRules } = await import("@mma/heuristics");
+    const mockEvaluateArchRules = evaluateArchRules as ReturnType<typeof vi.fn>;
+
+    const fakeViolation = {
+      ruleId: "arch/forbidden-import",
+      level: "error" as const,
+      message: { text: "Forbidden import: src/a.ts imports src/b.ts" },
+      locations: [],
+    };
+    mockEvaluateArchRules.mockReturnValue([fakeViolation]);
+
+    mockDetectChanges.mockResolvedValue(
+      makeChangeSet({ repo: "repo-a", commitHash: "archrules1", addedFiles: ["src/a.ts"] }),
+    );
+    mockClassifyFiles.mockReturnValue([makeClassified("src/a.ts", "repo-a")]);
+    mockParseFiles.mockResolvedValue(
+      makeParseResult([makeParsedFile("src/a.ts", "repo-a")], ["src/a.ts"]),
+    );
+    mockExtractDepGraph.mockReturnValue({ ...emptyDepGraph, repo: "repo-a" });
+
+    const rules = [
+      {
+        id: "no-a-imports-b",
+        description: "src/a must not import src/b",
+        kind: "forbidden-import" as const,
+        severity: "error" as const,
+        config: { from: ["src/a.ts"], forbidden: ["src/b.ts"] },
+      },
+    ];
+
+    await indexCommand({
+      ...makeOptions([repoA], { kvStore, graphStore, searchStore }),
+      rules,
+    });
+
+    // evaluateArchRules was called with the rule set and the repo name
+    expect(mockEvaluateArchRules).toHaveBeenCalledWith(rules, expect.any(Array), "repo-a");
+
+    // The violation is stored in the KV store under sarif:arch:<repo>
+    const stored = await kvStore.get("sarif:arch:repo-a");
+    expect(stored).not.toBeNull();
+    const parsed = JSON.parse(stored!) as unknown[];
+    expect(parsed).toHaveLength(1);
+    expect((parsed[0] as { ruleId: string }).ruleId).toBe("arch/forbidden-import");
+  });
+
+  it("skips evaluateArchRules when no rules are configured", async () => {
+    const { evaluateArchRules } = await import("@mma/heuristics");
+    const mockEvaluateArchRules = evaluateArchRules as ReturnType<typeof vi.fn>;
+
+    mockDetectChanges.mockResolvedValue(
+      makeChangeSet({ repo: "repo-a", commitHash: "norules1", addedFiles: ["src/a.ts"] }),
+    );
+    mockClassifyFiles.mockReturnValue([makeClassified("src/a.ts", "repo-a")]);
+    mockParseFiles.mockResolvedValue(
+      makeParseResult([makeParsedFile("src/a.ts", "repo-a")], ["src/a.ts"]),
+    );
+    mockExtractDepGraph.mockReturnValue({ ...emptyDepGraph, repo: "repo-a" });
+
+    // No rules field in options (undefined)
+    await indexCommand(makeOptions([repoA], { kvStore, graphStore, searchStore }));
+
+    expect(mockEvaluateArchRules).not.toHaveBeenCalled();
+  });
 });

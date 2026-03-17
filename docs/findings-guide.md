@@ -305,6 +305,53 @@ Architecture rules enforce configurable structural constraints on the import gra
 
 **When to ignore:** Type-only imports (used only for compile-time checking) may sometimes cross direction boundaries safely. Consider whether the rule should be scoped to runtime imports only.
 
+### Configuring rules in `mma.config.json`
+
+Rules are declared in the top-level `rules` array of your config file. Each rule requires `id`, `kind`, and `config`; `description` and `severity` are optional (severity defaults to `"warning"`).
+
+```json
+{
+  "repos": [...],
+  "mirrorDir": "mirrors",
+  "rules": [
+    {
+      "id": "no-presentation-to-data",
+      "description": "Presentation must not import from infrastructure",
+      "kind": "forbidden-import",
+      "severity": "error",
+      "config": {
+        "from": ["src/presentation/**"],
+        "forbidden": ["src/infrastructure/**"]
+      }
+    },
+    {
+      "id": "layered-arch",
+      "description": "Enforce 3-tier architecture",
+      "kind": "layer-violation",
+      "severity": "warning",
+      "config": {
+        "layers": [
+          { "name": "presentation", "patterns": ["src/controllers/**", "src/routes/**"], "allowedDependencies": ["business"] },
+          { "name": "business",     "patterns": ["src/services/**", "src/domain/**"],   "allowedDependencies": ["data"] },
+          { "name": "data",         "patterns": ["src/repositories/**", "src/models/**"], "allowedDependencies": [] }
+        ]
+      }
+    },
+    {
+      "id": "no-core-importing-cli",
+      "description": "Core packages must not depend on CLI packages",
+      "kind": "dependency-direction",
+      "severity": "error",
+      "config": {
+        "denied": [["packages/core/**", "apps/cli/**"]]
+      }
+    }
+  ]
+}
+```
+
+Rules are validated on startup with `validateArchRules()`. Invalid rules emit a warning and are skipped; valid rules are forwarded to `evaluateArchRules()` for each indexed repository. Violations are stored at KV key `sarif:arch:<repoName>` and aggregated into `sarif:latest`.
+
 ---
 
 ## Temporal Coupling
