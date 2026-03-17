@@ -29,6 +29,7 @@ import { importCommand } from "./commands/import-cmd.js";
 import { validateCommand } from "./commands/validate-cmd.js";
 import { compressCommand, dashboardCommand, maybeDecompress } from "./commands/dashboard-cmd.js";
 import { baselineCreateCommand, baselineCheckCommand } from "./commands/baseline-cmd.js";
+import { deltaCommand } from "./commands/delta-cmd.js";
 import { printJson, printTable, printSarif, validateFormat, validateReportFormat } from "./formatter.js";
 import { parseWatchInterval, watchLoop } from "./watch.js";
 
@@ -70,6 +71,7 @@ async function main(): Promise<void> {
       "force-full-reindex": { type: "boolean", default: false },
       port: { type: "string", default: "3000" },
       backend: { type: "string" },
+      "exit-code": { type: "boolean", default: false },
     },
   });
 
@@ -409,6 +411,63 @@ async function main(): Promise<void> {
     return;
   }
 
+  // delta command: PR delta analysis — new/updated findings in a revision range
+  if (command === "delta") {
+    const range = positionals[1];
+    if (!range) {
+      console.error("Usage: mma delta <revision-range> [--db path] [--format markdown|json|sarif] [--exit-code]");
+      console.error("  Examples: mma delta main..HEAD");
+      console.error("           mma delta origin/main..feature");
+      process.exit(1);
+    }
+    if (!existsSync(dbPath)) {
+      console.error(`Database not found: ${dbPath}`);
+      console.error("Run 'mma index' first to create the analysis database.");
+      process.exit(1);
+    }
+
+    // Validate format
+    const deltaFormatRaw = values.format ?? "markdown";
+    if (!["markdown", "json", "sarif"].includes(deltaFormatRaw)) {
+      console.error(`Invalid format: "${deltaFormatRaw}". Must be one of: markdown, json, sarif`);
+      process.exit(1);
+    }
+    const deltaFormat = deltaFormatRaw as "markdown" | "json" | "sarif";
+
+    // Load config to get repo list (needed for git diff per repo)
+    let deltaRepos: Array<{ name: string; localPath: string }> = [];
+    try {
+      const configPath = resolve(values.config);
+      const configRaw = await readFile(configPath, "utf-8");
+      const config = JSON.parse(configRaw) as CliConfig;
+      const configDir = dirname(configPath);
+      deltaRepos = config.repos.map((r) => ({
+        name: r.name,
+        localPath: resolve(configDir, r.localPath),
+      }));
+    } catch {
+      // No config — use cwd as a single unnamed repo
+      deltaRepos = [{ name: ".", localPath: process.cwd() }];
+    }
+
+    const stores = await createStores({ backend: earlyBackend, dbPath, readonly: true });
+    try {
+      const result = await deltaCommand({
+        kvStore: stores.kvStore,
+        repos: deltaRepos,
+        range,
+        format: deltaFormat,
+      });
+
+      if (values["exit-code"] && result.hasNewOrUpdated) {
+        process.exit(1);
+      }
+    } finally {
+      stores.close();
+    }
+    return;
+  }
+
   // report command bypasses config -- only needs the DB (read-only)
   if (command === "report") {
     if (!existsSync(dbPath)) {
@@ -690,6 +749,8 @@ Usage:
                                                 Query the index (default: table)
   mma affected <rev-range> [--db path] [--format json|table|sarif]
                                                 Show blast radius (default: table)
+  mma delta <rev-range> [-c config.json] [--db path] [--format markdown|json|sarif] [--exit-code]
+                                                Show new/worsened findings for changed files (default: markdown)
   mma serve [--db path/to/mma.db]               Start MCP server (stdio)
   mma export [--db path] [-o file.db] [--salt hex] [--raw]
                                                 Export SQLite DB (default: anonymized)
@@ -732,6 +793,7 @@ Options:
   --force         Bypass narration cache (use with --narrate-only or --api-key)
   --force-full-reindex  Clear and rebuild graph for each repo (default: incremental)
   --backend       Storage backend: sqlite (default) or kuzu
+  --exit-code     Exit with code 1 if new/updated findings exist (use with delta)
   -h, --help      Show this help message
   --version       Show version number
 `);
