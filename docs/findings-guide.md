@@ -358,8 +358,6 @@ Rules are validated on startup with `validateArchRules()`. Invalid rules emit a 
 
 Source: `packages/heuristics/src/temporal-coupling.ts`
 
-> **Note:** The temporal coupling SARIF converter is defined but not yet wired into the CLI aggregation pipeline. These results are available programmatically but do not appear in `sarif:latest` by default.
-
 ### `temporal-coupling/co-change`
 
 **Severity:** warning if confidence >= 80%, note otherwise

@@ -22,6 +22,7 @@ Thumbs.db
 .vscode/
 .idea/
 .serena/
+.claude/settings.local.json
 *.swp
 *.swo
 
