@@ -80,12 +80,17 @@ vi.mock("@mma/model-config", () => ({
     .mockResolvedValue({ results: [], validation: { deadFlags: [], alwaysOnFlags: [], untestedInteractions: [] } }),
 }));
 
-vi.mock("@mma/model-fault", () => ({
-  identifyLogRoots: vi.fn().mockReturnValue([]),
-  traceBackwardFromLog: vi.fn().mockReturnValue({ steps: [] }),
-  buildFaultTree: vi.fn(),
-  analyzeGaps: vi.fn().mockReturnValue([]),
-}));
+vi.mock("@mma/model-fault", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@mma/model-fault")>();
+  return {
+    identifyLogRoots: vi.fn().mockReturnValue([]),
+    traceBackwardFromLog: vi.fn().mockReturnValue({ steps: [], crossServiceCalls: [], tracedEdges: [] }),
+    buildFaultTree: vi.fn(),
+    analyzeGaps: vi.fn().mockReturnValue([]),
+    analyzeCascadingRisk: vi.fn().mockReturnValue([]),
+    FAULT_RULES: actual.FAULT_RULES,
+  };
+});
 
 vi.mock("@mma/model-functional", () => ({
   buildServiceCatalog: vi.fn().mockReturnValue([]),

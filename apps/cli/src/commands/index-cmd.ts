@@ -25,14 +25,16 @@ import type {
   CallGraph,
   ArchitecturalRule,
   RepoMetricsSummary,
+  SarifResult,
 } from "@mma/core";
+import { createSarifResult, createLogicalLocation } from "@mma/core";
 import { detectChanges, classifyFiles, getFileContent, getHeadCommit, isBareRepo, getCommitHistory } from "@mma/ingestion";
 import { parseFiles } from "@mma/parsing";
 import type { TreeSitterTree } from "@mma/parsing";
 import { extractDependencyGraph, buildControlFlowGraph, createCfgIdCounter, extractCallEdgesFromTreeSitter, computeModuleMetrics, summarizeRepoMetrics, detectDeadExports, detectInstabilityViolations } from "@mma/structural";
 import type { TreeSitterNode } from "@mma/parsing";
 import { buildFeatureModel, extractConstraintsFromCode, validateFeatureModel } from "@mma/model-config";
-import { identifyLogRoots, traceBackwardFromLog, buildFaultTree, analyzeGaps } from "@mma/model-fault";
+import { identifyLogRoots, traceBackwardFromLog, buildFaultTree, analyzeGaps, analyzeCascadingRisk, FAULT_RULES } from "@mma/model-fault";
 import { buildServiceCatalog, generateDocumentation } from "@mma/model-functional";
 import {
   inferServicesWithMeta,
@@ -970,12 +972,14 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         };
 
         const faultTrees = [];
+        const allTraces: import("@mma/model-fault").BackwardTrace[] = [];
         // Limit tracing for POC performance; full-scale tracing requires call graph
         const MAX_TRACED_ROOTS = 50;
         const tracedRoots = logRoots.slice(0, MAX_TRACED_ROOTS);
         let emptyTraces = 0;
         for (const root of tracedRoots) {
           const trace = traceBackwardFromLog(root, cfgs, callGraph);
+          allTraces.push(trace);
           if (trace.steps.length > 0) {
             faultTrees.push(buildFaultTree(trace, repo.name));
           } else {
@@ -989,11 +993,22 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
           log(`    ${emptyTraces}/${tracedRoots.length} traces returned no steps (no matching CFG or log node)`);
         }
 
-        const gapResults = analyzeGaps(cfgs, repo.name);
-        await kvStore.set(`sarif:fault:${repo.name}`, JSON.stringify(gapResults));
+        // Collect all fault SARIF results
+        const faultResults: SarifResult[] = [];
+
+        // Gap analysis (unhandled-error-path + silent-failure)
+        faultResults.push(...analyzeGaps(cfgs, repo.name));
+
+        // Cascading failure risk from cross-service calls
+        faultResults.push(...analyzeCascadingRisk(allTraces, repo.name));
+
+        // Missing error boundaries (async functions without try/catch)
+        faultResults.push(...detectMissingErrorBoundaries(cfgs, repo.name));
+
+        await kvStore.set(`sarif:fault:${repo.name}`, JSON.stringify(faultResults));
         await kvStore.set(`faultTrees:${repo.name}`, JSON.stringify(faultTrees));
 
-        log(`  [${repo.name}] [fault]: ${logRoots.length} log roots, ${cfgs.size} CFGs, ${faultTrees.length} fault trees, ${gapResults.length} gap findings`);
+        log(`  [${repo.name}] [fault]: ${logRoots.length} log roots, ${cfgs.size} CFGs, ${faultTrees.length} fault trees, ${faultResults.length} fault findings`);
       } catch (error) {
         console.error(`  Failed to build fault model for ${repo.name}:`, error);
       }
@@ -1290,10 +1305,20 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
   if (annotatedResults.length > 0) {
     // Build rule descriptors from the unique ruleIds found in results
     const ruleIds = [...new Set(annotatedResults.map(r => r.ruleId))];
-    const ruleDescriptors: import("@mma/core").SarifReportingDescriptor[] = ruleIds.map(id => ({
-      id,
-      shortDescription: { text: id.replace("arch/", "Architectural: ").replace(/-/g, " ") },
-    }));
+    // Build a lookup from known rule definitions (e.g., FAULT_RULES)
+    const knownRules = new Map<string, import("@mma/core").SarifReportingDescriptor>();
+    for (const rule of FAULT_RULES) {
+      knownRules.set(rule.id, rule);
+    }
+
+    const ruleDescriptors: import("@mma/core").SarifReportingDescriptor[] = ruleIds.map(id => {
+      const known = knownRules.get(id);
+      if (known) return known;
+      return {
+        id,
+        shortDescription: { text: id.replace("arch/", "Architectural: ").replace(/-/g, " ") },
+      };
+    });
 
     const sarifLog: import("@mma/core").SarifLog = {
       $schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
@@ -1550,5 +1575,37 @@ function findFunctionNodes(rootNode: TreeSitterNode): FunctionNodeInfo[] {
   }
 
   walk(rootNode);
+  return results;
+}
+
+function detectMissingErrorBoundaries(
+  cfgs: ReadonlyMap<string, ControlFlowGraph>,
+  repo: string,
+): SarifResult[] {
+  const results: SarifResult[] = [];
+
+  for (const [functionId, cfg] of cfgs) {
+    const hasAwait = cfg.nodes.some(n => n.kind === "statement" && /\bawait\b/.test(n.label));
+    if (!hasAwait) continue;
+
+    const hasTryCatch = cfg.nodes.some(n => n.kind === "catch" || n.kind === "try");
+    if (hasTryCatch) continue;
+
+    results.push(
+      createSarifResult(
+        "fault/missing-error-boundary",
+        "warning",
+        `Async function ${functionId} uses await but has no try/catch error boundary`,
+        {
+          locations: [{
+            logicalLocations: [
+              createLogicalLocation(repo, functionId.split("#")[0] ?? "", functionId),
+            ],
+          }],
+        },
+      ),
+    );
+  }
+
   return results;
 }

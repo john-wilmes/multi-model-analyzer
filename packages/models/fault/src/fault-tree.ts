@@ -14,6 +14,7 @@ import type {
   FaultTreeNode,
   ControlFlowGraph,
   ControlFlowNode,
+  CfgEdge,
   SarifResult,
   SarifReportingDescriptor,
   SarifCodeFlow,
@@ -62,18 +63,91 @@ export function buildFaultTree(
     label: `${trace.root.template.severity.toUpperCase()}: ${trace.root.template.template}`,
     kind: "top-event",
     location: trace.root.location,
-    children: buildChildNodes(trace.steps),
+    children: buildChildNodes(trace.steps, trace.tracedEdges),
   };
 
   return { topEvent, repo };
 }
 
-function buildChildNodes(steps: readonly TraceStep[]): FaultTreeNode[] {
+/**
+ * Classify condition nodes as AND (same path) or OR (parallel paths)
+ * using forward reachability on the traced CFG edges.
+ */
+function classifyConditions(
+  conditionNodeIds: readonly string[],
+  tracedEdges: readonly CfgEdge[],
+): string[][] {
+  if (conditionNodeIds.length <= 1) {
+    return conditionNodeIds.length === 1 ? [[conditionNodeIds[0]!]] : [];
+  }
+
+  // Build forward adjacency from traced edges
+  const adj = new Map<string, Set<string>>();
+  for (const edge of tracedEdges) {
+    let s = adj.get(edge.from);
+    if (!s) { s = new Set(); adj.set(edge.from, s); }
+    s.add(edge.to);
+  }
+
+  // Check if `from` can reach `to` via traced edges
+  function canReach(from: string, to: string): boolean {
+    const visited = new Set<string>();
+    const queue = [from];
+    while (queue.length > 0) {
+      const node = queue.pop()!;
+      if (node === to) return true;
+      if (visited.has(node)) continue;
+      visited.add(node);
+      const neighbors = adj.get(node);
+      if (neighbors) {
+        for (const n of neighbors) queue.push(n);
+      }
+    }
+    return false;
+  }
+
+  // Union-Find: conditions reachable from each other are on the same path
+  const parent = new Map<string, string>();
+  for (const id of conditionNodeIds) parent.set(id, id);
+
+  function find(x: string): string {
+    let root = x;
+    while (parent.get(root) !== root) root = parent.get(root)!;
+    parent.set(x, root);
+    return root;
+  }
+
+  function union(a: string, b: string): void {
+    parent.set(find(a), find(b));
+  }
+
+  const ids = [...conditionNodeIds];
+  for (let i = 0; i < ids.length; i++) {
+    for (let j = i + 1; j < ids.length; j++) {
+      if (canReach(ids[i]!, ids[j]!) || canReach(ids[j]!, ids[i]!)) {
+        union(ids[i]!, ids[j]!);
+      }
+    }
+  }
+
+  // Collect groups
+  const groups = new Map<string, string[]>();
+  for (const id of conditionNodeIds) {
+    const root = find(id);
+    let group = groups.get(root);
+    if (!group) { group = []; groups.set(root, group); }
+    group.push(id);
+  }
+
+  return [...groups.values()];
+}
+
+function buildChildNodes(steps: readonly TraceStep[], tracedEdges: readonly CfgEdge[]): FaultTreeNode[] {
   if (steps.length === 0) {
     return [];
   }
 
-  // Materialize all step kinds into fault tree nodes.
+  // Materialize all step kinds into fault tree nodes (same switch as before, keep it identical)
   const allNodes: FaultTreeNode[] = steps.map((s) => {
     switch (s.kind) {
       case "condition":
@@ -112,26 +186,57 @@ function buildChildNodes(steps: readonly TraceStep[]): FaultTreeNode[] {
   });
 
   const conditionNodes = allNodes.filter((n) => n.id.startsWith("basic-"));
+  const nonConditions = allNodes.filter((n) => !n.id.startsWith("basic-"));
 
-  // Multiple conditions on the backward trace represent alternative paths that
-  // can each independently trigger the error — they form an OR gate.
-  // Sequential conditions along a single path would require an AND gate, but
-  // the backward DFS explores all predecessors so each condition node here
-  // represents a distinct path to the error, making OR correct.
-  if (conditionNodes.length > 1) {
-    const nonConditions = allNodes.filter((n) => !n.id.startsWith("basic-"));
+  if (conditionNodes.length <= 1) {
+    return allNodes;
+  }
+
+  // Classify conditions using traced edge topology
+  const conditionSteps = steps.filter(s => s.kind === "condition");
+  const conditionNodeIds = conditionSteps.map(s => s.nodeId);
+  const groups = classifyConditions(conditionNodeIds, tracedEdges);
+
+  // Map nodeId to FaultTreeNode
+  const nodeById = new Map<string, FaultTreeNode>();
+  for (const node of conditionNodes) {
+    nodeById.set(node.id.replace("basic-", ""), node);
+  }
+
+  if (groups.length === 1) {
+    // All conditions on same path → AND gate
     return [
       {
-        id: `gate-or-${steps[0]!.nodeId}`,
-        label: "Any of these conditions",
-        kind: "or-gate" as const,
+        id: `gate-and-${steps[0]!.nodeId}`,
+        label: "All of these conditions",
+        kind: "and-gate" as const,
         children: conditionNodes,
       },
       ...nonConditions,
     ];
   }
 
-  return allNodes;
+  // Multiple groups → OR gate, with AND gates for groups of size > 1
+  const gateChildren: FaultTreeNode[] = groups.map((group) => {
+    const nodes = group.map(id => nodeById.get(id)).filter((n): n is FaultTreeNode => n != null);
+    if (nodes.length === 1) return nodes[0]!;
+    return {
+      id: `gate-and-${group[0]}`,
+      label: "All of these conditions",
+      kind: "and-gate" as const,
+      children: nodes,
+    };
+  });
+
+  return [
+    {
+      id: `gate-or-${steps[0]!.nodeId}`,
+      label: "Any of these conditions",
+      kind: "or-gate" as const,
+      children: gateChildren,
+    },
+    ...nonConditions,
+  ];
 }
 
 export function analyzeGaps(
@@ -158,6 +263,25 @@ export function analyzeGaps(
         (n) => n.kind === "throw",
       );
 
+      // Empty catch block = silent failure (swallowed error)
+      if (reachable.length === 0) {
+        results.push(
+          createSarifResult(
+            "fault/silent-failure",
+            "warning",
+            `Empty catch block in ${functionId} silently swallows errors`,
+            {
+              locations: [{
+                logicalLocations: [
+                  createLogicalLocation(repo, functionId, `${functionId}#catch`),
+                ],
+              }],
+            },
+          ),
+        );
+        continue;
+      }
+
       if (!hasLogging && !hasRethrow) {
         results.push(
           createSarifResult(
@@ -168,6 +292,43 @@ export function analyzeGaps(
               locations: [{
                 logicalLocations: [
                   createLogicalLocation(repo, functionId, `${functionId}#catch`),
+                ],
+              }],
+            },
+          ),
+        );
+      }
+    }
+  }
+
+  return results;
+}
+
+export function analyzeCascadingRisk(
+  traces: readonly BackwardTrace[],
+  repo: string,
+): SarifResult[] {
+  const seen = new Set<string>();
+  const results: SarifResult[] = [];
+
+  const circuitBreakerPattern = /circuit.?breaker|retry|fallback|timeout|bulkhead/i;
+
+  for (const trace of traces) {
+    for (const call of trace.crossServiceCalls) {
+      const key = `${call.callerService}->${call.calleeService}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      if (!circuitBreakerPattern.test(call.targetMethod)) {
+        results.push(
+          createSarifResult(
+            "fault/cascading-failure-risk",
+            "note",
+            `Cross-service call from ${call.callerService} to ${call.calleeService} (${call.targetMethod}) has no circuit breaker pattern`,
+            {
+              locations: [{
+                logicalLocations: [
+                  createLogicalLocation(repo, call.callerService, call.targetMethod),
                 ],
               }],
             },

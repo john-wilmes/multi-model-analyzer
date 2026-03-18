@@ -6,7 +6,7 @@
  * a gate in the fault tree.
  */
 
-import type { CallGraph, ControlFlowGraph, LogicalLocation } from "@mma/core";
+import type { CallGraph, ControlFlowGraph, CfgEdge, LogicalLocation } from "@mma/core";
 import type { LogRoot } from "./log-roots.js";
 
 export interface TraceStep {
@@ -20,6 +20,7 @@ export interface BackwardTrace {
   readonly root: LogRoot;
   readonly steps: readonly TraceStep[];
   readonly crossServiceCalls: readonly CrossServiceCall[];
+  readonly tracedEdges: readonly CfgEdge[];
 }
 
 export interface CrossServiceCall {
@@ -36,6 +37,7 @@ export function traceBackwardFromLog(
 ): BackwardTrace {
   const steps: TraceStep[] = [];
   const crossServiceCalls: CrossServiceCall[] = [];
+  const tracedEdges: CfgEdge[] = [];
 
   // Find the CFG containing this log statement.
   // fullyQualifiedName is "filePath:lineNumber" -- extract the file path
@@ -44,7 +46,7 @@ export function traceBackwardFromLog(
   const colonIdx = fqn?.lastIndexOf(":");
   const filePath = colonIdx != null && colonIdx > 0 ? fqn!.slice(0, colonIdx) : undefined;
   if (!filePath) {
-    return { root, steps: [], crossServiceCalls: [] };
+    return { root, steps: [], crossServiceCalls: [], tracedEdges: [] };
   }
 
   // CFGs are keyed as "filePath#functionName" -- find by file prefix
@@ -63,12 +65,12 @@ export function traceBackwardFromLog(
     }
   }
   if (!cfg || !logNode) {
-    return { root, steps: [], crossServiceCalls: [] };
+    return { root, steps: [], crossServiceCalls: [], tracedEdges: [] };
   }
 
   // Trace backward through CFG
   const visited = new Set<string>();
-  traceBackwardDFS(logNode, cfg, visited, steps);
+  traceBackwardDFS(logNode, cfg, visited, steps, tracedEdges);
 
   // Find callers of this function for cross-service tracing
   const callers = callGraph.edges.filter(
@@ -88,7 +90,7 @@ export function traceBackwardFromLog(
     }
   }
 
-  return { root, steps, crossServiceCalls };
+  return { root, steps, crossServiceCalls, tracedEdges };
 }
 
 function findLogNode(
@@ -146,6 +148,7 @@ function traceBackwardDFS(
   cfg: ControlFlowGraph,
   visited: Set<string>,
   steps: TraceStep[],
+  tracedEdges: CfgEdge[],
 ): void {
   if (visited.has(nodeId)) return;
   visited.add(nodeId);
@@ -169,6 +172,7 @@ function traceBackwardDFS(
   // Find predecessors
   const incomingEdges = cfg.edges.filter((e) => e.to === nodeId);
   for (const edge of incomingEdges) {
-    traceBackwardDFS(edge.from, cfg, visited, steps);
+    tracedEdges.push(edge);
+    traceBackwardDFS(edge.from, cfg, visited, steps, tracedEdges);
   }
 }
