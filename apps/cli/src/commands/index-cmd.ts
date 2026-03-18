@@ -128,6 +128,7 @@ export interface IndexOptions {
   readonly narrateForce?: boolean;
   readonly forceFullReindex?: boolean;
   readonly advisories?: readonly Advisory[];
+  readonly enrich?: boolean;
 }
 
 export interface IndexResult {
@@ -1178,7 +1179,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
 
         // Tier 3: Haiku LLM for low-confidence method summaries
         let tier3Count = 0;
-        if (options.anthropicApiKey && (!sharedApiBudget || sharedApiBudget.remaining > 0)) {
+        if (options.enrich && options.anthropicApiKey && (!sharedApiBudget || sharedApiBudget.remaining > 0)) {
           let tier3Candidates = [...summaryMap.entries()]
             .filter(([, s]) => shouldEscalateToTier3(s, undefined))
             .map(([entityId, s]) => ({
@@ -1208,7 +1209,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
 
         // Tier 4: Sonnet for service-level summaries
         let tier4Count = 0;
-        if (options.anthropicApiKey) {
+        if (options.enrich && options.anthropicApiKey) {
           const services6b = servicesByRepo.get(repo.name);
           if (services6b && services6b.length > 0) {
             const inputs: ServiceSummaryInput[] = services6b.map((svc) => ({
