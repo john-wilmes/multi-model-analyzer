@@ -875,11 +875,15 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
               if (clean && clean !== "*") installed.push({ name, version: clean });
             }
           }
-          const vulnMatches = matchAdvisories(installed, options.advisories);
-          const reachability = checkVulnReachability(vulnMatches, depGraph?.edges ?? []);
-          const vulnSarif = vulnReachabilityToSarif(reachability, repo.name);
-          await kvStore.set(`sarif:vuln:${repo.name}`, JSON.stringify(vulnSarif));
-          log(`    ${vulnSarif.length} reachable vulnerabilities found`);
+          if (installed.length === 0) {
+            log(`    [vuln] no package.json in changeset, skipping (use --force-full-reindex to re-scan)`);
+          } else {
+            const vulnMatches = matchAdvisories(installed, options.advisories);
+            const reachability = checkVulnReachability(vulnMatches, depGraph?.edges ?? []);
+            const vulnSarif = vulnReachabilityToSarif(reachability, repo.name);
+            await kvStore.set(`sarif:vuln:${repo.name}`, JSON.stringify(vulnSarif));
+            log(`    ${vulnSarif.length} reachable vulnerabilities found`);
+          }
         }
 
         log(`  [${repo.name}] Phase 5: ${Math.round(performance.now() - phase5Start)}ms`);
@@ -1084,14 +1088,18 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
 
         // Tier 3: Haiku LLM for low-confidence method summaries
         let tier3Count = 0;
-        if (options.anthropicApiKey) {
-          const tier3Candidates = [...summaryMap.entries()]
+        let apiCallsRemaining = options.maxApiCalls;
+        if (options.anthropicApiKey && (apiCallsRemaining === undefined || apiCallsRemaining > 0)) {
+          let tier3Candidates = [...summaryMap.entries()]
             .filter(([, s]) => shouldEscalateToTier3(s, undefined))
             .map(([entityId, s]) => ({
               entityId,
               description: s.description,
               context: entityId,
             }));
+          if (apiCallsRemaining !== undefined) {
+            tier3Candidates = tier3Candidates.slice(0, apiCallsRemaining);
+          }
           if (tier3Candidates.length > 0) {
             log(`    Tier 3 (Haiku): upgrading ${tier3Candidates.length} low-confidence summaries`);
             const tier3Results = await tier3BatchSummarize(
@@ -1103,6 +1111,9 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
                 summaryMap.set(s.entityId, s);
                 tier3Count++;
               }
+            }
+            if (apiCallsRemaining !== undefined) {
+              apiCallsRemaining = Math.max(0, apiCallsRemaining - tier3Candidates.length);
             }
           }
         }
@@ -1127,7 +1138,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
               ...SONNET_DEFAULTS,
               apiKey: options.anthropicApiKey,
               kvStore,
-              maxApiCalls: options.maxApiCalls,
+              maxApiCalls: apiCallsRemaining,
             });
             for (const s of tier4Result.summaries) {
               if (s.confidence > 0) {

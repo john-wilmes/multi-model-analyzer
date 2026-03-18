@@ -144,7 +144,7 @@ Repos --> Ingestion --> Parsing --> Structural Analysis --> Heuristic Analysis
 
 **Parsing** uses [tree-sitter](https://tree-sitter.github.io/tree-sitter/) (WASM) for fast syntax-only parsing, with optional [ts-morph](https://ts-morph.com/) for type-resolved symbols.
 
-**Summarization** has 4 tiers -- the first 3 are free and local:
+**Summarization** has 4 tiers -- the first 2 are free and local; tiers 3–4 use the Anthropic API:
 
 | Tier | Source | Cost | Example |
 |------|--------|------|---------|

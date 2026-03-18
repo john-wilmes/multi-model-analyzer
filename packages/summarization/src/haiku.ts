@@ -41,10 +41,19 @@ export async function summarizeWithHaiku(
       maxTokens,
       batchSize: 1,
     });
+    const trimmed = text.trim();
+    if (!trimmed) {
+      return {
+        entityId,
+        tier: 3,
+        description,
+        confidence: 0,
+      };
+    }
     return {
       entityId,
       tier: 3,
-      description: text.trim(),
+      description: trimmed,
       confidence: 0.85,
     };
   } catch {
