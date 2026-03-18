@@ -469,6 +469,8 @@ export function registerTools(server: McpServer, stores: Stores): void {
       limit: z.number().int().min(1).max(200).default(50).describe("Max results per page"),
     },
   }, async ({ kind, repo, offset, limit }) => {
+    const o = offset ?? 0;
+    const l = limit ?? 50;
     const result: Record<string, unknown> = {};
 
     if (kind === "features" || kind === "all") {
@@ -478,7 +480,7 @@ export function registerTools(server: McpServer, stores: Stores): void {
           const data = JSON.parse(raw) as { sharedFlags: Array<{ name: string; repos: string[]; coordinated: boolean }> };
           let flags = data.sharedFlags;
           if (repo) flags = flags.filter((f) => f.repos.includes(repo));
-          result.features = paginated(flags, offset, limit);
+          result.features = paginated(flags, o, l);
         } catch { result.features = { error: "Could not parse cross-repo:features" }; }
       }
     }
@@ -490,7 +492,7 @@ export function registerTools(server: McpServer, stores: Stores): void {
           const data = JSON.parse(raw) as { faultLinks: Array<{ endpoint: string; sourceRepo: string; targetRepo: string }> };
           let links = data.faultLinks;
           if (repo) links = links.filter((l) => l.sourceRepo === repo || l.targetRepo === repo);
-          result.faults = paginated(links, offset, limit);
+          result.faults = paginated(links, o, l);
         } catch { result.faults = { error: "Could not parse cross-repo:faults" }; }
       }
     }
@@ -499,10 +501,10 @@ export function registerTools(server: McpServer, stores: Stores): void {
       const raw = await kvStore.get("cross-repo:catalog");
       if (raw) {
         try {
-          const data = JSON.parse(raw) as { entries: Array<{ entry: { name: string }; repo: string }> };
+          const data = JSON.parse(raw) as { entries: Array<{ entry: { name: string }; repo: string; consumers?: string[]; producers?: string[] }> };
           let entries = data.entries;
-          if (repo) entries = entries.filter((e) => e.repo === repo);
-          result.catalog = paginated(entries, offset, limit);
+          if (repo) entries = entries.filter((e) => e.repo === repo || e.consumers?.includes(repo) || e.producers?.includes(repo));
+          result.catalog = paginated(entries, o, l);
         } catch { result.catalog = { error: "Could not parse cross-repo:catalog" }; }
       }
     }

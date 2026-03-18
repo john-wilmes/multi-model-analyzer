@@ -17,6 +17,7 @@
   "dependencies": {
     "@mma/core": "*",
     "@mma/storage": "*",
-    "@mma/diagnostics": "*"
+    "@mma/diagnostics": "*",
+    "@mma/correlation": "*"
   }
 }
