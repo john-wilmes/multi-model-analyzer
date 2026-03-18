@@ -67,7 +67,14 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(payload);
 }
 
-async function startHttpServer(opts: ServerOptions): Promise<void> {
+export interface HttpServerHandle {
+  /** Close the HTTP server and resolve when all connections are drained. */
+  close(): Promise<void>;
+  readonly port: number;
+  readonly host: string;
+}
+
+async function startHttpServer(opts: ServerOptions): Promise<HttpServerHandle> {
   const host = opts.host ?? "127.0.0.1";
   const port = opts.port ?? 3001;
 
@@ -134,20 +141,37 @@ async function startHttpServer(opts: ServerOptions): Promise<void> {
 
   console.log(`MCP HTTP server listening on http://${host}:${port}/mcp`);
 
-  // Graceful shutdown
-  await new Promise<void>((resolve) => {
-    const shutdown = () => {
-      httpServer.close(() => resolve());
-    };
-    process.once("SIGINT", shutdown);
-    process.once("SIGTERM", shutdown);
-  });
+  return {
+    port,
+    host,
+    close(): Promise<void> {
+      return new Promise((resolve, reject) => {
+        httpServer.close((err) => (err ? reject(err) : resolve()));
+      });
+    },
+  };
 }
 
 export async function startServer(opts: ServerOptions): Promise<void> {
   if (opts.transport === "http") {
-    await startHttpServer(opts);
+    const handle = await startHttpServer(opts);
+    // Block until SIGINT/SIGTERM for the CLI use-case
+    await new Promise<void>((resolve) => {
+      const shutdown = () => {
+        void handle.close().then(resolve);
+      };
+      process.once("SIGINT", shutdown);
+      process.once("SIGTERM", shutdown);
+    });
   } else {
     await startStdioServer(opts);
   }
+}
+
+/**
+ * Start the HTTP server and return a handle for programmatic use (e.g. tests).
+ * The caller is responsible for calling `handle.close()` when done.
+ */
+export async function startHttpServerForTest(opts: ServerOptions): Promise<HttpServerHandle> {
+  return startHttpServer(opts);
 }
