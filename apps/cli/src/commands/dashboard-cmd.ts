@@ -550,6 +550,74 @@ async function handleApi(
     }
   }
 
+  // GET /api/cross-repo-features?repo=X
+  if (path === "/api/cross-repo-features") {
+    type SharedFlag = { name: string; repos: string[]; coordinated: boolean };
+    const raw = await kvStore.get("cross-repo:features");
+    if (!raw) return sendJson(res, { flags: [] });
+    try {
+      const flags = JSON.parse(raw) as SharedFlag[];
+      const repo = query.single["repo"];
+      const filtered = repo ? flags.filter((f) => f.repos.includes(repo)) : flags;
+      return sendJson(res, { flags: filtered });
+    } catch {
+      return sendJson(res, { flags: [] });
+    }
+  }
+
+  // GET /api/cross-repo-faults?repo=X
+  if (path === "/api/cross-repo-faults") {
+    type CrossRepoFaultLink = {
+      endpoint: string;
+      sourceRepo: string;
+      targetRepo: string;
+      sourceFaultTreeCount: number;
+      targetFaultTreeCount: number;
+    };
+    const raw = await kvStore.get("cross-repo:faults");
+    if (!raw) return sendJson(res, { faultLinks: [] });
+    try {
+      const faultLinks = JSON.parse(raw) as CrossRepoFaultLink[];
+      const repo = query.single["repo"];
+      const filtered = repo
+        ? faultLinks.filter((l) => l.sourceRepo === repo || l.targetRepo === repo)
+        : faultLinks;
+      return sendJson(res, { faultLinks: filtered });
+    } catch {
+      return sendJson(res, { faultLinks: [] });
+    }
+  }
+
+  // GET /api/cross-repo-catalog?repo=X
+  if (path === "/api/cross-repo-catalog") {
+    type SystemCatalogEntry = {
+      entry: {
+        name: string;
+        purpose: string;
+        dependencies: string[];
+        apiSurface: { method: string; path: string }[];
+        errorHandlingSummary: string;
+      };
+      repo: string;
+      consumers: string[];
+      producers: string[];
+    };
+    const raw = await kvStore.get("cross-repo:catalog");
+    if (!raw) return sendJson(res, { entries: [] });
+    try {
+      const entries = JSON.parse(raw) as SystemCatalogEntry[];
+      const repo = query.single["repo"];
+      const filtered = repo
+        ? entries.filter(
+            (e) => e.repo === repo || e.consumers.includes(repo) || e.producers.includes(repo),
+          )
+        : entries;
+      return sendJson(res, { entries: filtered });
+    } catch {
+      return sendJson(res, { entries: [] });
+    }
+  }
+
   return sendError(res, "Not found", 404);
 }
 
