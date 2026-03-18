@@ -53,6 +53,7 @@ export interface DashboardOptions {
   readonly kvStore: KVStore;
   readonly graphStore: GraphStore;
   readonly port: number;
+  readonly host: string;
   readonly staticDir: string;
 }
 
@@ -83,7 +84,7 @@ function sendJson(res: ServerResponse, data: unknown, status = 200): void {
   res.writeHead(status, {
     "Content-Type": "application/json",
     "Content-Length": Buffer.byteLength(body),
-    "Access-Control-Allow-Origin": "http://localhost",
+    "Access-Control-Allow-Origin": "*",
   });
   res.end(body);
 }
@@ -653,7 +654,7 @@ export async function dashboardCommand(options: DashboardOptions): Promise<void>
       const path = url.split("?")[0]!;
 
       if (req.method === "OPTIONS") {
-        res.writeHead(204, { "Access-Control-Allow-Origin": "http://localhost" });
+        res.writeHead(204, { "Access-Control-Allow-Origin": "*" });
         res.end();
         return;
       }
@@ -676,12 +677,13 @@ export async function dashboardCommand(options: DashboardOptions): Promise<void>
   );
 
   await new Promise<void>((resolve, reject) => {
-    server.listen(port, "127.0.0.1", () => resolve());
+    server.listen(port, options.host, () => resolve());
     server.once("error", reject);
   });
 
-  const url = `http://localhost:${port}`;
-  console.log(`Dashboard running at ${url}`);
+  const browseHost = options.host === "0.0.0.0" ? "localhost" : options.host;
+  const url = `http://${browseHost}:${port}`;
+  console.log(`Dashboard running at ${url}${options.host === "0.0.0.0" ? " (listening on all interfaces)" : ""}`);
 
   // Auto-open browser (best-effort, platform-aware)
   const opener =

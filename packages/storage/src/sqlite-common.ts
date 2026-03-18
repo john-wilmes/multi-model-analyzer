@@ -38,6 +38,7 @@ export function openDatabase(dbPath: string, wal = true, readonly = false): Data
   db.pragma("cache_size = -131072"); // 128MB
   db.pragma("temp_store = MEMORY");
   db.pragma("foreign_keys = ON");
+  db.pragma("busy_timeout = 5000");
   if (dbPath !== ":memory:") {
     db.pragma("mmap_size = 268435456"); // 256MB
   }

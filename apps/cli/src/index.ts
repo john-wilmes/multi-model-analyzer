@@ -74,6 +74,7 @@ async function main(): Promise<void> {
       force: { type: "boolean", default: false },
       "force-full-reindex": { type: "boolean", default: false },
       port: { type: "string", default: "3000" },
+      host: { type: "string", default: "127.0.0.1" },
       backend: { type: "string" },
       "exit-code": { type: "boolean", default: false },
       repo: { type: "string" },
@@ -573,6 +574,7 @@ async function main(): Promise<void> {
         kvStore: stores.kvStore,
         graphStore: stores.graphStore,
         port,
+        host: values.host ?? "127.0.0.1",
         staticDir,
       });
     } finally {
@@ -797,7 +799,8 @@ Usage:
   mma audit [--audit-file file.json] [--repo name] [--db path] [-v]
                                                 Parse npm audit JSON and check vulnerability reachability
   mma compress [--db path]                      Gzip the analysis database
-  mma dashboard [--db path] [--port 3000]       Serve local web dashboard
+  mma dashboard [--db path] [--port 3000] [--host 127.0.0.1]
+                                                Serve local web dashboard
 
 Options:
   -c, --config    Path to config file (default: mma.config.json)
@@ -817,6 +820,7 @@ Options:
   --sample-size   Findings to sample per check (default: 50)
   --seed          PRNG seed for reproducibility (default: 42)
   --port          Port for dashboard server (default: 3000)
+  --host          Host/IP to bind dashboard server (default: 127.0.0.1)
   --force         Bypass narration cache (use with --narrate-only or --api-key)
   --force-full-reindex  Clear and rebuild graph for each repo (default: incremental)
   --backend       Storage backend: sqlite (default) or kuzu
