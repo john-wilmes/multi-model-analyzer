@@ -460,9 +460,21 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     }
   }
 
-  // Shared API budget across all parallel workers
+  // Shared API budget across all parallel workers.
+  // reserve() atomically claims budget before async work; refund() returns unused.
+  // This prevents concurrent pLimit workers from overspending.
   const sharedApiBudget = options.maxApiCalls !== undefined
-    ? { remaining: options.maxApiCalls }
+    ? {
+        remaining: options.maxApiCalls,
+        reserve(n: number): number {
+          const granted = Math.min(n, this.remaining);
+          this.remaining -= granted;
+          return granted;
+        },
+        refund(n: number): void {
+          this.remaining += n;
+        },
+      }
     : undefined;
 
   const limit = pLimit(4);
@@ -1166,8 +1178,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
 
         // Tier 3: Haiku LLM for low-confidence method summaries
         let tier3Count = 0;
-        const apiCallsRemaining = sharedApiBudget ? sharedApiBudget.remaining : undefined;
-        if (options.anthropicApiKey && (apiCallsRemaining === undefined || apiCallsRemaining > 0)) {
+        if (options.anthropicApiKey && (!sharedApiBudget || sharedApiBudget.remaining > 0)) {
           let tier3Candidates = [...summaryMap.entries()]
             .filter(([, s]) => shouldEscalateToTier3(s, undefined))
             .map(([entityId, s]) => ({
@@ -1175,8 +1186,10 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
               description: s.description,
               context: sourceContextMap.get(entityId) ?? entityId,
             }));
-          if (apiCallsRemaining !== undefined) {
-            tier3Candidates = tier3Candidates.slice(0, apiCallsRemaining);
+          // Atomically reserve budget before async work
+          if (sharedApiBudget) {
+            const granted = sharedApiBudget.reserve(tier3Candidates.length);
+            tier3Candidates = tier3Candidates.slice(0, granted);
           }
           if (tier3Candidates.length > 0) {
             log(`    Tier 3 (Haiku): upgrading ${tier3Candidates.length} low-confidence summaries`);
@@ -1189,9 +1202,6 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
                 summaryMap.set(s.entityId, s);
                 tier3Count++;
               }
-            }
-            if (sharedApiBudget) {
-              sharedApiBudget.remaining = Math.max(0, sharedApiBudget.remaining - tier3Candidates.length);
             }
           }
         }
@@ -1211,24 +1221,32 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
               dependencies: [...svc.dependencies],
               entryPoints: [...svc.entryPoints],
             }));
-            log(`    Tier 4 (Sonnet): summarizing ${inputs.length} services`);
-            const tier4Result = await tier4BatchSummarize(inputs, {
-              ...SONNET_DEFAULTS,
-              apiKey: options.anthropicApiKey,
-              kvStore,
-              maxApiCalls: sharedApiBudget ? sharedApiBudget.remaining : undefined,
-            });
-            for (const s of tier4Result.summaries) {
-              if (s.confidence > 0) {
-                summaryMap.set(s.entityId, s);
-                tier4Count++;
+            // Atomically reserve budget before async work
+            const tier4Budget = sharedApiBudget ? sharedApiBudget.reserve(inputs.length) : undefined;
+            if (sharedApiBudget && tier4Budget === 0) {
+              log(`    Tier 4: no API budget remaining, skipping`);
+            } else {
+              log(`    Tier 4 (Sonnet): summarizing ${inputs.length} services`);
+              const tier4Result = await tier4BatchSummarize(inputs, {
+                ...SONNET_DEFAULTS,
+                apiKey: options.anthropicApiKey,
+                kvStore,
+                maxApiCalls: tier4Budget,
+              });
+              for (const s of tier4Result.summaries) {
+                if (s.confidence > 0) {
+                  summaryMap.set(s.entityId, s);
+                  tier4Count++;
+                }
               }
-            }
-            if (sharedApiBudget) {
-              sharedApiBudget.remaining = Math.max(0, sharedApiBudget.remaining - tier4Result.apiCallsMade);
-            }
-            if (tier4Result.cacheHits > 0) {
-              log(`    Tier 4: ${tier4Result.cacheHits} cache hits, ${tier4Result.apiCallsMade} API calls`);
+              // Refund unused budget
+              if (sharedApiBudget && tier4Budget !== undefined) {
+                const unused = tier4Budget - tier4Result.apiCallsMade;
+                if (unused > 0) sharedApiBudget.refund(unused);
+              }
+              if (tier4Result.cacheHits > 0) {
+                log(`    Tier 4: ${tier4Result.cacheHits} cache hits, ${tier4Result.apiCallsMade} API calls`);
+              }
             }
           }
         }
