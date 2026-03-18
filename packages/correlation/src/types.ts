@@ -2,7 +2,7 @@
  * Types for cross-repo correlation analysis.
  */
 
-import type { GraphEdge, RepoConfig, SarifResult } from "@mma/core";
+import type { GraphEdge, RepoConfig, SarifResult, ServiceCatalogEntry } from "@mma/core";
 
 /** A cross-repo edge with resolved source and target repos. */
 export interface ResolvedCrossRepoEdge {
@@ -93,6 +93,73 @@ export interface CorrelationResult {
     readonly repoPairs: number;
     readonly linchpins: number;
     readonly orphanedServices: number;
+    readonly sarifFindings: number;
+  };
+}
+
+// -- Cross-Repo Model Types --
+
+/** A feature flag shared across 2+ repos. */
+export interface SharedFlag {
+  readonly name: string;
+  readonly repos: readonly string[];
+  /** Whether repos sharing this flag have a dependency edge between them. */
+  readonly coordinated: boolean;
+}
+
+/** Result of cross-repo feature flag coordination analysis. */
+export interface CrossRepoFeatureResult {
+  readonly sharedFlags: readonly SharedFlag[];
+  readonly sarifResults: readonly SarifResult[];
+}
+
+/** A fault propagation link between two repos connected by a service link. */
+export interface CrossRepoFaultLink {
+  readonly endpoint: string;
+  readonly sourceRepo: string;
+  readonly targetRepo: string;
+  readonly sourceFaultTreeCount: number;
+  readonly targetFaultTreeCount: number;
+}
+
+/** Result of cross-repo fault propagation analysis. */
+export interface CrossRepoFaultResult {
+  readonly faultLinks: readonly CrossRepoFaultLink[];
+  readonly sarifResults: readonly SarifResult[];
+}
+
+/** A service catalog entry enriched with cross-repo consumer/producer info. */
+export interface SystemCatalogEntry {
+  readonly entry: ServiceCatalogEntry;
+  readonly repo: string;
+  readonly consumers: readonly string[];
+  readonly producers: readonly string[];
+}
+
+/** Result of system-wide service catalog merge. */
+export interface SystemCatalogResult {
+  readonly entries: readonly SystemCatalogEntry[];
+  readonly sarifResults: readonly SarifResult[];
+}
+
+/** Options for cross-repo model analysis. */
+export interface CrossRepoModelsOptions {
+  readonly repos: readonly RepoConfig[];
+  readonly crossRepoGraph: CrossRepoGraph;
+  readonly serviceCorrelation: ServiceCorrelationResult;
+  readonly verbose?: boolean;
+}
+
+/** Combined result of all cross-repo model analyses. */
+export interface CrossRepoModelsResult {
+  readonly features: CrossRepoFeatureResult;
+  readonly faults: CrossRepoFaultResult;
+  readonly catalog: SystemCatalogResult;
+  readonly sarifResults: readonly SarifResult[];
+  readonly counts: {
+    readonly sharedFlags: number;
+    readonly faultLinks: number;
+    readonly catalogEntries: number;
     readonly sarifFindings: number;
   };
 }

@@ -459,7 +459,62 @@ export function registerTools(server: McpServer, stores: Stores): void {
     });
   });
 
-  // 12. Cross-repo impact analysis
+  // 12a. Cross-repo model results (features, faults, catalog)
+  server.registerTool("get_cross_repo_models", {
+    description: "Get cross-repo model analysis results: shared feature flags, cascading fault links, and system service catalog. Requires 2+ repos indexed.",
+    inputSchema: {
+      kind: z.enum(["features", "faults", "catalog", "all"]).default("all").describe("Which model result to return"),
+      repo: z.string().optional().describe("Filter results involving this repo"),
+      offset: z.number().int().min(0).default(0).describe("Pagination offset"),
+      limit: z.number().int().min(1).max(200).default(50).describe("Max results per page"),
+    },
+  }, async ({ kind, repo, offset, limit }) => {
+    const result: Record<string, unknown> = {};
+
+    if (kind === "features" || kind === "all") {
+      const raw = await kvStore.get("cross-repo:features");
+      if (raw) {
+        try {
+          const data = JSON.parse(raw) as { sharedFlags: Array<{ name: string; repos: string[]; coordinated: boolean }> };
+          let flags = data.sharedFlags;
+          if (repo) flags = flags.filter((f) => f.repos.includes(repo));
+          result.features = paginated(flags, offset, limit);
+        } catch { result.features = { error: "Could not parse cross-repo:features" }; }
+      }
+    }
+
+    if (kind === "faults" || kind === "all") {
+      const raw = await kvStore.get("cross-repo:faults");
+      if (raw) {
+        try {
+          const data = JSON.parse(raw) as { faultLinks: Array<{ endpoint: string; sourceRepo: string; targetRepo: string }> };
+          let links = data.faultLinks;
+          if (repo) links = links.filter((l) => l.sourceRepo === repo || l.targetRepo === repo);
+          result.faults = paginated(links, offset, limit);
+        } catch { result.faults = { error: "Could not parse cross-repo:faults" }; }
+      }
+    }
+
+    if (kind === "catalog" || kind === "all") {
+      const raw = await kvStore.get("cross-repo:catalog");
+      if (raw) {
+        try {
+          const data = JSON.parse(raw) as { entries: Array<{ entry: { name: string }; repo: string }> };
+          let entries = data.entries;
+          if (repo) entries = entries.filter((e) => e.repo === repo);
+          result.catalog = paginated(entries, offset, limit);
+        } catch { result.catalog = { error: "Could not parse cross-repo:catalog" }; }
+      }
+    }
+
+    if (Object.keys(result).length === 0) {
+      return jsonResult({ error: "No cross-repo model data. Run 'mma index' with 2+ repos first." });
+    }
+
+    return jsonResult(result);
+  });
+
+  // 12b. Cross-repo impact analysis
   server.registerTool("get_cross_repo_impact", {
     description: "Compute cross-repo impact of file changes: which files in the same repo and other repos are transitively affected",
     inputSchema: {

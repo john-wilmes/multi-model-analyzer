@@ -82,7 +82,8 @@ describe("registerTools", () => {
       "query", "search", "get_callers", "get_callees",
       "get_dependencies", "get_architecture", "get_diagnostics",
       "get_metrics", "get_blast_radius",
-      "get_cross_repo_graph", "get_service_correlation", "get_cross_repo_impact",
+      "get_cross_repo_graph", "get_service_correlation", "get_cross_repo_models",
+      "get_cross_repo_impact",
       "get_flag_inventory", "get_flag_impact", "get_vulnerability",
     ];
 

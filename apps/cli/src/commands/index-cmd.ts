@@ -55,7 +55,7 @@ import {
 import type { PackageJsonInfo, CommitInfo, Advisory, InstalledPackage } from "@mma/heuristics";
 import { computeBaseline, hotspotFindings, computeRepoAtdi, computeSystemAtdi, annotateDebt, summarizeDebt } from "@mma/diagnostics";
 import { computePageRank, pageRankToSarif, computeReachCounts } from "@mma/query";
-import { runCorrelation } from "@mma/correlation";
+import { runCorrelation, runCrossRepoModels } from "@mma/correlation";
 import type { KVStore, GraphStore, SearchStore } from "@mma/storage";
 import {
   tier1Summarize,
@@ -149,13 +149,14 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       }
       repoSarifCounts.set(repo.name, counts);
     }
-    // Add correlation SARIF count
-    const correlationSarifJson = await kvStore.get("sarif:correlation");
-    if (correlationSarifJson) {
-      try {
-        const correlationResults = JSON.parse(correlationSarifJson) as unknown[];
-        totalFindings += correlationResults.length;
-      } catch { /* skip */ }
+    // Add cross-repo SARIF counts
+    for (const crossRepoKey of ["sarif:correlation", "sarif:cross-repo-models"] as const) {
+      const json = await kvStore.get(crossRepoKey);
+      if (json) {
+        try {
+          totalFindings += (JSON.parse(json) as unknown[]).length;
+        } catch { /* skip */ }
+      }
     }
 
     // Build narration inputs (same logic as Phase 8 in the full pipeline)
@@ -1246,9 +1247,10 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
   log(`  Phase 6c total: ${phase6cTotalMs}ms`);
 
   // Phase 7: Cross-repo correlation (only meaningful with 2+ repos)
+  let correlationResult: Awaited<ReturnType<typeof runCorrelation>> | undefined;
   if (repos.length > 1) {
     tracer.startPhase("Cross-repo Correlation");
-    const correlationResult = await runCorrelation(kvStore, options.graphStore, {
+    correlationResult = await runCorrelation(kvStore, options.graphStore, {
       repos, packageRoots, verbose,
     });
     if (verbose) {
@@ -1258,6 +1260,22 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       log(`  SARIF findings: ${correlationResult.counts.sarifFindings}`);
     }
     tracer.record("crossRepoEdges", correlationResult.counts.crossRepoEdges);
+    tracer.endPhase();
+
+    // Phase 7b: Cross-repo model analysis
+    tracer.startPhase("Cross-repo Models");
+    const crossRepoModelsResult = await runCrossRepoModels(kvStore, {
+      repos,
+      crossRepoGraph: correlationResult.crossRepoGraph,
+      serviceCorrelation: correlationResult.serviceCorrelation,
+      verbose,
+    });
+    if (verbose) {
+      log(`  Shared flags: ${crossRepoModelsResult.counts.sharedFlags}`);
+      log(`  Fault links: ${crossRepoModelsResult.counts.faultLinks}`);
+      log(`  Catalog entries: ${crossRepoModelsResult.counts.catalogEntries}`);
+      log(`  SARIF findings: ${crossRepoModelsResult.counts.sarifFindings}`);
+    }
     tracer.endPhase();
   }
 
@@ -1289,13 +1307,15 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     allSarifResults.push(...repoResults);
   }
   // Add cross-repo correlation SARIF (not per-repo)
-  const correlationSarifJson = await kvStore.get("sarif:correlation");
-  if (correlationSarifJson) {
-    try {
-      const correlationResults = JSON.parse(correlationSarifJson) as import("@mma/core").SarifResult[];
-      allSarifResults.push(...correlationResults);
-    } catch {
-      log(`    warning: could not parse sarif:correlation`);
+  for (const crossRepoKey of ["sarif:correlation", "sarif:cross-repo-models"] as const) {
+    const json = await kvStore.get(crossRepoKey);
+    if (json) {
+      try {
+        const results = JSON.parse(json) as import("@mma/core").SarifResult[];
+        allSarifResults.push(...results);
+      } catch {
+        log(`    warning: could not parse ${crossRepoKey}`);
+      }
     }
   }
   // Compare against previous baseline for incremental adoption
