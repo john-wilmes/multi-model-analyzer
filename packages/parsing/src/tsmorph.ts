@@ -91,12 +91,14 @@ export function extractSymbolsFromSourceFile(
   for (const cls of sourceFile.getClasses()) {
     const name = cls.getName();
     if (name) {
+      const isAbstract = cls.isAbstract();
       symbols.push({
         name,
         kind: "class",
         startLine: cls.getStartLineNumber(),
         endLine: cls.getEndLineNumber(),
         exported: exportedNames.has(name),
+        ...(isAbstract ? { isAbstract: true } : {}),
       });
 
       for (const method of cls.getMethods()) {

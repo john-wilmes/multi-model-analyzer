@@ -9,7 +9,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@tanstack/react-table": "^8.21.0",
     "cytoscape": "^3.31.0",
     "cytoscape-dagre": "^2.5.0",
     "react": "^19.0.0",

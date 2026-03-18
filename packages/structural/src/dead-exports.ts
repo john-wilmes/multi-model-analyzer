@@ -61,6 +61,9 @@ export function detectDeadExports(
         text: `${exportedSymbols.length} dead export(s) in ${pf.path}: ${symbolList}`,
       },
       locations: [{
+        physicalLocation: {
+          artifactLocation: { uri: pf.path },
+        },
         logicalLocations: [{
           fullyQualifiedName: pf.path,
           kind: "module",

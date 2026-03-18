@@ -449,10 +449,9 @@ export class KuzuGraphStore implements GraphStore {
     this.conn.querySync("BEGIN TRANSACTION");
     try {
       for (const fp of filePaths) {
-        const canonicalFile = repo + ":" + fp;
-        const pfx = canonicalFile + "#";
+        const pfx = fp + "#";
         for (const kind of ALL_EDGE_KINDS) {
-          this.conn.executeSync(this.stmtDeleteByFileAndRepo.get(kind)!, { r: repo, fp: canonicalFile, pfx });
+          this.conn.executeSync(this.stmtDeleteByFileAndRepo.get(kind)!, { r: repo, fp, pfx });
         }
       }
       this.conn.querySync("COMMIT");

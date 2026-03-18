@@ -52,6 +52,9 @@ export function hotspotFindings(
       },
       locations: [
         {
+          physicalLocation: {
+            artifactLocation: { uri: h.filePath },
+          },
           logicalLocations: [
             {
               fullyQualifiedName: h.filePath,

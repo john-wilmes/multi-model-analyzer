@@ -86,6 +86,8 @@ vi.mock("@mma/model-fault", () => ({
   traceBackwardFromLog: vi.fn().mockReturnValue({ steps: [] }),
   buildFaultTree: vi.fn().mockReturnValue(null),
   analyzeGaps: vi.fn().mockReturnValue([]),
+  analyzeCascadingRisk: vi.fn().mockReturnValue([]),
+  FAULT_RULES: [],
 }));
 
 vi.mock("@mma/model-functional", () => ({

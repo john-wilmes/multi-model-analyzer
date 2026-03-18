@@ -43,15 +43,27 @@ export function computeModuleMetrics(
   // Build precomputed abstractness counts while seeding the modules set from
   // parsedFiles.  Counting here (O(symbols) once per file) avoids a filter
   // call inside the per-module loop below.
+  //
+  // W8: Only count top-level symbols (no containerName) to normalize the ratio.
+  // Methods/properties are children of classes and would inflate totalSymbols
+  // without a matching abstract contribution, skewing abstractness toward 0.
+  //
+  // W7: Count abstract classes (isAbstract=true) in addition to interfaces and
+  // type aliases.  The isAbstract flag is set by the ts-morph parser; tree-sitter
+  // does not distinguish abstract classes, so those files will under-count until
+  // ts-morph is enabled.
   const abstractCountByFile = new Map<string, number>();
   const totalCountByFile = new Map<string, number>();
   for (const pf of parsedFiles) {
     modules.add(pf.path);
-    totalCountByFile.set(pf.path, pf.symbols.length);
+    let total = 0;
     let count = 0;
     for (const s of pf.symbols) {
-      if (s.kind === "interface" || s.kind === "type") count++;
+      if (s.containerName) continue; // skip non-top-level symbols (W8)
+      total++;
+      if (s.kind === "interface" || s.kind === "type" || s.isAbstract) count++; // W7
     }
+    totalCountByFile.set(pf.path, total);
     abstractCountByFile.set(pf.path, count);
   }
 
@@ -75,6 +87,13 @@ export function computeModuleMetrics(
 }
 
 function classifyZone(instability: number, abstractness: number): MetricZone {
+  // W9: The 0.3/0.7 thresholds below originate from Robert C. Martin's 1997
+  // paper "OO Design Quality Metrics" (derived from Java package coupling).
+  // They are widely cited but empirically unvalidated for TypeScript codebases,
+  // where file-level granularity, structural typing, and heavy use of type
+  // aliases make direct translation uncertain. Treat zone classifications as
+  // heuristic signals rather than precise measurements.
+
   // Pain zone: high stability (low I) + low abstractness -> hard to change
   if (instability < 0.3 && abstractness < 0.3) return "pain";
   // Uselessness zone: high instability + high abstractness -> over-abstracted
@@ -145,6 +164,9 @@ export function detectInstabilityViolations(
         text: `${source} (I=${src.instability.toFixed(2)}) depends on ${violations.length} unstable module(s): ${depList}`,
       },
       locations: [{
+        physicalLocation: {
+          artifactLocation: { uri: source },
+        },
         logicalLocations: [{
           fullyQualifiedName: source,
           kind: "module",
@@ -167,6 +189,9 @@ export function detectInstabilityViolations(
           text: `${m.module} is in the pain zone (I=${m.instability.toFixed(2)}, A=${m.abstractness.toFixed(2)}): concrete and stable, hard to change`,
         },
         locations: [{
+          physicalLocation: {
+            artifactLocation: { uri: m.module },
+          },
           logicalLocations: [{
             fullyQualifiedName: m.module,
             kind: "module",
@@ -182,6 +207,9 @@ export function detectInstabilityViolations(
           text: `${m.module} is in the uselessness zone (I=${m.instability.toFixed(2)}, A=${m.abstractness.toFixed(2)}): over-abstracted with few dependents`,
         },
         locations: [{
+          physicalLocation: {
+            artifactLocation: { uri: m.module },
+          },
           logicalLocations: [{
             fullyQualifiedName: m.module,
             kind: "module",

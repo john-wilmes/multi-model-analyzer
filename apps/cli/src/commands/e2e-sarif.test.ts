@@ -38,6 +38,7 @@ vi.mock("@mma/ingestion", () => ({
   detectChanges: vi.fn(),
   classifyFiles: vi.fn().mockReturnValue([]),
   isBareRepo: vi.fn().mockResolvedValue(false),
+  getCommitHistory: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("@mma/parsing", () => ({
@@ -60,6 +61,7 @@ vi.mock("@mma/structural", () => ({
 
 vi.mock("@mma/heuristics", () => ({
   inferServices: vi.fn().mockReturnValue([]),
+  inferServicesWithMeta: vi.fn().mockReturnValue({ services: [], warnings: [] }),
   detectPatterns: vi.fn().mockReturnValue([]),
   scanForFlags: vi.fn().mockReturnValue({ flags: [] }),
   extractLogStatements: vi.fn().mockReturnValue({ repo: "", templates: [] }),
@@ -88,6 +90,8 @@ vi.mock("@mma/model-fault", () => ({
   traceBackwardFromLog: vi.fn().mockReturnValue({ steps: [] }),
   buildFaultTree: vi.fn(),
   analyzeGaps: vi.fn().mockReturnValue([]),
+  analyzeCascadingRisk: vi.fn().mockReturnValue([]),
+  FAULT_RULES: [],
 }));
 
 vi.mock("@mma/model-functional", () => ({

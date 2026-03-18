@@ -17,9 +17,7 @@ const DEBT_MINUTES: Record<string, number> = {
   // Configuration model
   "config/dead-flag": 30,
   "config/always-on-flag": 15,
-  "config/missing-constraint": 60,
   "config/untested-interaction": 45,
-  "config/format-violation": 20,
 
   // Fault tree
   "fault/unhandled-error-path": 60,

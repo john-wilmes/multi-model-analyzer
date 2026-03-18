@@ -534,9 +534,9 @@ describe("ATDI score", () => {
     kv = makeKvStore();
   });
 
-  it("score is 0 for empty database", async () => {
+  it("score is 100 for empty database", async () => {
     const report = await generatePractices(kv);
-    expect(report.atdi.score).toBe(0);
+    expect(report.atdi.score).toBe(100);
   });
 
   it("score increases with more errors", async () => {
@@ -550,8 +550,8 @@ describe("ATDI score", () => {
     expect(report.atdi.score).toBeGreaterThan(0);
   });
 
-  it("large codebase scores lower than small codebase with same findings", async () => {
-    // Small codebase: 5 modules
+  it("large codebase scores higher than small codebase with same findings", async () => {
+    // Small codebase: 5 modules — same 2 findings = high finding density = lower (unhealthier) score
     await seedMetrics(kv, "small-repo", { moduleCount: 5 });
     await seedSarif(kv, [
       { ruleId: "fault/silent-failure", level: "error" },
@@ -559,7 +559,7 @@ describe("ATDI score", () => {
     ]);
     const smallReport = await generatePractices(kv);
 
-    // Large codebase: 500 modules, same findings
+    // Large codebase: 500 modules, same findings = low finding density = higher (healthier) score
     const kv2 = makeKvStore();
     await seedMetrics(kv2, "large-repo", { moduleCount: 500 });
     await seedSarif(kv2, [
@@ -568,7 +568,7 @@ describe("ATDI score", () => {
     ]);
     const largeReport = await generatePractices(kv2);
 
-    expect(largeReport.atdi.score).toBeLessThan(smallReport.atdi.score);
+    expect(largeReport.atdi.score).toBeGreaterThan(smallReport.atdi.score);
   });
 
   it("worsening trend when >20% findings are new", async () => {

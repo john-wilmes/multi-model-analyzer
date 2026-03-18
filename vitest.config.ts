@@ -5,6 +5,8 @@ export default defineConfig({
     include: ["packages/**/src/**/*.bench.ts", "apps/*/src/**/*.bench.ts"],
   },
   test: {
+    pool: "forks",
+    poolOptions: { forks: { maxForks: 1 } },
     globals: true,
     include: ["packages/**/src/**/*.test.ts", "apps/*/src/**/*.test.ts"],
     coverage: {

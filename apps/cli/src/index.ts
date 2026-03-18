@@ -31,6 +31,7 @@ import { compressCommand, dashboardCommand, maybeDecompress } from "./commands/d
 import { baselineCreateCommand, baselineCheckCommand } from "./commands/baseline-cmd.js";
 import { deltaCommand } from "./commands/delta-cmd.js";
 import { catalogCommand } from "./commands/catalog-cmd.js";
+import { computeAffected } from "./commands/affected-cmd.js";
 import { printJson, printTable, printSarif, validateFormat, validateReportFormat } from "./formatter.js";
 import { parseWatchInterval, watchLoop } from "./watch.js";
 
@@ -75,6 +76,7 @@ async function main(): Promise<void> {
       backend: { type: "string" },
       "exit-code": { type: "boolean", default: false },
       repo: { type: "string" },
+      "max-depth": { type: "string", default: "5" },
     },
   });
 
@@ -154,20 +156,16 @@ async function main(): Promise<void> {
     }
     const range = positionals[1];
     if (!range) {
-      console.error("Usage: mma affected <revision-range> [--db path]");
+      console.error("Usage: mma affected <revision-range> [--db path] [--repo name] [--max-depth N]");
       console.error("  Examples: mma affected HEAD~3..HEAD");
-      console.error("           mma affected main..feature");
+      console.error("           mma affected main..feature --repo my-service");
       process.exit(1);
     }
     const affectedFormat = validateFormat(values.format, "table");
+    const maxDepth = parseInt(values["max-depth"] ?? "5", 10);
     const stores = await createStores({ backend: earlyBackend, dbPath, readonly: true });
     try {
-      const { computeBlastRadius, computePageRank } = await import("@mma/query");
-      const { parseRevisionRange, getChangedFilesInRange } = await import("@mma/ingestion");
-
-      const parsedRange = parseRevisionRange(range);
-
-      // Find the repo path from config (if available) or use cwd
+      // Resolve repo path from config or use cwd
       let repoPath = process.cwd();
       try {
         const configPath = resolve(values.config);
@@ -178,36 +176,18 @@ async function main(): Promise<void> {
         }
       } catch { /* use cwd */ }
 
-      const rangeResult = await getChangedFilesInRange(repoPath, range);
-      const changedFiles = [...rangeResult.added, ...rangeResult.modified];
-
-      // Compute blast radius once for all output formats
-      const blastRoots = [...changedFiles, ...rangeResult.deleted];
-      const blastResult = blastRoots.length > 0
-        ? await computeBlastRadius(blastRoots, stores.graphStore, { maxDepth: 5 })
-        : { totalAffected: 0, affectedFiles: [] as Array<{ path: string; depth: number; via: string }> };
-
-      // Compute PageRank for json and table formats
-      let highRisk: Array<{ path: string; rank: number; score: number }> = [];
-      if (affectedFormat !== "sarif") {
-        const allEdges = await stores.graphStore.getEdgesByKind("imports");
-        if (allEdges.length > 0) {
-          const prResult = computePageRank(allEdges);
-          const impacted = new Set([...changedFiles, ...blastResult.affectedFiles.map(f => f.path)]);
-          highRisk = prResult.ranked.filter(f => impacted.has(f.path)).slice(0, 10);
-        }
-      }
+      const result = await computeAffected({
+        repoPath,
+        range,
+        graphStore: stores.graphStore,
+        repo: values.repo,
+        maxDepth,
+      });
 
       if (affectedFormat === "json") {
-        printJson({
-          range: `${parsedRange.from}..${parsedRange.to}`,
-          changed: { added: rangeResult.added, modified: rangeResult.modified, deleted: rangeResult.deleted },
-          affected: blastResult.affectedFiles,
-          totalAffected: blastResult.totalAffected,
-          highRisk,
-        });
+        printJson(result);
       } else if (affectedFormat === "sarif") {
-        const sarifResults = blastResult.affectedFiles.map((f) => ({
+        const sarifResults = result.affected.map((f) => ({
           ruleId: "affected/blast-radius",
           level: "warning" as const,
           message: `Affected file: ${f.path} (depth=${f.depth}, via ${f.via})`,
@@ -215,27 +195,27 @@ async function main(): Promise<void> {
         printSarif("mma-affected", sarifResults);
       } else {
         // table (default)
-        console.log(`Revision range: ${parsedRange.from}..${parsedRange.to}`);
-        console.log(`Changed files: ${changedFiles.length} (${rangeResult.added.length} added, ${rangeResult.modified.length} modified, ${rangeResult.deleted.length} deleted)`);
-        console.log(`Affected files: ${blastResult.totalAffected}`);
+        console.log(`Revision range: ${result.range}`);
+        console.log(`Changed files: ${result.changed.added.length + result.changed.modified.length} (${result.changed.added.length} added, ${result.changed.modified.length} modified, ${result.changed.deleted.length} deleted)`);
+        console.log(`Affected files: ${result.totalAffected}`);
 
-        if (blastResult.affectedFiles.length > 0) {
-          const displayFiles = blastResult.affectedFiles.slice(0, 20);
+        if (result.affected.length > 0) {
+          const displayFiles = result.affected.slice(0, 20);
           console.log("\nAffected (by depth):");
           printTable(
             ["Depth", "Path", "Via"],
             displayFiles.map((f) => [String(f.depth), f.path, f.via]),
           );
-          if (blastResult.affectedFiles.length > 20) {
-            console.log(`  ... and ${blastResult.affectedFiles.length - 20} more`);
+          if (result.affected.length > 20) {
+            console.log(`  ... and ${result.affected.length - 20} more`);
           }
         }
 
-        if (highRisk.length > 0) {
+        if (result.highRisk.length > 0) {
           console.log("\nHighest-risk files (by PageRank):");
           printTable(
             ["Rank", "Path", "Score"],
-            highRisk.map((f) => [String(f.rank), f.path, f.score.toFixed(4)]),
+            result.highRisk.map((f) => [String(f.rank), f.path, f.score.toFixed(4)]),
           );
         }
       }
@@ -771,8 +751,8 @@ Usage:
                                           Index repositories (default: table)
   mma query [-c config.json] "..." [--format json|table|sarif]
                                                 Query the index (default: table)
-  mma affected <rev-range> [--db path] [--format json|table|sarif]
-                                                Show blast radius (default: table)
+  mma affected <rev-range> [--db path] [--repo name] [--max-depth N]
+             [--format json|table|sarif]        Show blast radius (default: table)
   mma delta <rev-range> [-c config.json] [--db path] [--format markdown|json|sarif] [--exit-code]
                                                 Show new/worsened findings for changed files (default: markdown)
   mma serve [--db path/to/mma.db]               Start MCP server (stdio)
@@ -820,7 +800,8 @@ Options:
   --force-full-reindex  Clear and rebuild graph for each repo (default: incremental)
   --backend       Storage backend: sqlite (default) or kuzu
   --exit-code     Exit with code 1 if new/updated findings exist (use with delta)
-  --repo          Filter catalog export to a single repo name (use with catalog)
+  --repo          Filter to a single repo (use with affected, catalog)
+  --max-depth     Max blast radius depth (default: 5, use with affected)
   -h, --help      Show this help message
   --version       Show version number
 `);

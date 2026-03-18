@@ -80,6 +80,9 @@ function checkLayerViolations(
           text: `Layer violation: "${edge.source}" (${sourceLayer}) imports "${edge.target}" (${targetLayer}). Allowed dependencies for ${sourceLayer}: [${layerConfig.allowedDependencies.join(", ")}]`,
         },
         locations: [{
+          physicalLocation: {
+            artifactLocation: { uri: edge.source },
+          },
           logicalLocations: [{
             fullyQualifiedName: edge.source,
             kind: "module",
@@ -115,6 +118,9 @@ function checkForbiddenImports(
           text: `Forbidden import: "${edge.source}" imports "${edge.target}" which matches forbidden pattern`,
         },
         locations: [{
+          physicalLocation: {
+            artifactLocation: { uri: edge.source },
+          },
           logicalLocations: [{
             fullyQualifiedName: edge.source,
             kind: "module",
@@ -149,6 +155,9 @@ function checkDependencyDirection(
             text: `Dependency direction violation: "${edge.source}" -> "${edge.target}" matches denied pair [${fromPattern}, ${toPattern}]`,
           },
           locations: [{
+            physicalLocation: {
+              artifactLocation: { uri: edge.source },
+            },
             logicalLocations: [{
               fullyQualifiedName: edge.source,
               kind: "module",

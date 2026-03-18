@@ -2,7 +2,7 @@
  * SARIF v2.1.0 type definitions for diagnostic output.
  *
  * Subset of the full SARIF spec covering what we emit:
- * - Logical locations only (no physical locations, no source snippets)
+ * - Logical and physical locations (artifactLocation + optional region)
  * - Code flows with logical location steps for fault tree traces
  * - Statistics in properties bag
  * - Redaction support via redactionTokens
@@ -68,8 +68,18 @@ export interface SarifResult {
   readonly properties?: Record<string, unknown>;
 }
 
+export interface SarifPhysicalLocation {
+  readonly artifactLocation: { readonly uri: string };
+  readonly region?: {
+    readonly startLine: number;
+    readonly startColumn?: number;
+    readonly endLine?: number;
+  };
+}
+
 export interface SarifLocation {
   readonly logicalLocations?: readonly SarifLogicalLocation[];
+  readonly physicalLocation?: SarifPhysicalLocation;
 }
 
 export interface SarifLogicalLocation {
