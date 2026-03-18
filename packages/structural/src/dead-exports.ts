@@ -12,6 +12,7 @@
  * Entry points (package.json main/bin) are excluded from detection.
  */
 
+import { makeFileId } from "@mma/core";
 import type { ParsedFile, GraphEdge, SarifResult } from "@mma/core";
 
 export interface DeadExportOptions {
@@ -47,7 +48,7 @@ export function detectDeadExports(
 
     // Skip if any file imports this one (file-level heuristic: if the file is
     // imported at all, all its exports are considered reachable)
-    if (importedFiles.has(pf.path)) continue;
+    if (importedFiles.has(makeFileId(repo, pf.path))) continue;
 
     // Flag each exported symbol
     for (const sym of exportedSymbols) {

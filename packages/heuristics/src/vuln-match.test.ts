@@ -97,7 +97,16 @@ describe("checkVulnReachability", () => {
   const match = { pkg, advisory };
 
   it("detects reachable vulnerability via import edge", () => {
-    const edges = [importEdge("src/app.ts", "node_modules/lodash/merge.js")];
+    const edges = [importEdge("src/app.ts", "lodash/merge")];
+    const results = checkVulnReachability([match], edges);
+
+    expect(results).toHaveLength(1);
+    expect(results[0]!.reachable).toBe(true);
+    expect(results[0]!.directImporters).toEqual(["src/app.ts"]);
+  });
+
+  it("detects reachable vulnerability via exact package name", () => {
+    const edges = [importEdge("src/app.ts", "lodash")];
     const results = checkVulnReachability([match], edges);
 
     expect(results).toHaveLength(1);
@@ -116,8 +125,8 @@ describe("checkVulnReachability", () => {
 
   it("deduplicates multiple imports from same file", () => {
     const edges = [
-      importEdge("src/app.ts", "node_modules/lodash/merge.js"),
-      importEdge("src/app.ts", "node_modules/lodash/get.js"),
+      importEdge("src/app.ts", "lodash/merge"),
+      importEdge("src/app.ts", "lodash/get"),
     ];
     const results = checkVulnReachability([match], edges);
 

@@ -57,17 +57,23 @@ export interface VulnReachabilityResult {
 /**
  * Check which vulnerable packages are actually imported in the codebase.
  *
- * Scans import edges for imports from `node_modules/<package>/` to determine
- * if the vulnerable dependency is reachable from application code.
+ * Scans import edges for bare specifier matches (e.g., "@nestjs/common" or
+ * "lodash/chunk") to determine if the vulnerable dependency is reachable
+ * from application code.
  */
 export function checkVulnReachability(
   matches: readonly { pkg: InstalledPackage; advisory: Advisory }[],
   importEdges: readonly GraphEdge[],
 ): VulnReachabilityResult[] {
   return matches.map(({ pkg, advisory }) => {
-    const pattern = `node_modules/${pkg.name}/`;
+    // Import edges store external packages as bare specifiers (e.g., "@nestjs/common",
+    // "lodash/chunk"), not resolved node_modules paths. Match against the package name
+    // as a prefix (exact match or subpath import).
     const directImporters = importEdges
-      .filter(e => e.kind === "imports" && e.target.includes(pattern))
+      .filter(e => e.kind === "imports" && (
+        e.target === pkg.name ||
+        e.target.startsWith(pkg.name + "/")
+      ))
       .map(e => e.source);
 
     const uniqueImporters = [...new Set(directImporters)];

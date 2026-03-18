@@ -30,6 +30,12 @@ const DEFAULT_OPTIONS: CallGraphOptions = {
   maxDepth: 10,
 };
 
+/**
+ * Extract call graph from ts-morph project.
+ *
+ * @deprecated This is a stub that returns empty results. Use
+ * {@link extractCallEdgesFromTreeSitter} instead for working call graph extraction.
+ */
 export function extractCallGraph(
   project: TsMorphProject,
   repo: string,

@@ -64,6 +64,14 @@ function extractImports(rootNode: TreeSitterNode): string[] {
       // Handle require() calls
       const req = findRequireCall(child);
       if (req) imports.push(req);
+    } else if (child.type === "export_statement") {
+      // Handle re-exports: export * from './x', export { X } from './x'
+      // Use the "source" field to avoid matching strings inside exported class/function bodies
+      const sourceNode = (child as any).childForFieldName?.("source");
+      if (sourceNode) {
+        const source = findStringLiteral(sourceNode);
+        if (source) imports.push(source);
+      }
     }
   }
 

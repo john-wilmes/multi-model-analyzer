@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { makeFileId } from "@mma/core";
 import { detectDeadExports } from "./dead-exports.js";
 import type { GraphEdge, ParsedFile, SymbolInfo } from "@mma/core";
 
@@ -33,7 +34,8 @@ describe("detectDeadExports", () => {
       pf("used.ts", [sym("UsedClass", "class")]),
       pf("consumer.ts", [sym("main", "function")]),
     ];
-    const edges = [importEdge("consumer.ts", "used.ts")];
+    // Edge targets use canonical IDs (makeFileId) as produced by extractDependencyGraph
+    const edges = [importEdge(makeFileId("test", "consumer.ts"), makeFileId("test", "used.ts"))];
     const results = detectDeadExports(files, edges, "test");
 
     // consumer.ts is not imported either, but it exports -> flagged
@@ -106,9 +108,10 @@ describe("detectDeadExports", () => {
 
   it("does not flag file if imported via edge from different repo without repo metadata", () => {
     const files = [pf("lib.ts", [sym("Util", "function")])];
-    // Edge without repo metadata should still count as an import
+    // Edge without repo metadata should still count as an import;
+    // target uses canonical ID as produced by extractDependencyGraph
     const edges: GraphEdge[] = [
-      { source: "consumer.ts", target: "lib.ts", kind: "imports", metadata: {} },
+      { source: "consumer.ts", target: makeFileId("test", "lib.ts"), kind: "imports", metadata: {} },
     ];
     const results = detectDeadExports(files, edges, "test");
     expect(results).toHaveLength(0); // Edge with no repo metadata → not filtered

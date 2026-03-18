@@ -117,6 +117,36 @@ export interface Config { host: string; }
     expect(graph.edges).toHaveLength(3);
   });
 
+  it("extracts re-export edges from barrel files", () => {
+    const files = new Map<string, TreeSitterTree>();
+
+    files.set("src/index.ts", parseSource(`
+export * from "./service";
+export { Config } from "./config";
+`, "src/index.ts"));
+
+    files.set("src/service.ts", parseSource(`
+export class MyService {}
+`, "src/service.ts"));
+
+    files.set("src/config.ts", parseSource(`
+export interface Config { port: number; }
+`, "src/config.ts"));
+
+    const graph = extractDependencyGraph(files, "test-repo");
+
+    const barrelEdges = graph.edges.filter((e) => e.source === "test-repo:src/index.ts");
+    expect(barrelEdges).toHaveLength(2);
+    expect(barrelEdges.map((e) => e.target).sort()).toEqual([
+      "test-repo:src/config.ts",
+      "test-repo:src/service.ts",
+    ]);
+
+    // Exported classes without 'from' clause should NOT produce edges
+    const serviceEdges = graph.edges.filter((e) => e.source === "test-repo:src/service.ts");
+    expect(serviceEdges).toHaveLength(0);
+  });
+
   it("detects circular dependencies", () => {
     const files = new Map<string, TreeSitterTree>();
 
