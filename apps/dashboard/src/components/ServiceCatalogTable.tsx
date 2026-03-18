@@ -18,6 +18,7 @@ export default function ServiceCatalogTable({ repo }: Props) {
 
   useEffect(() => {
     setLoading(true);
+    setSearch('');
     fetchCrossRepoCatalog(repo)
       .then((data) => setEntries(data.entries))
       .catch(() => setEntries([]))

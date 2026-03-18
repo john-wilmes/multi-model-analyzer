@@ -38,8 +38,9 @@ export default function CrossRepoView() {
           ))}
         </div>
         <div className="ml-4 flex items-center gap-2">
-          <label className="text-xs text-slate-500">Filter by repo</label>
+          <label htmlFor="repo-filter" className="text-xs text-slate-500">Filter by repo</label>
           <select
+            id="repo-filter"
             value={selectedRepo}
             onChange={(e) => setSelectedRepo(e.target.value)}
             className="border border-slate-300 rounded px-2 py-1 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500"

@@ -111,7 +111,7 @@ function findLogNode(
         return node.id;
       }
     }
-    // Fuzzy fallback: find closest node within ±2 lines
+    // Fuzzy fallback: find closest node within ±2 lines (first node wins ties)
     let bestNode: (typeof cfg.nodes)[number] | undefined;
     let bestDist = Infinity;
     for (const node of cfg.nodes) {
