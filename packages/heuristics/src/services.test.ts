@@ -142,7 +142,67 @@ describe("inferServices", () => {
 
     const services = inferServices(input);
     const api = services.find((s) => s.name === "api");
-    expect(api!.dependencies).toContain("packages/db/src/client.ts");
+    // W18: dependencies resolved to service names when target is a known service
+    expect(api!.dependencies).toContain("db");
+  });
+
+  it("W17: filters packages/* dirs without entry-point files", () => {
+    const input: ServiceInferenceInput = {
+      repo: "test-repo",
+      filePaths: [
+        "packages/utils/src/helpers.ts",
+        "packages/types/src/index.ts",
+        "packages/api-gateway/src/main.ts",
+        "packages/api-gateway/src/routes.ts",
+      ],
+      packageJsons: new Map(),
+      dependencyGraph: makeGraph(),
+    };
+
+    const services = inferServices(input);
+    const names = services.map((s) => s.name);
+    // api-gateway has main.ts → kept; utils/types have no entry-point → filtered
+    expect(names).toContain("api-gateway");
+    expect(names).not.toContain("utils");
+    expect(names).not.toContain("types");
+  });
+
+  it("W17: apps/* and services/* dirs kept without entry-point check", () => {
+    const input: ServiceInferenceInput = {
+      repo: "test-repo",
+      filePaths: [
+        "apps/dashboard/src/components/Chart.tsx",
+        "services/notifications/src/queue.ts",
+      ],
+      packageJsons: new Map(),
+      dependencyGraph: makeGraph(),
+    };
+
+    const services = inferServices(input);
+    const names = services.map((s) => s.name);
+    expect(names).toContain("dashboard");
+    expect(names).toContain("notifications");
+  });
+
+  it("W18: dependencies use service names when target is unknown service", () => {
+    const graph = makeGraph([
+      { source: "apps/web/src/page.ts", target: "libs/shared/src/util.ts" },
+    ]);
+
+    const input: ServiceInferenceInput = {
+      repo: "test-repo",
+      filePaths: [
+        "apps/web/src/page.ts",
+        "libs/shared/src/util.ts",
+      ],
+      packageJsons: new Map(),
+      dependencyGraph: graph,
+    };
+
+    const services = inferServices(input);
+    const web = services.find((s) => s.name === "web");
+    // libs/shared is not a recognized service dir, so dep stays as raw path
+    expect(web!.dependencies).toContain("libs/shared/src/util.ts");
   });
 
   it("excludes node_modules from dependencies", () => {

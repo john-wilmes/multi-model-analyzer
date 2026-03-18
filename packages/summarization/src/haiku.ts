@@ -71,19 +71,21 @@ function buildPrompt(
   description: string,
   context: string,
 ): string {
-  return [
+  const hasSource = context && context !== entityId && context.length > 20;
+  const lines: string[] = [
     "Improve this summary of a code entity in 1-2 sentences.",
     "Focus on the business logic, not the implementation details.",
     "Be specific about what data is processed and what the output is.",
-    "",
-    `Entity: ${entityId}`,
-    context ? `Context: ${context}` : "",
-    `Current description: ${description}`,
-    "",
-    "Improved summary:",
-  ]
-    .filter(Boolean)
-    .join("\n");
+  ];
+  if (hasSource) {
+    lines.push("Use the source code below to produce an accurate summary.");
+  }
+  lines.push("", `Entity: ${entityId}`);
+  if (hasSource) {
+    lines.push("", "Source code:", "```", context, "```");
+  }
+  lines.push("", `Current description: ${description}`, "", "Improved summary:");
+  return lines.join("\n");
 }
 
 export async function tier3BatchSummarize(

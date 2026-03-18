@@ -28,6 +28,21 @@ const SERVICE_DIR_PATTERNS = [
   /^(src\/services|src\/apps|src\/modules)\/([^/]+)\//,
 ];
 
+/**
+ * Parent directories that strongly imply a deployable service rather than a
+ * shared library. Directories under these prefixes are kept without an
+ * entry-point check in Strategy 2.
+ */
+const SERVICE_PARENT_DIRS = new Set(["apps", "services", "src/services", "src/apps"]);
+
+/**
+ * Basenames (without extension) that typically indicate a runnable entry point.
+ * Used by Strategy 2 to filter library-like directories (packages/*, modules/*).
+ */
+const ENTRY_POINT_BASENAMES = new Set([
+  "main", "app", "server", "bootstrap", "cli", "worker", "lambda", "handler",
+]);
+
 export function inferServices(input: ServiceInferenceInput): InferredService[] {
   const services: InferredService[] = [];
   const seen = new Set<string>();
@@ -60,29 +75,69 @@ export function inferServices(input: ServiceInferenceInput): InferredService[] {
   }
 
   // Strategy 2: well-known directory patterns
+  // Collect candidate roots first, then validate entry-point presence for
+  // library-like parent directories (packages/*, modules/*).
+  const candidateRoots = new Map<string, { parentDir: string; name: string }>();
   for (const filePath of input.filePaths) {
     for (const pattern of SERVICE_DIR_PATTERNS) {
       const match = pattern.exec(filePath);
       if (match) {
-        const serviceName = match[2]!;
-        const rootPath = `${match[1]}/${serviceName}`;
-        if (seen.has(rootPath)) continue;
-        seen.add(rootPath);
-
-        const deps = findServiceDependencies(rootPath, input.dependencyGraph);
-
-        services.push({
-          name: serviceName,
-          rootPath,
-          entryPoints: [],
-          dependencies: deps,
-          confidence: 0.6,
-        });
+        const rootPath = `${match[1]}/${match[2]}`;
+        if (!seen.has(rootPath) && !candidateRoots.has(rootPath)) {
+          candidateRoots.set(rootPath, { parentDir: match[1]!, name: match[2]! });
+        }
       }
     }
   }
 
-  return services;
+  for (const [rootPath, { parentDir, name }] of candidateRoots) {
+    seen.add(rootPath);
+
+    // For library-likely parent dirs (packages, modules), require at least
+    // one entry-point-like file to classify as a service.
+    if (!SERVICE_PARENT_DIRS.has(parentDir)) {
+      const hasEntryPoint = input.filePaths.some((fp) => {
+        if (!isUnderDir(fp, rootPath)) return false;
+        const rel = fp.slice(rootPath.length + 1);
+        // Check files at root or src/ level (not deeply nested)
+        const parts = rel.split("/");
+        const fileName = parts.length <= 2 ? parts[parts.length - 1]! : null;
+        if (!fileName) return false;
+        const baseName = fileName.replace(/\.[^.]+$/, "");
+        return ENTRY_POINT_BASENAMES.has(baseName);
+      });
+      if (!hasEntryPoint) continue;
+    }
+
+    const deps = findServiceDependencies(rootPath, input.dependencyGraph);
+
+    services.push({
+      name,
+      rootPath,
+      entryPoints: [],
+      dependencies: deps,
+      confidence: 0.6,
+    });
+  }
+
+  // Post-process: translate dependency file paths to service names where
+  // possible. Raw paths like "packages/db/src/client.ts" become the service
+  // name "db" (or "@myapp/db") when that file falls under a known service root.
+  return resolveServiceDependencyNames(services);
+}
+
+function resolveServiceDependencyNames(
+  services: InferredService[],
+): InferredService[] {
+  return services.map((svc) => ({
+    ...svc,
+    dependencies: svc.dependencies.map((dep) => {
+      const target = services.find(
+        (s) => s.rootPath !== svc.rootPath && isUnderDir(dep, s.rootPath),
+      );
+      return target ? target.name : dep;
+    }),
+  }));
 }
 
 /**

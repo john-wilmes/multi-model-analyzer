@@ -1040,6 +1040,9 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         let tier1ReadErrors = 0;
         let tier1CacheHits = 0;
         const BATCH_SIZE = 20;
+        // Source snippets for tier-3 context (entityId → first ~30 lines of symbol body)
+        const sourceContextMap = new Map<string, string>();
+        const MAX_SNIPPET_LINES = 30;
         for (let batchStart = 0; batchStart < parsedFiles.length; batchStart += BATCH_SIZE) {
           const batch = parsedFiles.slice(batchStart, batchStart + BATCH_SIZE);
           const results = await Promise.all(
@@ -1049,7 +1052,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
               if (cached) {
                 tier1CacheHits++;
                 try {
-                  return JSON.parse(cached) as Summary[];
+                  return { summaries: JSON.parse(cached) as Summary[], symbols: pf.symbols, sourceLines: null as string[] | null, filePath: pf.path };
                 } catch {
                   // Corrupted cache entry; re-generate below
                 }
@@ -1063,16 +1066,28 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
                 if (summaries.length > 0) {
                   await kvStore.set(cacheKey, JSON.stringify(summaries));
                 }
-                return summaries;
+                return { summaries, symbols: pf.symbols, sourceLines: sourceText.split("\n"), filePath: pf.path };
               } catch {
                 tier1ReadErrors++;
-                return [];
+                return { summaries: [] as Summary[], symbols: pf.symbols, sourceLines: null as string[] | null, filePath: pf.path };
               }
             }),
           );
-          for (const tier1 of results) {
+          for (const { summaries: tier1, symbols, sourceLines, filePath } of results) {
             for (const s of tier1) {
               summaryMap.set(s.entityId, s);
+            }
+            // Extract source snippets for tier-3 context
+            if (sourceLines) {
+              for (const sym of symbols) {
+                if (sym.kind !== "function" && sym.kind !== "method" && sym.kind !== "class") continue;
+                const entityId = sym.containerName
+                  ? `${filePath}#${sym.containerName}.${sym.name}`
+                  : `${filePath}#${sym.name}`;
+                const start = Math.max(0, sym.startLine - 1);
+                const end = Math.min(sourceLines.length, start + MAX_SNIPPET_LINES);
+                sourceContextMap.set(entityId, sourceLines.slice(start, end).join("\n"));
+              }
             }
           }
           const processed = Math.min(batchStart + BATCH_SIZE, parsedFiles.length);
@@ -1110,7 +1125,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
             .map(([entityId, s]) => ({
               entityId,
               description: s.description,
-              context: entityId,
+              context: sourceContextMap.get(entityId) ?? entityId,
             }));
           if (apiCallsRemaining !== undefined) {
             tier3Candidates = tier3Candidates.slice(0, apiCallsRemaining);
