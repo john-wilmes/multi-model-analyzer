@@ -6,7 +6,7 @@
 import { createReadStream, createWriteStream, statSync, existsSync } from "node:fs";
 import { createGunzip, createGzip } from "node:zlib";
 import { pipeline } from "node:stream/promises";
-import { exec } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join, extname, resolve } from "node:path";
@@ -685,14 +685,13 @@ export async function dashboardCommand(options: DashboardOptions): Promise<void>
   const url = `http://${browseHost}:${port}`;
   console.log(`Dashboard running at ${url}${options.host === "0.0.0.0" ? " (listening on all interfaces)" : ""}`);
 
-  // Auto-open browser (best-effort, platform-aware)
-  const opener =
-    process.platform === "darwin"
-      ? `open ${url}`
-      : process.platform === "win32"
-        ? `start ${url}`
-        : `xdg-open ${url}`;
-  exec(opener, () => { /* ignore errors */ });
+  // Auto-open browser (best-effort, platform-aware, no shell interpolation)
+  if (process.platform === "win32") {
+    spawn("cmd", ["/c", "start", url], { stdio: "ignore" }).unref();
+  } else {
+    const binary = process.platform === "darwin" ? "open" : "xdg-open";
+    spawn(binary, [url], { stdio: "ignore" }).unref();
+  }
 
   // Clean shutdown on SIGINT / SIGTERM
   const shutdown = (): void => {
