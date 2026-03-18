@@ -71,6 +71,23 @@ import { computeAffectedScope } from "./affected-scope.js";
 import type { AffectedScope } from "./affected-scope.js";
 import { PipelineTracer } from "../tracer.js";
 
+function pLimit(concurrency: number) {
+  let active = 0;
+  const queue: (() => void)[] = [];
+  return <T>(fn: () => Promise<T>): Promise<T> =>
+    new Promise<T>((resolve, reject) => {
+      const run = () => {
+        active++;
+        fn().then(resolve, reject).finally(() => {
+          active--;
+          if (queue.length > 0) queue.shift()!();
+        });
+      };
+      if (active < concurrency) run();
+      else queue.push(run);
+    });
+}
+
 const bareRepoCache = new Map<string, boolean>();
 async function checkBareRepo(repoPath: string): Promise<boolean> {
   let cached = bareRepoCache.get(repoPath);
@@ -377,10 +394,11 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     }
   }
 
-  // Phases 3-6a: Per-repo processing (parse, structural, heuristics, models).
-  // Each repo is fully processed through all tree-dependent phases before moving
-  // to the next, so only one repo's trees occupy WASM memory at a time.
-  log("Phases 3-6a: Per-repo processing...");
+  // Phases 3-6b: Per-repo processing (parse, structural, heuristics, models,
+  // summarization). Repos are processed in parallel with a concurrency cap of 4
+  // to bound WASM heap usage. Map writes use different keys per repo so there
+  // are no races; SQLite stores use WAL + busy_timeout for concurrent writes.
+  log("Phases 3-6b: Per-repo processing (parallel, concurrency=4)...");
   const parsedFilesByRepo = new Map<string, ParsedFile[]>();
   const depGraphByRepo = new Map<string, DependencyGraph>();
   const servicesByRepo = new Map<string, InferredService[]>();

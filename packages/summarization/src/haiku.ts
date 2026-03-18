@@ -20,7 +20,7 @@ export interface HaikuOptions {
 
 const DEFAULT_HAIKU_MODEL = "claude-haiku-4-5-20251001";
 const DEFAULT_MAX_TOKENS = 200;
-const DEFAULT_CONCURRENCY = 10;
+const DEFAULT_CONCURRENCY = 20;
 
 export async function summarizeWithHaiku(
   entityId: string,
