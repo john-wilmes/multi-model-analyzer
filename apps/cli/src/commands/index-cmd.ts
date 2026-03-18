@@ -31,7 +31,7 @@ import { createSarifResult, createLogicalLocation } from "@mma/core";
 import { detectChanges, classifyFiles, getFileContent, getHeadCommit, isBareRepo, getCommitHistory } from "@mma/ingestion";
 import { parseFiles } from "@mma/parsing";
 import type { TreeSitterTree } from "@mma/parsing";
-import { extractDependencyGraph, buildControlFlowGraph, createCfgIdCounter, extractCallEdgesFromTreeSitter, computeModuleMetrics, summarizeRepoMetrics, detectDeadExports, detectInstabilityViolations } from "@mma/structural";
+import { extractDependencyGraph, buildControlFlowGraph, createCfgIdCounter, extractCallEdgesFromTreeSitter, computeModuleMetrics, summarizeRepoMetrics, detectDeadExports, detectInstabilityViolations, extractHeritageEdges } from "@mma/structural";
 import type { TreeSitterNode } from "@mma/parsing";
 import { buildFeatureModel, extractConstraintsFromCode, validateFeatureModel } from "@mma/model-config";
 import { identifyLogRoots, traceBackwardFromLog, buildFaultTree, analyzeGaps, analyzeCascadingRisk, FAULT_RULES } from "@mma/model-fault";
@@ -613,6 +613,23 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         log(`  [${repo.name}] ${callEdges.length} call edges (${elapsed}ms)`);
       } catch (error) {
         console.error(`  Failed to extract call graph for ${repo.name}:`, error);
+      }
+    }
+
+    if (trees && trees.size > 0) {
+      log(`  [${repo.name}] Extracting heritage edges...`);
+      try {
+        const start = performance.now();
+        const heritageEdges = extractHeritageEdges(trees, repo.name);
+
+        if (heritageEdges.length > 0) {
+          await options.graphStore.addEdges(heritageEdges);
+        }
+
+        const elapsed = Math.round(performance.now() - start);
+        log(`  [${repo.name}] ${heritageEdges.length} heritage edges (extends/implements) (${elapsed}ms)`);
+      } catch (error) {
+        console.error(`  Failed to extract heritage edges for ${repo.name}:`, error);
       }
     }
 
