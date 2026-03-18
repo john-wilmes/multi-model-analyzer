@@ -392,7 +392,7 @@ export function registerTools(server: McpServer, stores: Stores): void {
     const severityOrder = ["low", "moderate", "high", "critical"];
     const minIdx = severity ? severityOrder.indexOf(severity) : 0;
     const filtered = severity
-      ? allResults.filter(r => severityOrder.indexOf(String(r.properties?.severity ?? "low")) >= minIdx)
+      ? allResults.filter(r => severityOrder.indexOf(String((r.properties?.severity as string | undefined) ?? "low")) >= minIdx)
       : allResults;
 
     // Paginate
@@ -468,7 +468,8 @@ export function registerTools(server: McpServer, stores: Stores): void {
       offset: z.number().int().min(0).default(0).describe("Pagination offset"),
       limit: z.number().int().min(1).max(200).default(50).describe("Max results per page"),
     },
-  }, async ({ kind, repo, offset, limit }) => {
+  }, async ({ kind: rawKind, repo, offset, limit }) => {
+    const kind = typeof rawKind === "string" ? rawKind.toLowerCase() as typeof rawKind : "all";
     const o = offset ?? 0;
     const l = limit ?? 50;
     const result: Record<string, unknown> = {};

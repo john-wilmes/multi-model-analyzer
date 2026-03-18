@@ -71,10 +71,10 @@ export function parseNpmAudit(jsonString: string): Advisory[] {
           ? via.find((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
           : undefined;
         return {
-          id: String(firstAdvisory?.source ?? firstAdvisory?.url ?? `npm-audit-${name}`),
+          id: String((firstAdvisory?.source as string | undefined) ?? (firstAdvisory?.url as string | undefined) ?? `npm-audit-${name}`),
           package: name,
-          vulnerableRange: String(v.range ?? "*"),
-          severity: mapSeverity(String(v.severity ?? "low")),
+          vulnerableRange: String((v.range as string | undefined) ?? "*"),
+          severity: mapSeverity(String((v.severity as string | undefined) ?? "low")),
         };
       });
   }
@@ -83,10 +83,10 @@ export function parseNpmAudit(jsonString: string): Advisory[] {
   if (parsed.advisories && typeof parsed.advisories === "object") {
     const advs = parsed.advisories as Record<string, Record<string, unknown>>;
     return Object.values(advs).map((adv) => ({
-      id: String(adv.id ?? ""),
-      package: String(adv.module_name ?? ""),
-      vulnerableRange: String(adv.vulnerable_versions ?? "*"),
-      severity: mapSeverity(String(adv.severity ?? "low")),
+      id: String((adv.id as string | undefined) ?? ""),
+      package: String((adv.module_name as string | undefined) ?? ""),
+      vulnerableRange: String((adv.vulnerable_versions as string | undefined) ?? "*"),
+      severity: mapSeverity(String((adv.severity as string | undefined) ?? "low")),
     }));
   }
 

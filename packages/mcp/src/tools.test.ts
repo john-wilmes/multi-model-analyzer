@@ -437,8 +437,10 @@ describe("get_cross_repo_models", () => {
     const handler = server.tools.get("get_cross_repo_models")!.handler;
     // Call with no offset/limit — should not throw
     const result = await handler({ kind: "catalog" });
-    const parsed = JSON.parse(result.content[0]!.text) as { catalog: { total: number } };
+    const parsed = JSON.parse(result.content[0]!.text) as { catalog: { total: number; returned: number; offset: number } };
     expect(parsed.catalog.total).toBe(3);
+    expect(parsed.catalog.returned).toBe(3);
+    expect(parsed.catalog.offset).toBe(0);
   });
 });
 
