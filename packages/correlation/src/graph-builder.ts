@@ -52,6 +52,9 @@ function resolveTargetRepo(
   repos: readonly RepoConfig[],
   packageRoots: ReadonlyMap<string, string>,
 ): { targetRepo: string; packageName: string } | null {
+  // Skip Node.js built-in modules (node:path, node:fs, etc.)
+  if (edge.target.startsWith("node:")) return null;
+
   // Fast path: canonical ID carries repo inline
   const targetRepoFromId = extractRepo(edge.target);
   if (targetRepoFromId) {

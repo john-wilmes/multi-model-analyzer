@@ -574,6 +574,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         if (graph.edges.length === 0) {
           log(`    warning: 0 import edges from ${trees.size} trees -- pattern and flag detection may be limited`);
         }
+        await kvStore.set(`circularDeps:${repo.name}`, JSON.stringify(graph.circularDependencies));
         if (graph.circularDependencies.length > 0) {
           log(`    ${graph.circularDependencies.length} circular dependencies found`);
           for (const cycle of graph.circularDependencies.slice(0, 5)) {
@@ -582,7 +583,6 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
           if (graph.circularDependencies.length > 5) {
             log(`      ... and ${graph.circularDependencies.length - 5} more`);
           }
-          await kvStore.set(`circularDeps:${repo.name}`, JSON.stringify(graph.circularDependencies));
         }
       } catch (error) {
         console.error(`  Failed to extract dependency graph for ${repo.name}:`, error);

@@ -2,8 +2,14 @@
  * Hotspot analysis: files that have both high git churn and high complexity
  * (measured by symbol count) are flagged as hotspots.
  *
- * Score = churn * symbolCount, normalised to 0-100 relative to the maximum
- * raw score in the dataset.
+ * Score = average of two independently-normalised dimensions:
+ *   churnScore      = (churn / maxChurn) * 100
+ *   complexityScore = (symbolCount / maxSymbolCount) * 100
+ *   hotspotScore    = round((churnScore + complexityScore) / 2)
+ *
+ * Normalising independently prevents a single outlier in one dimension
+ * (e.g. a machine-generated file with 1000+ symbols) from collapsing all
+ * other scores to near-zero.
  */
 
 /** A single {commit, file} entry from git log — mirrors CommitFileChange in @mma/ingestion */
@@ -18,7 +24,7 @@ export interface FileHotspot {
   readonly churn: number;
   /** Complexity proxy: number of symbols in the file */
   readonly symbolCount: number;
-  /** churn * symbolCount, normalised 0-100 */
+  /** Average of independently-normalised churn and complexity scores, 0-100 */
   readonly hotspotScore: number;
 }
 
@@ -52,12 +58,11 @@ export function computeHotspots(
     hashes.add(hash);
   }
 
-  // Build raw hotspot entries — skip files with no symbol data
+  // Build hotspot entries — skip files with no symbol data
   interface RawEntry {
     filePath: string;
     churn: number;
     symbolCount: number;
-    rawScore: number;
   }
 
   const entries: RawEntry[] = [];
@@ -71,8 +76,7 @@ export function computeHotspots(
     // Filter out non-source files (no symbols = config, docs, etc.)
     if (symbolCount === 0) continue;
 
-    const rawScore = churn * symbolCount;
-    entries.push({ filePath, churn, symbolCount, rawScore });
+    entries.push({ filePath, churn, symbolCount });
 
     if (churn > maxChurn) maxChurn = churn;
     if (symbolCount > maxSymbolCount) maxSymbolCount = symbolCount;
@@ -82,17 +86,21 @@ export function computeHotspots(
     return { hotspots: [], maxChurn, maxSymbolCount };
   }
 
-  // Find maximum raw score for normalisation
-  const maxRaw = Math.max(...entries.map((e) => e.rawScore));
-
-  // Normalise and sort
+  // Normalise churn and symbolCount independently, then average.
+  // This prevents a single outlier in one dimension from collapsing all
+  // other scores to near-zero.
   const hotspots: FileHotspot[] = entries
-    .map((e) => ({
-      filePath: e.filePath,
-      churn: e.churn,
-      symbolCount: e.symbolCount,
-      hotspotScore: maxRaw > 0 ? Math.round((e.rawScore / maxRaw) * 100) : 0,
-    }))
+    .map((e) => {
+      const churnScore = maxChurn > 0 ? (e.churn / maxChurn) * 100 : 0;
+      const complexityScore =
+        maxSymbolCount > 0 ? (e.symbolCount / maxSymbolCount) * 100 : 0;
+      return {
+        filePath: e.filePath,
+        churn: e.churn,
+        symbolCount: e.symbolCount,
+        hotspotScore: Math.round((churnScore + complexityScore) / 2),
+      };
+    })
     .sort((a, b) => b.hotspotScore - a.hotspotScore || b.churn - a.churn)
     .slice(0, topN);
 
