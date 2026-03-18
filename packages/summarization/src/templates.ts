@@ -61,11 +61,24 @@ function buildTemplateDescription(
 }
 
 function extractParams(line: string): string | null {
-  // This regex matches the first balanced pair of parens but does not handle
-  // nested parentheses in parameter types (e.g. callback: (err: Error) => void).
-  // For such signatures the extracted text will be truncated at the first ")".
-  const match = /\(([^)]*)\)/.exec(line);
-  return match?.[1]?.trim() || null;
+  // Balanced-paren scanner: find the opening "(", track nesting depth,
+  // and extract everything up to the matching ")". This correctly handles
+  // nested parentheses in parameter types such as:
+  //   (a: string, cb: (err: Error) => void)
+  const open = line.indexOf("(");
+  if (open === -1) return null;
+  let depth = 0;
+  for (let i = open; i < line.length; i++) {
+    if (line[i] === "(") depth++;
+    else if (line[i] === ")") {
+      depth--;
+      if (depth === 0) {
+        const content = line.slice(open + 1, i).trim();
+        return content || null;
+      }
+    }
+  }
+  return null;
 }
 
 function extractReturnType(line: string): string | null {

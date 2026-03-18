@@ -22,11 +22,13 @@ describe("detectDeadExports", () => {
     ];
     const results = detectDeadExports(files, [], "test");
 
-    expect(results).toHaveLength(2);
+    // One result per file, listing all dead exports
+    expect(results).toHaveLength(1);
     expect(results[0]!.ruleId).toBe("structural/dead-export");
     expect(results[0]!.level).toBe("note");
     expect(results[0]!.message.text).toContain("OrphanClass");
-    expect(results[1]!.message.text).toContain("helperFn");
+    expect(results[0]!.message.text).toContain("helperFn");
+    expect(results[0]!.message.text).toContain("2 dead export(s)");
   });
 
   it("does not flag files that are imported by at least one other file", () => {
@@ -43,8 +45,8 @@ describe("detectDeadExports", () => {
     const flaggedPaths = results.map((r) =>
       r.locations?.[0]?.logicalLocations?.[0]?.fullyQualifiedName,
     );
-    expect(flaggedPaths).not.toContain("used.ts#UsedClass");
-    expect(flaggedPaths).toContain("consumer.ts#main");
+    expect(flaggedPaths).not.toContain("used.ts");
+    expect(flaggedPaths).toContain("consumer.ts");
   });
 
   it("does not flag entry point files even without consumers", () => {
@@ -99,11 +101,13 @@ describe("detectDeadExports", () => {
       ]),
     ];
     const results = detectDeadExports(files, [], "test");
-    expect(results).toHaveLength(2);
-    const names = results.map(r => r.message.text);
-    expect(names.some(t => t.includes("PublicFn"))).toBe(true);
-    expect(names.some(t => t.includes("PublicClass"))).toBe(true);
-    expect(names.some(t => t.includes("privateFn"))).toBe(false);
+    // One result per file; message lists only the 2 exported symbols
+    expect(results).toHaveLength(1);
+    const text = results[0]!.message.text;
+    expect(text).toContain("2 dead export(s)");
+    expect(text).toContain("PublicFn");
+    expect(text).toContain("PublicClass");
+    expect(text).not.toContain("privateFn");
   });
 
   it("does not flag file if imported via edge from different repo without repo metadata", () => {
@@ -123,8 +127,9 @@ describe("detectDeadExports", () => {
       { source: "consumer.ts", target: "lib.ts", kind: "calls", metadata: { repo: "test" } },
     ];
     const results = detectDeadExports(files, edges, "test");
-    // "calls" edge should not count as an import → lib.ts still flagged
+    // "calls" edge should not count as an import → lib.ts still flagged (one result for the file)
     expect(results).toHaveLength(1);
+    expect(results[0]!.locations?.[0]?.logicalLocations?.[0]?.fullyQualifiedName).toBe("lib.ts");
   });
 
   it("import edge from different repo does not clear dead export", () => {

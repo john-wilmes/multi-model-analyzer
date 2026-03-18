@@ -160,10 +160,13 @@ describe("detectInstabilityViolations", () => {
     const results = detectInstabilityViolations(metrics, edges, "test");
 
     const sdp = results.filter((r) => r.ruleId === "structural/unstable-dependency");
+    // One result per source module (grouped)
     expect(sdp).toHaveLength(1);
     expect(sdp[0]!.level).toBe("warning");
+    // Source module is the subject; target listed in the dependency list
     expect(sdp[0]!.message.text).toContain("stable.ts");
     expect(sdp[0]!.message.text).toContain("unstable.ts");
+    expect(sdp[0]!.locations?.[0]?.logicalLocations?.[0]?.fullyQualifiedName).toBe("stable.ts");
   });
 
   it("no violation when instability delta is below threshold", () => {

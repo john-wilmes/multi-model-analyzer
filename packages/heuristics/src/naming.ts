@@ -115,7 +115,7 @@ function inferPurpose(words: string[]): PurposeResult | null {
     return {
       verb: firstWord,
       object: object || "unknown",
-      description: `${capitalize(firstWord)}s ${object || "something"}`,
+      description: `${capitalize(conjugate(firstWord))} ${object || "something"}`,
       confidence: object ? 0.85 : 0.5,
     };
   }
@@ -149,4 +149,18 @@ export function splitIdentifier(name: string): string[] {
 
 function capitalize(word: string): string {
   return word.charAt(0).toUpperCase() + word.slice(1);
+}
+
+/**
+ * Conjugate a verb to English 3rd-person singular present tense.
+ *
+ * Rules (applied in order):
+ * 1. Ends in s, sh, ch, x, or z → append "es"  (process→processes, fetch→fetches)
+ * 2. Ends in consonant + y       → replace y with "ies"  (deny→denies)
+ * 3. Otherwise                   → append "s"   (get→gets, find→finds)
+ */
+function conjugate(verb: string): string {
+  if (/(?:s|sh|ch|x|z)$/i.test(verb)) return verb + "es";
+  if (/[^aeiou]y$/i.test(verb)) return verb.slice(0, -1) + "ies";
+  return verb + "s";
 }

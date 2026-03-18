@@ -140,7 +140,7 @@ export function pageRankToSarif(
   options?: { topN?: number; minScore?: number },
 ): SarifResult[] {
   const topN = options?.topN ?? 10;
-  const minScore = options?.minScore ?? 0;
+  const minScore = options?.minScore ?? 0.03;
 
   return result.ranked
     .filter(f => f.rank <= topN && f.score > minScore)

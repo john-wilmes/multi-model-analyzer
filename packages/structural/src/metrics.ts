@@ -108,8 +108,18 @@ export function detectInstabilityViolations(
   }
 
   // SDP violations: for each import edge, check if source (importer) is more stable
-  // than target (dependency) by more than the threshold
+  // than target (dependency) by more than the threshold.
+  // Group violations by source module and emit one result per source.
   const edges = importEdges.filter((e) => e.kind === "imports");
+
+  interface ViolatingDep {
+    target: string;
+    srcInstability: number;
+    tgtInstability: number;
+    delta: number;
+  }
+  const violationsBySource = new Map<string, ViolatingDep[]>();
+
   for (const edge of edges) {
     const src = metricsByModule.get(edge.source);
     const tgt = metricsByModule.get(edge.target);
@@ -117,21 +127,31 @@ export function detectInstabilityViolations(
 
     const delta = tgt.instability - src.instability;
     if (delta > threshold) {
-      results.push({
-        ruleId: "structural/unstable-dependency",
-        level: "warning",
-        message: {
-          text: `${edge.source} (I=${src.instability.toFixed(2)}) depends on ${edge.target} (I=${tgt.instability.toFixed(2)}): stable module depends on unstable module (delta=${delta.toFixed(2)}, threshold=${threshold})`,
-        },
-        locations: [{
-          logicalLocations: [{
-            fullyQualifiedName: `${edge.source}->${edge.target}`,
-            kind: "module",
-            properties: { repo },
-          }],
-        }],
-      });
+      let list = violationsBySource.get(edge.source);
+      if (!list) { list = []; violationsBySource.set(edge.source, list); }
+      list.push({ target: edge.target, srcInstability: src.instability, tgtInstability: tgt.instability, delta });
     }
+  }
+
+  for (const [source, violations] of violationsBySource) {
+    const src = metricsByModule.get(source)!;
+    const depList = violations
+      .map((v) => `${v.target} (I=${v.tgtInstability.toFixed(2)}, delta=${v.delta.toFixed(2)})`)
+      .join(", ");
+    results.push({
+      ruleId: "structural/unstable-dependency",
+      level: "warning",
+      message: {
+        text: `${source} (I=${src.instability.toFixed(2)}) depends on ${violations.length} unstable module(s): ${depList}`,
+      },
+      locations: [{
+        logicalLocations: [{
+          fullyQualifiedName: source,
+          kind: "module",
+          properties: { repo },
+        }],
+      }],
+    });
   }
 
   // Zone anomalies

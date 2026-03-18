@@ -28,6 +28,15 @@ export interface CoupledPair {
   readonly confidence: number;
 }
 
+/** Default patterns for files to exclude from temporal coupling analysis. */
+export const DEFAULT_EXCLUDE_PATTERNS: readonly RegExp[] = [
+  /\.test\.[^/]+$/,    // *.test.*
+  /\.spec\.[^/]+$/,    // *.spec.*
+  /(?:^|\/)package\.json$/,   // package.json (any directory)
+  /(?:^|\/)tsconfig[^/]*$/,   // tsconfig.json, tsconfig.*.json
+  /\.config\.[^/]+$/,  // *.config.*
+];
+
 export interface TemporalCouplingOptions {
   /** Minimum co-change count to report. Default: 3 */
   readonly minCoChanges?: number;
@@ -35,6 +44,13 @@ export interface TemporalCouplingOptions {
   readonly minConfidence?: number;
   /** Maximum files per commit to consider (skip merge commits). Default: 50 */
   readonly maxFilesPerCommit?: number;
+  /**
+   * Patterns for files to exclude from co-change counting.
+   * Defaults to {@link DEFAULT_EXCLUDE_PATTERNS} which excludes test files
+   * (*.test.*, *.spec.*) and config files (package.json, tsconfig.*, *.config.*).
+   * Pass an empty array to disable all filtering.
+   */
+  readonly excludePatterns?: readonly RegExp[];
 }
 
 export interface TemporalCouplingResult {
@@ -66,6 +82,10 @@ export function detectTemporalCoupling(
   const minCoChanges = options?.minCoChanges ?? 3;
   const minConfidence = options?.minConfidence ?? 0.5;
   const maxFilesPerCommit = options?.maxFilesPerCommit ?? 50;
+  const excludePatterns: readonly RegExp[] =
+    options?.excludePatterns !== undefined
+      ? options.excludePatterns
+      : DEFAULT_EXCLUDE_PATTERNS;
 
   // Count how many commits each file appears in
   const fileCommitCount = new Map<string, number>();
@@ -82,17 +102,21 @@ export function detectTemporalCoupling(
 
     commitsAnalyzed++;
 
+    // Filter out excluded files (test/config) before co-change counting
+    const files = excludePatterns.length === 0
+      ? commit.files
+      : commit.files.filter((f) => !excludePatterns.some((re) => re.test(f)));
+
     // Count ALL file appearances (including single-file commits)
-    for (const file of commit.files) {
+    for (const file of files) {
       fileCommitCount.set(file, (fileCommitCount.get(file) ?? 0) + 1);
     }
 
-    if (commit.files.length < 2) {
+    if (files.length < 2) {
       continue;
     }
 
     // Count all pairs in this commit using inline comparison for canonical key order
-    const files = commit.files;
     for (let i = 0; i < files.length; i++) {
       for (let j = i + 1; j < files.length; j++) {
         const fileA = files[i]!;

@@ -50,23 +50,24 @@ export function detectDeadExports(
     // imported at all, all its exports are considered reachable)
     if (importedFiles.has(makeFileId(repo, pf.path))) continue;
 
-    // Flag each exported symbol
-    for (const sym of exportedSymbols) {
-      results.push({
-        ruleId: "structural/dead-export",
-        level: "note",
-        message: {
-          text: `Exported ${sym.kind} "${sym.name}" in ${pf.path} is not imported by any other file`,
-        },
-        locations: [{
-          logicalLocations: [{
-            fullyQualifiedName: `${pf.path}#${sym.name}`,
-            kind: sym.kind,
-            properties: { repo },
-          }],
+    // Emit one result per file listing all dead exports
+    const symbolList = exportedSymbols
+      .map((sym) => `${sym.kind} ${sym.name}`)
+      .join(", ");
+    results.push({
+      ruleId: "structural/dead-export",
+      level: "note",
+      message: {
+        text: `${exportedSymbols.length} dead export(s) in ${pf.path}: ${symbolList}`,
+      },
+      locations: [{
+        logicalLocations: [{
+          fullyQualifiedName: pf.path,
+          kind: "module",
+          properties: { repo },
         }],
-      });
-    }
+      }],
+    });
   }
 
   return results;
