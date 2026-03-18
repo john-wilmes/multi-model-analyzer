@@ -9,6 +9,14 @@ export type {
   OrphanedService,
   CorrelationOptions,
   CorrelationResult,
+  SharedFlag,
+  CrossRepoFeatureResult,
+  CrossRepoFaultLink,
+  CrossRepoFaultResult,
+  SystemCatalogEntry,
+  SystemCatalogResult,
+  CrossRepoModelsOptions,
+  CrossRepoModelsResult,
 } from "./types.js";
 
 export { buildCrossRepoGraph } from "./graph-builder.js";
@@ -21,3 +29,7 @@ export {
   detectCriticalPaths,
 } from "./sarif-rules.js";
 export { runCorrelation } from "./run-correlation.js";
+export { detectCrossRepoFeatures } from "./cross-repo-features.js";
+export { detectCrossRepoFaults } from "./cross-repo-faults.js";
+export { buildSystemCatalog } from "./cross-repo-catalog.js";
+export { runCrossRepoModels } from "./run-cross-repo-models.js";

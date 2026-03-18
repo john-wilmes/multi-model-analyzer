@@ -82,7 +82,8 @@ describe("registerTools", () => {
       "query", "search", "get_callers", "get_callees",
       "get_dependencies", "get_architecture", "get_diagnostics",
       "get_metrics", "get_blast_radius",
-      "get_cross_repo_graph", "get_service_correlation", "get_cross_repo_impact",
+      "get_cross_repo_graph", "get_service_correlation", "get_cross_repo_models",
+      "get_cross_repo_impact",
       "get_flag_inventory", "get_flag_impact", "get_vulnerability",
     ];
 
@@ -367,6 +368,79 @@ describe("get_service_correlation", () => {
     };
     expect(parsed.linchpins.results).toHaveLength(1);
     expect(parsed.orphanedServices.results).toHaveLength(0);
+  });
+});
+
+describe("get_cross_repo_models", () => {
+  function seedCatalog(kvStore: InstanceType<typeof InMemoryKVStore>) {
+    return kvStore.set("cross-repo:catalog", JSON.stringify({
+      entries: [
+        { entry: { name: "svc-a" }, repo: "repo-a", consumers: ["repo-b"], producers: [] },
+        { entry: { name: "svc-b" }, repo: "repo-b", consumers: [], producers: ["repo-a"] },
+        { entry: { name: "svc-c" }, repo: "repo-c", consumers: [], producers: [] },
+      ],
+    }));
+  }
+
+  it("catalog repo filter matches owner, consumer, and producer", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await seedCatalog(stores.kvStore);
+    register(server, stores);
+
+    const handler = server.tools.get("get_cross_repo_models")!.handler;
+
+    // repo-a owns svc-a and is a producer for svc-b → both should appear
+    const result = await handler({ kind: "catalog", repo: "repo-a" });
+    const parsed = JSON.parse(result.content[0]!.text) as { catalog: { results: Array<{ entry: { name: string } }> } };
+    const names = parsed.catalog.results.map((e) => e.entry.name);
+    expect(names).toContain("svc-a"); // owner
+    expect(names).toContain("svc-b"); // repo-a is a producer
+    expect(names).not.toContain("svc-c"); // unrelated
+  });
+
+  it("catalog repo filter matches consumer role", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await seedCatalog(stores.kvStore);
+    register(server, stores);
+
+    const handler = server.tools.get("get_cross_repo_models")!.handler;
+
+    // repo-b consumes svc-a and owns svc-b
+    const result = await handler({ kind: "catalog", repo: "repo-b" });
+    const parsed = JSON.parse(result.content[0]!.text) as { catalog: { results: Array<{ entry: { name: string } }> } };
+    const names = parsed.catalog.results.map((e) => e.entry.name);
+    expect(names).toContain("svc-a"); // repo-b is a consumer
+    expect(names).toContain("svc-b"); // owner
+    expect(names).not.toContain("svc-c");
+  });
+
+  it("returns all catalog entries without repo filter", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await seedCatalog(stores.kvStore);
+    register(server, stores);
+
+    const handler = server.tools.get("get_cross_repo_models")!.handler;
+    const result = await handler({ kind: "catalog" });
+    const parsed = JSON.parse(result.content[0]!.text) as { catalog: { results: Array<{ entry: { name: string } }> } };
+    expect(parsed.catalog.results).toHaveLength(3);
+  });
+
+  it("uses defensive defaults for pagination", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await seedCatalog(stores.kvStore);
+    register(server, stores);
+
+    const handler = server.tools.get("get_cross_repo_models")!.handler;
+    // Call with no offset/limit — should not throw
+    const result = await handler({ kind: "catalog" });
+    const parsed = JSON.parse(result.content[0]!.text) as { catalog: { total: number; returned: number; offset: number } };
+    expect(parsed.catalog.total).toBe(3);
+    expect(parsed.catalog.returned).toBe(3);
+    expect(parsed.catalog.offset).toBe(0);
   });
 });
 
