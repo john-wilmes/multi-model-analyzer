@@ -72,6 +72,9 @@ import type { AffectedScope } from "./affected-scope.js";
 import { PipelineTracer } from "../tracer.js";
 
 function pLimit(concurrency: number) {
+  if (!Number.isInteger(concurrency) || concurrency < 1) {
+    throw new RangeError("concurrency must be a positive integer");
+  }
   let active = 0;
   const queue: (() => void)[] = [];
   return <T>(fn: () => Promise<T>): Promise<T> =>
@@ -456,6 +459,11 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       log(`  [${repo.name}] Recovered ${recoveredFiles.length} files, ${edges.length} import edges`);
     }
   }
+
+  // Shared API budget across all parallel workers
+  const sharedApiBudget = options.maxApiCalls !== undefined
+    ? { remaining: options.maxApiCalls }
+    : undefined;
 
   const limit = pLimit(4);
   await Promise.all(repos.map((repo) => limit(async () => {
@@ -1143,7 +1151,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
 
         // Tier 3: Haiku LLM for low-confidence method summaries
         let tier3Count = 0;
-        let apiCallsRemaining = options.maxApiCalls;
+        const apiCallsRemaining = sharedApiBudget ? sharedApiBudget.remaining : undefined;
         if (options.anthropicApiKey && (apiCallsRemaining === undefined || apiCallsRemaining > 0)) {
           let tier3Candidates = [...summaryMap.entries()]
             .filter(([, s]) => shouldEscalateToTier3(s, undefined))
@@ -1167,8 +1175,8 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
                 tier3Count++;
               }
             }
-            if (apiCallsRemaining !== undefined) {
-              apiCallsRemaining = Math.max(0, apiCallsRemaining - tier3Candidates.length);
+            if (sharedApiBudget) {
+              sharedApiBudget.remaining = Math.max(0, sharedApiBudget.remaining - tier3Candidates.length);
             }
           }
         }
@@ -1193,13 +1201,16 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
               ...SONNET_DEFAULTS,
               apiKey: options.anthropicApiKey,
               kvStore,
-              maxApiCalls: apiCallsRemaining,
+              maxApiCalls: sharedApiBudget ? sharedApiBudget.remaining : undefined,
             });
             for (const s of tier4Result.summaries) {
               if (s.confidence > 0) {
                 summaryMap.set(s.entityId, s);
                 tier4Count++;
               }
+            }
+            if (sharedApiBudget) {
+              sharedApiBudget.remaining = Math.max(0, sharedApiBudget.remaining - tier4Result.apiCallsMade);
             }
             if (tier4Result.cacheHits > 0) {
               log(`    Tier 4: ${tier4Result.cacheHits} cache hits, ${tier4Result.apiCallsMade} API calls`);
