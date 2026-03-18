@@ -93,7 +93,7 @@ export async function parseFiles(
         const kind = classifyFileKind(file.path);
         parsedFiles.push(createParsedFile(file.path, repo, content, kind, symbols, errors));
       } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        if (typeof err === "object" && err !== null && "code" in err && (err as { code?: string }).code === "ENOENT") {
           notFoundCount++;
           continue;
         }

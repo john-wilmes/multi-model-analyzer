@@ -99,8 +99,9 @@ describe("tree-sitter parsing", () => {
     `;
     const tree = parseSource(code, "test.ts");
     expect(tree.rootNode.hasError).toBe(false);
-    const { symbols } = extractSymbolsFromTree(tree, "test.ts", "repo");
+    const { symbols, errors } = extractSymbolsFromTree(tree, "test.ts", "repo");
     tree.delete();
+    expect(errors).toHaveLength(0);
 
     const cls = symbols.find((s) => s.name === "BaseCommand");
     expect(cls).toBeDefined();

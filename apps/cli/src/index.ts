@@ -75,6 +75,7 @@ async function main(): Promise<void> {
       "force-full-reindex": { type: "boolean", default: false },
       port: { type: "string", default: "3000" },
       host: { type: "string", default: "127.0.0.1" },
+      "cors-origin": { type: "string", multiple: true },
       backend: { type: "string" },
       "exit-code": { type: "boolean", default: false },
       repo: { type: "string" },
@@ -570,12 +571,16 @@ async function main(): Promise<void> {
     );
     const stores = await createStores({ backend: earlyBackend, dbPath, readonly: true });
     try {
+      const corsOriginList = values["cors-origin"] as string[] | undefined;
       await dashboardCommand({
         kvStore: stores.kvStore,
         graphStore: stores.graphStore,
         port,
         host: values.host ?? "127.0.0.1",
         staticDir,
+        corsOrigins: corsOriginList && corsOriginList.length > 0
+          ? new Set(corsOriginList)
+          : undefined,
       });
     } finally {
       stores.close();
@@ -821,6 +826,7 @@ Options:
   --seed          PRNG seed for reproducibility (default: 42)
   --port          Port for dashboard server (default: 3000)
   --host          Host/IP to bind dashboard server (default: 127.0.0.1)
+  --cors-origin   Allowed CORS origin(s) for the dashboard API (repeatable, e.g. --cors-origin http://localhost:5173)
   --force         Bypass narration cache (use with --narrate-only or --api-key)
   --force-full-reindex  Clear and rebuild graph for each repo (default: incremental)
   --backend       Storage backend: sqlite (default) or kuzu
