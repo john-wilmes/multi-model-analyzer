@@ -32,6 +32,7 @@ import { baselineCreateCommand, baselineCheckCommand } from "./commands/baseline
 import { deltaCommand } from "./commands/delta-cmd.js";
 import { catalogCommand } from "./commands/catalog-cmd.js";
 import { computeAffected } from "./commands/affected-cmd.js";
+import { auditCommand } from "./commands/audit-cmd.js";
 import { printJson, printTable, printSarif, validateFormat, validateReportFormat } from "./formatter.js";
 import { parseWatchInterval, watchLoop } from "./watch.js";
 
@@ -77,6 +78,7 @@ async function main(): Promise<void> {
       "exit-code": { type: "boolean", default: false },
       repo: { type: "string" },
       "max-depth": { type: "string", default: "5" },
+      "audit-file": { type: "string" },
     },
   });
 
@@ -223,6 +225,23 @@ async function main(): Promise<void> {
       stores.close();
     }
     return;
+  }
+
+  // audit command: parse npm audit JSON and check transitive vulnerability reachability
+  if (command === "audit") {
+    const stores = await createStores({ backend: earlyBackend, dbPath });
+    try {
+      await auditCommand({
+        auditFile: values["audit-file"],
+        repo: values.repo,
+        kvStore: stores.kvStore,
+        graphStore: stores.graphStore,
+        verbose,
+      });
+    } finally {
+      stores.close();
+    }
+    process.exit(0);
   }
 
   // export command bypasses config -- only needs the DB (read-only)
@@ -775,6 +794,8 @@ Usage:
                                                 Best-practices recommendations (default: markdown)
   mma catalog [--db path] [--repo name] [-o dir]
                                                 Export Backstage catalog-info.yaml (default: stdout)
+  mma audit [--audit-file file.json] [--repo name] [--db path] [-v]
+                                                Parse npm audit JSON and check vulnerability reachability
   mma compress [--db path]                      Gzip the analysis database
   mma dashboard [--db path] [--port 3000]       Serve local web dashboard
 

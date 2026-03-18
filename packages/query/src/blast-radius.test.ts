@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeBlastRadius } from "./blast-radius.js";
+import { computeBlastRadius, computeReachCounts } from "./blast-radius.js";
 import { InMemoryGraphStore } from "@mma/storage";
 import type { GraphEdge } from "@mma/core";
 import type { CrossRepoGraph } from "@mma/correlation";
@@ -248,5 +248,89 @@ describe("computeBlastRadius", () => {
 
     const result = await computeBlastRadius(["b.ts"], store);
     expect(result.crossRepoAffected).toBeUndefined();
+  });
+});
+
+describe("computeReachCounts", () => {
+  it("computes reach counts for a chain (A→B→C)", () => {
+    const edges: GraphEdge[] = [
+      importEdge("a.ts", "b.ts"),
+      importEdge("b.ts", "c.ts"),
+    ];
+    const counts = computeReachCounts(edges);
+    expect(counts.get("c.ts")).toBe(2); // A and B both reach C
+    expect(counts.get("b.ts")).toBe(1); // only A reaches B
+    expect(counts.get("a.ts")).toBe(0); // nothing reaches A
+  });
+
+  it("computes reach counts for a diamond (A→B, A→C, B→D, C→D)", () => {
+    const edges: GraphEdge[] = [
+      importEdge("a.ts", "b.ts"),
+      importEdge("a.ts", "c.ts"),
+      importEdge("b.ts", "d.ts"),
+      importEdge("c.ts", "d.ts"),
+    ];
+    const counts = computeReachCounts(edges);
+    expect(counts.get("d.ts")).toBe(3); // A, B, C all reach D
+    expect(counts.get("b.ts")).toBe(1); // only A reaches B
+    expect(counts.get("c.ts")).toBe(1); // only A reaches C
+    expect(counts.get("a.ts")).toBe(0); // nothing reaches A
+  });
+
+  it("handles cycles (A→B→A)", () => {
+    const edges: GraphEdge[] = [
+      importEdge("a.ts", "b.ts"),
+      importEdge("b.ts", "a.ts"),
+    ];
+    const counts = computeReachCounts(edges);
+    expect(counts.get("a.ts")).toBe(1); // B reaches A
+    expect(counts.get("b.ts")).toBe(1); // A reaches B
+  });
+
+  it("returns empty map for no import edges", () => {
+    const edges: GraphEdge[] = [
+      { source: "a.ts", target: "b.ts", kind: "calls", metadata: { repo: "test" } },
+    ];
+    const counts = computeReachCounts(edges);
+    expect(counts.size).toBe(0);
+  });
+
+  it("handles isolated nodes (no incoming edges)", () => {
+    const edges: GraphEdge[] = [
+      importEdge("a.ts", "b.ts"),
+    ];
+    const counts = computeReachCounts(edges);
+    expect(counts.get("b.ts")).toBe(1); // A reaches B
+    expect(counts.get("a.ts")).toBe(0); // nothing reaches A
+  });
+});
+
+describe("computeBlastRadius with pageRankScores", () => {
+  it("annotates affected files with PageRank scores when provided", async () => {
+    const store = new InMemoryGraphStore();
+    await store.addEdges([
+      importEdge("a.ts", "target.ts"),
+      importEdge("b.ts", "target.ts"),
+    ]);
+
+    const scores = new Map([["a.ts", 0.5], ["b.ts", 0.3]]);
+    const result = await computeBlastRadius(["target.ts"], store, {
+      pageRankScores: scores,
+    });
+
+    expect(result.totalAffected).toBe(2);
+    const aFile = result.affectedFiles.find(f => f.path === "a.ts")!;
+    const bFile = result.affectedFiles.find(f => f.path === "b.ts")!;
+    expect(aFile.score).toBe(0.5);
+    expect(bFile.score).toBe(0.3);
+  });
+
+  it("leaves score undefined when pageRankScores not provided", async () => {
+    const store = new InMemoryGraphStore();
+    await store.addEdges([importEdge("a.ts", "target.ts")]);
+
+    const result = await computeBlastRadius(["target.ts"], store);
+
+    expect(result.affectedFiles[0]!.score).toBeUndefined();
   });
 });

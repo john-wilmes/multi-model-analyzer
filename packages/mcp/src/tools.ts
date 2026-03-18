@@ -12,6 +12,7 @@ import {
   executeDependencyQuery,
   executeArchitectureQuery,
   computeBlastRadius,
+  computePageRank,
   getFlagInventory,
   computeFlagImpact,
 } from "@mma/query";
@@ -341,10 +342,62 @@ export function registerTools(server: McpServer, stores: Stores): void {
         crossRepoGraph = deserializeGraph(parsed);
       }
     }
+    // Compute PageRank scores for blast radius annotation
+    const importEdges = await graphStore.getEdgesByKind("imports", repo);
+    const prResult = computePageRank(importEdges);
     const result = await computeBlastRadius(files, graphStore, {
       maxDepth, includeCallGraph, repo, crossRepoGraph,
+      pageRankScores: prResult.scores,
     }, searchStore);
-    return jsonResult(result);
+    // Sort by score descending
+    const sorted = {
+      ...result,
+      affectedFiles: [...result.affectedFiles].sort((a, b) => (b.score ?? 0) - (a.score ?? 0)),
+    };
+    return jsonResult(sorted);
+  });
+
+  // Vulnerability reachability findings
+  server.registerTool("get_vulnerability", {
+    description: "List vulnerability reachability findings from the latest analysis. Shows which vulnerable dependencies are actually imported in the codebase.",
+    inputSchema: {
+      repo: z.string().optional().describe("Filter to a specific repository name"),
+      severity: z.enum(["low", "moderate", "high", "critical"]).optional().describe("Filter by minimum severity level"),
+      limit: z.number().optional().describe("Max results to return (default 20)"),
+      offset: z.number().optional().describe("Offset for pagination (default 0)"),
+    },
+  }, async ({ repo, severity, limit, offset }) => {
+    const maxResults = limit ?? 20;
+    const skip = offset ?? 0;
+
+    // Collect vuln SARIF from matching repos
+    const allResults: import("@mma/core").SarifResult[] = [];
+    const indexJson = await kvStore.get("sarif:latest:index");
+    if (!indexJson) return jsonResult({ findings: [], total: 0 });
+
+    const index = JSON.parse(indexJson) as { repos: string[] };
+    const targetRepos = repo ? [repo] : index.repos;
+
+    for (const r of targetRepos) {
+      const json = await kvStore.get(`sarif:vuln:${r}`);
+      if (json) {
+        try {
+          const results = JSON.parse(json) as import("@mma/core").SarifResult[];
+          allResults.push(...results);
+        } catch { /* skip malformed */ }
+      }
+    }
+
+    // Filter by minimum severity
+    const severityOrder = ["low", "moderate", "high", "critical"];
+    const minIdx = severity ? severityOrder.indexOf(severity) : 0;
+    const filtered = severity
+      ? allResults.filter(r => severityOrder.indexOf(String(r.properties?.severity ?? "low")) >= minIdx)
+      : allResults;
+
+    // Paginate
+    const paginated = filtered.slice(skip, skip + maxResults);
+    return jsonResult({ findings: paginated, total: filtered.length, offset: skip, limit: maxResults });
   });
 
   // 13. Feature flag inventory

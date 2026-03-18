@@ -26,7 +26,7 @@ export type { CommitInfo, CoupledPair, TemporalCouplingOptions, TemporalCoupling
 export { withinWindow, extractPairs } from "./git-history.js";
 export type { CoChangePair } from "./git-history.js";
 
-export { isVulnerable, matchAdvisories, checkVulnReachability, vulnReachabilityToSarif } from "./vuln-match.js";
+export { isVulnerable, matchAdvisories, checkVulnReachability, vulnReachabilityToSarif, parseNpmAudit, checkTransitiveVulnReachability, vulnReachabilityToSarifWithCodeFlows } from "./vuln-match.js";
 export type { Advisory, InstalledPackage, VulnReachabilityResult } from "./vuln-match.js";
 
 export { computeHotspots } from "./hotspots.js";

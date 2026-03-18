@@ -83,7 +83,7 @@ describe("registerTools", () => {
       "get_dependencies", "get_architecture", "get_diagnostics",
       "get_metrics", "get_blast_radius",
       "get_cross_repo_graph", "get_service_correlation", "get_cross_repo_impact",
-      "get_flag_inventory", "get_flag_impact",
+      "get_flag_inventory", "get_flag_impact", "get_vulnerability",
     ];
 
     for (const tool of expectedTools) {

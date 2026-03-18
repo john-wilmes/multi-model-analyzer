@@ -6,6 +6,7 @@
  */
 
 import { parseSymbolId } from "@mma/core";
+import type { GraphEdge } from "@mma/core";
 import type { GraphStore, SearchStore } from "@mma/storage";
 import type { CrossRepoGraph } from "@mma/correlation";
 
@@ -14,6 +15,8 @@ export interface AffectedFile {
   readonly depth: number;
   readonly via: "imports" | "calls" | "both";
   readonly repo: string;
+  readonly score?: number;
+  readonly reachCount?: number;
 }
 
 export interface BlastRadiusResult {
@@ -33,6 +36,7 @@ export async function computeBlastRadius(
     includeCallGraph?: boolean;
     repo?: string;
     crossRepoGraph?: CrossRepoGraph;
+    pageRankScores?: ReadonlyMap<string, number>;
   },
   searchStore?: SearchStore,
 ): Promise<BlastRadiusResult> {
@@ -117,7 +121,10 @@ export async function computeBlastRadius(
     const via = info.via.has("imports") && info.via.has("calls")
       ? "both" as const
       : info.via.has("imports") ? "imports" as const : "calls" as const;
-    affectedFiles.push({ path, depth: info.depth, via, repo: repo ?? "" });
+    affectedFiles.push({
+      path, depth: info.depth, via, repo: repo ?? "",
+      score: options?.pageRankScores?.get(path),
+    });
   }
 
   // Sort by depth, then path
@@ -203,4 +210,58 @@ export async function computeBlastRadius(
     description: `${affectedFiles.length} files affected by changes to ${resolvedFiles.size} file(s), max depth ${maxDepth}`,
     crossRepoAffected,
   };
+}
+
+/**
+ * Compute transitive fan-in (reach count) for each file in the dependency graph.
+ *
+ * For each file, counts how many other files transitively depend on it
+ * (i.e., how many files would be affected if this file changed).
+ * O(V+E), pure, synchronous.
+ */
+export function computeReachCounts(
+  edges: readonly GraphEdge[],
+): Map<string, number> {
+  // Build reverse adjacency: for each target, who imports it?
+  // "A imports B" means B is depended upon by A → reverse: B -> [A]
+  const reverseAdj = new Map<string, string[]>();
+  const allNodes = new Set<string>();
+
+  for (const edge of edges) {
+    if (edge.kind !== "imports") continue;
+    allNodes.add(edge.source);
+    allNodes.add(edge.target);
+    let deps = reverseAdj.get(edge.target);
+    if (!deps) {
+      deps = [];
+      reverseAdj.set(edge.target, deps);
+    }
+    deps.push(edge.source);
+  }
+
+  // For each node, BFS through reverse adjacency to count transitive dependents
+  const result = new Map<string, number>();
+  for (const node of allNodes) {
+    const visited = new Set<string>();
+    const queue = [node];
+    visited.add(node);
+
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      const dependents = reverseAdj.get(current);
+      if (dependents) {
+        for (const dep of dependents) {
+          if (!visited.has(dep)) {
+            visited.add(dep);
+            queue.push(dep);
+          }
+        }
+      }
+    }
+
+    // Exclude the node itself from its reach count
+    result.set(node, visited.size - 1);
+  }
+
+  return result;
 }

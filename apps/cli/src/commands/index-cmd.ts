@@ -49,12 +49,12 @@ import {
   detectTemporalCoupling,
   temporalCouplingToSarif,
   matchAdvisories,
-  checkVulnReachability,
-  vulnReachabilityToSarif,
+  checkTransitiveVulnReachability,
+  vulnReachabilityToSarifWithCodeFlows,
 } from "@mma/heuristics";
 import type { PackageJsonInfo, CommitInfo, Advisory, InstalledPackage } from "@mma/heuristics";
 import { computeBaseline, hotspotFindings, computeRepoAtdi, computeSystemAtdi, annotateDebt, summarizeDebt } from "@mma/diagnostics";
-import { computePageRank, pageRankToSarif } from "@mma/query";
+import { computePageRank, pageRankToSarif, computeReachCounts } from "@mma/query";
 import { runCorrelation } from "@mma/correlation";
 import type { KVStore, GraphStore, SearchStore } from "@mma/storage";
 import {
@@ -866,6 +866,9 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
           const prSarif = pageRankToSarif(prResult, repo.name);
           await kvStore.set(`sarif:blastRadius:${repo.name}`, JSON.stringify(prSarif));
           log(`    PageRank: ${prResult.ranked.length} nodes scored, ${prSarif.length} high-risk`);
+          const reachCounts = computeReachCounts(depGraph.edges);
+          await kvStore.set(`reachCounts:${repo.name}`, JSON.stringify([...reachCounts]));
+          log(`    ReachCounts: ${reachCounts.size} nodes scored`);
         }
 
         // 5i: Vulnerability reachability
@@ -881,8 +884,8 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
             log(`    [vuln] no package.json in changeset, skipping (use --force-full-reindex to re-scan)`);
           } else {
             const vulnMatches = matchAdvisories(installed, options.advisories);
-            const reachability = checkVulnReachability(vulnMatches, depGraph?.edges ?? []);
-            const vulnSarif = vulnReachabilityToSarif(reachability, repo.name);
+            const reachability = checkTransitiveVulnReachability(vulnMatches, depGraph?.edges ?? []);
+            const vulnSarif = vulnReachabilityToSarifWithCodeFlows(reachability, repo.name);
             await kvStore.set(`sarif:vuln:${repo.name}`, JSON.stringify(vulnSarif));
             log(`    ${vulnSarif.length} reachable vulnerabilities found`);
           }
