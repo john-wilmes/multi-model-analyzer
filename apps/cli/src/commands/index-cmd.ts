@@ -31,7 +31,7 @@ import { createSarifResult, createLogicalLocation } from "@mma/core";
 import { detectChanges, classifyFiles, getFileContent, getHeadCommit, isBareRepo, getCommitHistory } from "@mma/ingestion";
 import { parseFiles } from "@mma/parsing";
 import type { TreeSitterTree } from "@mma/parsing";
-import { extractDependencyGraph, buildControlFlowGraph, createCfgIdCounter, extractCallEdgesFromTreeSitter, computeModuleMetrics, summarizeRepoMetrics, detectDeadExports, detectInstabilityViolations } from "@mma/structural";
+import { extractDependencyGraph, buildControlFlowGraph, createCfgIdCounter, extractCallEdgesFromTreeSitter, computeModuleMetrics, summarizeRepoMetrics, detectDeadExports, detectInstabilityViolations, extractHeritageEdges } from "@mma/structural";
 import type { TreeSitterNode } from "@mma/parsing";
 import { buildFeatureModel, extractConstraintsFromCode, validateFeatureModel } from "@mma/model-config";
 import { identifyLogRoots, traceBackwardFromLog, buildFaultTree, analyzeGaps, analyzeCascadingRisk, FAULT_RULES } from "@mma/model-fault";
@@ -71,6 +71,26 @@ import { computeAffectedScope } from "./affected-scope.js";
 import type { AffectedScope } from "./affected-scope.js";
 import { PipelineTracer } from "../tracer.js";
 
+function pLimit(concurrency: number) {
+  if (!Number.isInteger(concurrency) || concurrency < 1) {
+    throw new RangeError("concurrency must be a positive integer");
+  }
+  let active = 0;
+  const queue: (() => void)[] = [];
+  return <T>(fn: () => Promise<T>): Promise<T> =>
+    new Promise<T>((resolve, reject) => {
+      const run = () => {
+        active++;
+        fn().then(resolve, reject).finally(() => {
+          active--;
+          if (queue.length > 0) queue.shift()!();
+        });
+      };
+      if (active < concurrency) run();
+      else queue.push(run);
+    });
+}
+
 const bareRepoCache = new Map<string, boolean>();
 async function checkBareRepo(repoPath: string): Promise<boolean> {
   let cached = bareRepoCache.get(repoPath);
@@ -108,6 +128,7 @@ export interface IndexOptions {
   readonly narrateForce?: boolean;
   readonly forceFullReindex?: boolean;
   readonly advisories?: readonly Advisory[];
+  readonly enrich?: boolean;
 }
 
 export interface IndexResult {
@@ -377,10 +398,11 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     }
   }
 
-  // Phases 3-6a: Per-repo processing (parse, structural, heuristics, models).
-  // Each repo is fully processed through all tree-dependent phases before moving
-  // to the next, so only one repo's trees occupy WASM memory at a time.
-  log("Phases 3-6a: Per-repo processing...");
+  // Phases 3-6b: Per-repo processing (parse, structural, heuristics, models,
+  // summarization). Repos are processed in parallel with a concurrency cap of 4
+  // to bound WASM heap usage. Map writes use different keys per repo so there
+  // are no races; SQLite stores use WAL + busy_timeout for concurrent writes.
+  log("Phases 3-6b: Per-repo processing (parallel, concurrency=4)...");
   const parsedFilesByRepo = new Map<string, ParsedFile[]>();
   const depGraphByRepo = new Map<string, DependencyGraph>();
   const servicesByRepo = new Map<string, InferredService[]>();
@@ -439,15 +461,33 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     }
   }
 
-  for (const repo of repos) {
+  // Shared API budget across all parallel workers.
+  // reserve() atomically claims budget before async work; refund() returns unused.
+  // This prevents concurrent pLimit workers from overspending.
+  const sharedApiBudget = options.maxApiCalls !== undefined
+    ? {
+        remaining: options.maxApiCalls,
+        reserve(n: number): number {
+          const granted = Math.min(n, this.remaining);
+          this.remaining -= granted;
+          return granted;
+        },
+        refund(n: number): void {
+          this.remaining += n;
+        },
+      }
+    : undefined;
+
+  const limit = pLimit(4);
+  await Promise.all(repos.map((repo) => limit(async () => {
     let trees: ReadonlyMap<string, TreeSitterTree> | undefined;
 
     // Recovery repos skip Phases 3-4b (already have parsedFiles + graph edges)
     if (recoveryRepos.has(repo.name)) {
       log(`  [${repo.name}] Skipping Phases 3-4b (recovery mode, 4c/4d will still run)`);
     } else {
-    let classified = classifiedByRepo.get(repo.name);
-    if (!classified || classified.length === 0) continue;
+    let classified = classifiedByRepo.get(repo.name) ?? ([] as ReturnType<typeof classifyFiles>);
+    if (classified.length === 0) return;
 
     // Filter to affected scope when --affected is active
     if (scopeByRepo) {
@@ -523,7 +563,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       log(`  [${repo.name}] Phase 3: ${Math.round(performance.now() - phase3Start)}ms`);
     } catch (error) {
       console.error(`  Failed to parse ${repo.name}:`, error);
-      continue;
+      return;
     }
 
     // --- Phase 4: Dependency graph extraction ---
@@ -547,6 +587,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         if (graph.edges.length === 0) {
           log(`    warning: 0 import edges from ${trees.size} trees -- pattern and flag detection may be limited`);
         }
+        await kvStore.set(`circularDeps:${repo.name}`, JSON.stringify(graph.circularDependencies));
         if (graph.circularDependencies.length > 0) {
           log(`    ${graph.circularDependencies.length} circular dependencies found`);
           for (const cycle of graph.circularDependencies.slice(0, 5)) {
@@ -555,7 +596,6 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
           if (graph.circularDependencies.length > 5) {
             log(`      ... and ${graph.circularDependencies.length - 5} more`);
           }
-          await kvStore.set(`circularDeps:${repo.name}`, JSON.stringify(graph.circularDependencies));
         }
       } catch (error) {
         console.error(`  Failed to extract dependency graph for ${repo.name}:`, error);
@@ -586,6 +626,23 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         log(`  [${repo.name}] ${callEdges.length} call edges (${elapsed}ms)`);
       } catch (error) {
         console.error(`  Failed to extract call graph for ${repo.name}:`, error);
+      }
+    }
+
+    if (trees && trees.size > 0) {
+      log(`  [${repo.name}] Extracting heritage edges...`);
+      try {
+        const start = performance.now();
+        const heritageEdges = extractHeritageEdges(trees, repo.name);
+
+        if (heritageEdges.length > 0) {
+          await options.graphStore.addEdges(heritageEdges);
+        }
+
+        const elapsed = Math.round(performance.now() - start);
+        log(`  [${repo.name}] ${heritageEdges.length} heritage edges (extends/implements) (${elapsed}ms)`);
+      } catch (error) {
+        console.error(`  Failed to extract heritage edges for ${repo.name}:`, error);
       }
     }
 
@@ -775,9 +832,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         });
         const patterns = patternsResult.data;
         patternsByRepo.set(repo.name, patterns);
-        if (patterns.length > 0) {
-          await kvStore.set(`patterns:${repo.name}`, JSON.stringify(patterns));
-        }
+        await kvStore.set(`patterns:${repo.name}`, JSON.stringify(patterns));
         log(`    ${patternsResult.meta.itemCount} patterns detected in ${patternsResult.meta.durationMs}ms (from ${symbolsByFile.size} files with symbols)`);
 
         // 5c: Feature flag scanning
@@ -1124,8 +1179,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
 
         // Tier 3: Haiku LLM for low-confidence method summaries
         let tier3Count = 0;
-        let apiCallsRemaining = options.maxApiCalls;
-        if (options.anthropicApiKey && (apiCallsRemaining === undefined || apiCallsRemaining > 0)) {
+        if (options.enrich && options.anthropicApiKey && (!sharedApiBudget || sharedApiBudget.remaining > 0)) {
           let tier3Candidates = [...summaryMap.entries()]
             .filter(([, s]) => shouldEscalateToTier3(s, undefined))
             .map(([entityId, s]) => ({
@@ -1133,8 +1187,10 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
               description: s.description,
               context: sourceContextMap.get(entityId) ?? entityId,
             }));
-          if (apiCallsRemaining !== undefined) {
-            tier3Candidates = tier3Candidates.slice(0, apiCallsRemaining);
+          // Atomically reserve budget before async work
+          if (sharedApiBudget) {
+            const granted = sharedApiBudget.reserve(tier3Candidates.length);
+            tier3Candidates = tier3Candidates.slice(0, granted);
           }
           if (tier3Candidates.length > 0) {
             log(`    Tier 3 (Haiku): upgrading ${tier3Candidates.length} low-confidence summaries`);
@@ -1148,15 +1204,12 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
                 tier3Count++;
               }
             }
-            if (apiCallsRemaining !== undefined) {
-              apiCallsRemaining = Math.max(0, apiCallsRemaining - tier3Candidates.length);
-            }
           }
         }
 
         // Tier 4: Sonnet for service-level summaries
         let tier4Count = 0;
-        if (options.anthropicApiKey) {
+        if (options.enrich && options.anthropicApiKey) {
           const services6b = servicesByRepo.get(repo.name);
           if (services6b && services6b.length > 0) {
             const inputs: ServiceSummaryInput[] = services6b.map((svc) => ({
@@ -1169,21 +1222,32 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
               dependencies: [...svc.dependencies],
               entryPoints: [...svc.entryPoints],
             }));
-            log(`    Tier 4 (Sonnet): summarizing ${inputs.length} services`);
-            const tier4Result = await tier4BatchSummarize(inputs, {
-              ...SONNET_DEFAULTS,
-              apiKey: options.anthropicApiKey,
-              kvStore,
-              maxApiCalls: apiCallsRemaining,
-            });
-            for (const s of tier4Result.summaries) {
-              if (s.confidence > 0) {
-                summaryMap.set(s.entityId, s);
-                tier4Count++;
+            // Atomically reserve budget before async work
+            const tier4Budget = sharedApiBudget ? sharedApiBudget.reserve(inputs.length) : undefined;
+            if (sharedApiBudget && tier4Budget === 0) {
+              log(`    Tier 4: no API budget remaining, skipping`);
+            } else {
+              log(`    Tier 4 (Sonnet): summarizing ${inputs.length} services`);
+              const tier4Result = await tier4BatchSummarize(inputs, {
+                ...SONNET_DEFAULTS,
+                apiKey: options.anthropicApiKey,
+                kvStore,
+                maxApiCalls: tier4Budget,
+              });
+              for (const s of tier4Result.summaries) {
+                if (s.confidence > 0) {
+                  summaryMap.set(s.entityId, s);
+                  tier4Count++;
+                }
               }
-            }
-            if (tier4Result.cacheHits > 0) {
-              log(`    Tier 4: ${tier4Result.cacheHits} cache hits, ${tier4Result.apiCallsMade} API calls`);
+              // Refund unused budget
+              if (sharedApiBudget && tier4Budget !== undefined) {
+                const unused = tier4Budget - tier4Result.apiCallsMade;
+                if (unused > 0) sharedApiBudget.refund(unused);
+              }
+              if (tier4Result.cacheHits > 0) {
+                log(`    Tier 4: ${tier4Result.cacheHits} cache hits, ${tier4Result.apiCallsMade} API calls`);
+              }
             }
           }
         }
@@ -1243,7 +1307,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     flagsByRepo.delete(repo.name);
     logIndexByRepo.delete(repo.name);
     namingByRepo.delete(repo.name);
-  }
+  })));
 
   log(`  Phase 6b total: ${phase6bTotalMs}ms`);
   log(`  Phase 6c total: ${phase6cTotalMs}ms`);

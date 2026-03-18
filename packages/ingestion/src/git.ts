@@ -49,12 +49,25 @@ export async function isBareRepo(repoPath: string): Promise<boolean> {
 
 export async function getHeadCommit(repoPath: string, branch?: string): Promise<string> {
   const ref = branch ?? "HEAD";
-  const { stdout } = await execFileAsync(
-    "git",
-    ["rev-parse", ref],
-    { cwd: repoPath },
-  );
-  return stdout.trim();
+  try {
+    const { stdout } = await execFileAsync(
+      "git",
+      ["rev-parse", ref],
+      { cwd: repoPath },
+    );
+    return stdout.trim();
+  } catch {
+    // Branch ref not found (e.g., "main" in a repo with "master"); fall back to HEAD
+    if (ref !== "HEAD") {
+      const { stdout } = await execFileAsync(
+        "git",
+        ["rev-parse", "HEAD"],
+        { cwd: repoPath },
+      );
+      return stdout.trim();
+    }
+    throw new Error(`Cannot resolve HEAD in ${repoPath}`);
+  }
 }
 
 export async function diffFiles(
@@ -210,16 +223,19 @@ export async function getCommitHistory(
   maxCommits: number = 200,
 ): Promise<CommitFileChange[]> {
   try {
+    const bare = await isBareRepo(repoPath);
+    const gitArgs = bare
+      ? ["--git-dir", repoPath, "log"]
+      : ["log"];
+    gitArgs.push(
+      "--name-only",
+      "--diff-merges=first-parent",
+      `--pretty=format:%H`,
+      `-n`, String(maxCommits),
+    );
     const { stdout } = await execFileAsync(
       "git",
-      [
-        "--git-dir", repoPath,
-        "log",
-        "--name-only",
-        "--diff-merges=first-parent",
-        `--pretty=format:%H`,
-        `-n`, String(maxCommits),
-      ],
+      gitArgs,
       { cwd: repoPath, maxBuffer: 50 * 1024 * 1024 },
     );
 

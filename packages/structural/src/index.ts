@@ -33,3 +33,5 @@ export { computeModuleMetrics, summarizeRepoMetrics, detectInstabilityViolations
 
 export { detectDeadExports } from "./dead-exports.js";
 export type { DeadExportOptions } from "./dead-exports.js";
+
+export { extractHeritageEdges } from "./heritage-graph.js";

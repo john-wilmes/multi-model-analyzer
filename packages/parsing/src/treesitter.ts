@@ -146,7 +146,7 @@ function visitNode(
   }
 
   const newContainer =
-    node.type === "class_declaration" || node.type === "interface_declaration"
+    node.type === "class_declaration" || node.type === "abstract_class_declaration" || node.type === "interface_declaration"
       ? (extractName(node) ?? container)
       : container;
 
@@ -160,6 +160,7 @@ function nodeTypeToSymbolKind(nodeType: string): SymbolKind | null {
     case "function_declaration":
       return "function";
     case "class_declaration":
+    case "abstract_class_declaration":
       return "class";
     case "interface_declaration":
       return "interface";
@@ -168,6 +169,7 @@ function nodeTypeToSymbolKind(nodeType: string): SymbolKind | null {
     case "enum_declaration":
       return "enum";
     case "method_definition":
+    case "abstract_method_signature":
       return "method";
     default:
       return null;

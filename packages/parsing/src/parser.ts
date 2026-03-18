@@ -77,6 +77,7 @@ export async function parseFiles(
 
   if (tsInitOk) {
     const start = performance.now();
+    let notFoundCount = 0;
     for (let i = 0; i < parseableFiles.length; i++) {
       const file = parseableFiles[i]!;
       progress?.({ phase: "tree-sitter", current: i + 1, total: parseableFiles.length, filePath: file.path });
@@ -92,8 +93,15 @@ export async function parseFiles(
         const kind = classifyFileKind(file.path);
         parsedFiles.push(createParsedFile(file.path, repo, content, kind, symbols, errors));
       } catch (err) {
+        if (typeof err === "object" && err !== null && "code" in err && (err as { code?: string }).code === "ENOENT") {
+          notFoundCount++;
+          continue;
+        }
         console.warn(`tree-sitter parse failed for ${file.path}:`, err);
       }
+    }
+    if (notFoundCount > 0) {
+      console.warn(`tree-sitter: skipped ${notFoundCount} files (not found on disk)`);
     }
     treeSitterTimeMs = performance.now() - start;
   }

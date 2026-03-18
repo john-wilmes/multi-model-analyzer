@@ -6,7 +6,7 @@
 import { createReadStream, createWriteStream, statSync, existsSync } from "node:fs";
 import { createGunzip, createGzip } from "node:zlib";
 import { pipeline } from "node:stream/promises";
-import { exec } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join, extname, resolve } from "node:path";
@@ -53,7 +53,10 @@ export interface DashboardOptions {
   readonly kvStore: KVStore;
   readonly graphStore: GraphStore;
   readonly port: number;
+  readonly host: string;
   readonly staticDir: string;
+  /** Explicit origins allowed for CORS. Empty set = no CORS headers (localhost-only default). */
+  readonly corsOrigins?: ReadonlySet<string>;
 }
 
 
@@ -78,18 +81,19 @@ function parseQuery(url: string): ParsedQuery {
   return result;
 }
 
-function sendJson(res: ServerResponse, data: unknown, status = 200): void {
+function sendJson(res: ServerResponse, data: unknown, status = 200, corsOrigin?: string): void {
   const body = JSON.stringify(data);
-  res.writeHead(status, {
+  const headers: Record<string, string | number> = {
     "Content-Type": "application/json",
     "Content-Length": Buffer.byteLength(body),
-    "Access-Control-Allow-Origin": "http://localhost",
-  });
+  };
+  if (corsOrigin) headers["Access-Control-Allow-Origin"] = corsOrigin;
+  res.writeHead(status, headers);
   res.end(body);
 }
 
-function sendError(res: ServerResponse, message: string, status = 500): void {
-  sendJson(res, { error: message }, status);
+function sendError(res: ServerResponse, message: string, status = 500, corsOrigin?: string): void {
+  sendJson(res, { error: message }, status, corsOrigin);
 }
 
 async function serveStatic(
@@ -139,11 +143,20 @@ async function serveStatic(
   }
 }
 
+/** Resolve the allowed CORS origin for a request, given the server's allowlist. */
+function getAllowedOrigin(req: IncomingMessage, corsOrigins: ReadonlySet<string>): string | undefined {
+  if (corsOrigins.size === 0) return undefined;
+  const origin = req.headers.origin;
+  if (!origin) return undefined;
+  return corsOrigins.has(origin) ? origin : undefined;
+}
+
 async function handleApi(
   req: IncomingMessage,
   res: ServerResponse,
   kvStore: KVStore,
   graphStore: GraphStore,
+  corsOrigin: string | undefined,
 ): Promise<void> {
   const url = req.url ?? "/";
   const path = url.split("?")[0]!;
@@ -152,7 +165,7 @@ async function handleApi(
   // GET /api/repos
   if (path === "/api/repos") {
     const repos = await discoverRepos(kvStore);
-    return sendJson(res, { repos });
+    return sendJson(res, { repos }, 200, corsOrigin);
   }
 
   // GET /api/metrics-summary
@@ -168,7 +181,7 @@ async function handleApi(
         } catch { /* skip malformed */ }
       }
     }
-    return sendJson(res, result);
+    return sendJson(res, result, 200, corsOrigin);
   }
 
   // GET /api/metrics-all
@@ -184,7 +197,7 @@ async function handleApi(
         } catch { /* skip malformed */ }
       }
     }
-    return sendJson(res, result);
+    return sendJson(res, result, 200, corsOrigin);
   }
 
   // GET /api/dsm/:repo
@@ -220,7 +233,7 @@ async function handleApi(
       }
     }
 
-    return sendJson(res, { modules, matrix, edgeKind });
+    return sendJson(res, { modules, matrix, edgeKind }, 200, corsOrigin);
   }
 
   // GET /api/metrics/:repo
@@ -228,11 +241,11 @@ async function handleApi(
   if (metricsMatch) {
     const repo = decodeURIComponent(metricsMatch[1]!);
     const json = await kvStore.get(`metrics:${repo}`);
-    if (!json) return sendJson(res, []);
+    if (!json) return sendJson(res, [], 200, corsOrigin);
     try {
-      return sendJson(res, JSON.parse(json) as ModuleMetrics[]);
+      return sendJson(res, JSON.parse(json) as ModuleMetrics[], 200, corsOrigin);
     } catch {
-      return sendJson(res, []);
+      return sendJson(res, [], 200, corsOrigin);
     }
   }
 
@@ -273,7 +286,7 @@ async function handleApi(
       });
     }
 
-    return sendJson(res, { results, total: results.length });
+    return sendJson(res, { results, total: results.length }, 200, corsOrigin);
   }
 
   // GET /api/graph/:repo?kind=imports&limit=1000
@@ -283,7 +296,7 @@ async function handleApi(
     const kind = query.single["kind"] ?? "imports";
     const limit = Math.min(Math.max(parseInt(query.single["limit"] ?? "1000", 10) || 1000, 1), 10000);
     const edges = await graphStore.getEdgesByKind(kind as Parameters<typeof graphStore.getEdgesByKind>[0], repo, { limit });
-    return sendJson(res, { edges, limit });
+    return sendJson(res, { edges, limit }, 200, corsOrigin);
   }
 
   // GET /api/dependencies/:module?depth=3
@@ -361,7 +374,7 @@ async function handleApi(
       dependencies: bfs(modulePath, fwd),
       dependents: bfs(modulePath, rev),
       crossRepoDeps,
-    });
+    }, 200, corsOrigin);
   }
 
   // GET /api/practices
@@ -372,9 +385,9 @@ async function handleApi(
         format: "json",
         silent: true,
       });
-      return sendJson(res, report);
+      return sendJson(res, report, 200, corsOrigin);
     } catch (err) {
-      return sendError(res, err instanceof Error ? err.message : String(err));
+      return sendError(res, err instanceof Error ? err.message : String(err), 500, corsOrigin);
     }
   }
 
@@ -383,11 +396,11 @@ async function handleApi(
   if (patternsMatch) {
     const repo = decodeURIComponent(patternsMatch[1]!);
     const json = await kvStore.get(`patterns:${repo}`);
-    if (!json) return sendJson(res, {});
+    if (!json) return sendJson(res, {}, 200, corsOrigin);
     try {
-      return sendJson(res, JSON.parse(json) as unknown);
+      return sendJson(res, JSON.parse(json) as unknown, 200, corsOrigin);
     } catch {
-      return sendJson(res, {});
+      return sendJson(res, {}, 200, corsOrigin);
     }
   }
 
@@ -410,7 +423,7 @@ async function handleApi(
     }
     // Sort by hotspotScore descending
     (result as Array<Record<string, unknown>>).sort((a, b) => (b["hotspotScore"] as number) - (a["hotspotScore"] as number));
-    return sendJson(res, result);
+    return sendJson(res, result, 200, corsOrigin);
   }
 
   // GET /api/temporal-coupling
@@ -430,7 +443,7 @@ async function handleApi(
       }
     }
     (allPairs as Array<Record<string, unknown>>).sort((a, b) => (b["coChangeCount"] as number) - (a["coChangeCount"] as number));
-    return sendJson(res, allPairs);
+    return sendJson(res, allPairs, 200, corsOrigin);
   }
 
   // GET /api/temporal-coupling/:repo
@@ -438,22 +451,22 @@ async function handleApi(
   if (tcRepoMatch) {
     const repo = decodeURIComponent(tcRepoMatch[1]!);
     const json = await kvStore.get(`temporal-coupling:${repo}`);
-    if (!json) return sendJson(res, { pairs: [], commitsAnalyzed: 0, commitsSkipped: 0 });
+    if (!json) return sendJson(res, { pairs: [], commitsAnalyzed: 0, commitsSkipped: 0 }, 200, corsOrigin);
     try {
-      return sendJson(res, JSON.parse(json) as unknown);
+      return sendJson(res, JSON.parse(json) as unknown, 200, corsOrigin);
     } catch {
-      return sendJson(res, { pairs: [], commitsAnalyzed: 0, commitsSkipped: 0 });
+      return sendJson(res, { pairs: [], commitsAnalyzed: 0, commitsSkipped: 0 }, 200, corsOrigin);
     }
   }
 
   // GET /api/atdi
   if (path === "/api/atdi") {
     const json = await kvStore.get("atdi:system");
-    if (!json) return sendJson(res, null);
+    if (!json) return sendJson(res, null, 200, corsOrigin);
     try {
-      return sendJson(res, JSON.parse(json) as unknown);
+      return sendJson(res, JSON.parse(json) as unknown, 200, corsOrigin);
     } catch {
-      return sendJson(res, null);
+      return sendJson(res, null, 200, corsOrigin);
     }
   }
 
@@ -462,22 +475,22 @@ async function handleApi(
   if (atdiMatch) {
     const repo = decodeURIComponent(atdiMatch[1]!);
     const json = await kvStore.get(`atdi:${repo}`);
-    if (!json) return sendJson(res, null);
+    if (!json) return sendJson(res, null, 200, corsOrigin);
     try {
-      return sendJson(res, JSON.parse(json) as unknown);
+      return sendJson(res, JSON.parse(json) as unknown, 200, corsOrigin);
     } catch {
-      return sendJson(res, null);
+      return sendJson(res, null, 200, corsOrigin);
     }
   }
 
   // GET /api/debt
   if (path === "/api/debt") {
     const json = await kvStore.get("debt:system");
-    if (!json) return sendJson(res, null);
+    if (!json) return sendJson(res, null, 200, corsOrigin);
     try {
-      return sendJson(res, JSON.parse(json) as unknown);
+      return sendJson(res, JSON.parse(json) as unknown, 200, corsOrigin);
     } catch {
-      return sendJson(res, null);
+      return sendJson(res, null, 200, corsOrigin);
     }
   }
 
@@ -486,18 +499,18 @@ async function handleApi(
   if (debtMatch) {
     const repo = decodeURIComponent(debtMatch[1]!);
     const json = await kvStore.get(`debt:${repo}`);
-    if (!json) return sendJson(res, null);
+    if (!json) return sendJson(res, null, 200, corsOrigin);
     try {
-      return sendJson(res, JSON.parse(json) as unknown);
+      return sendJson(res, JSON.parse(json) as unknown, 200, corsOrigin);
     } catch {
-      return sendJson(res, null);
+      return sendJson(res, null, 200, corsOrigin);
     }
   }
 
   // GET /api/cross-repo-graph?repo=X
   if (path === "/api/cross-repo-graph") {
     const raw = await kvStore.get("correlation:graph");
-    if (!raw) return sendJson(res, { error: "No correlation data. Run 'mma index' with 2+ repos first." });
+    if (!raw) return sendJson(res, { error: "No correlation data. Run 'mma index' with 2+ repos first." }, 200, corsOrigin);
     try {
       const parsed = JSON.parse(raw) as {
         edges: CrossRepoGraph["edges"];
@@ -514,9 +527,9 @@ async function handleApi(
         repoPairs: parsed.repoPairs,
         downstreamMap: parsed.downstreamMap,
         upstreamMap: parsed.upstreamMap,
-      });
+      }, 200, corsOrigin);
     } catch {
-      return sendJson(res, { error: "Corrupted correlation data." });
+      return sendJson(res, { error: "Corrupted correlation data." }, 200, corsOrigin);
     }
   }
 
@@ -526,10 +539,10 @@ async function handleApi(
       const body = await readBody(req);
       const { files, repo: impactRepo } = JSON.parse(body) as { files: string[]; repo: string };
       if (!files || !impactRepo) {
-        return sendError(res, "Missing 'files' or 'repo' in request body", 400);
+        return sendError(res, "Missing 'files' or 'repo' in request body", 400, corsOrigin);
       }
       const raw = await kvStore.get("correlation:graph");
-      if (!raw) return sendJson(res, { error: "No correlation data. Run 'mma index' with 2+ repos first." });
+      if (!raw) return sendJson(res, { error: "No correlation data. Run 'mma index' with 2+ repos first." }, 200, corsOrigin);
       const parsed = JSON.parse(raw) as {
         edges: CrossRepoGraph["edges"];
         repoPairs: string[];
@@ -544,9 +557,9 @@ async function handleApi(
         affectedWithinRepo: impact.affectedWithinRepo,
         affectedAcrossRepos: Object.fromEntries(impact.affectedAcrossRepos),
         reposReached: impact.reposReached,
-      });
+      }, 200, corsOrigin);
     } catch (err) {
-      return sendError(res, err instanceof Error ? err.message : String(err), 400);
+      return sendError(res, err instanceof Error ? err.message : String(err), 400, corsOrigin);
     }
   }
 
@@ -554,14 +567,14 @@ async function handleApi(
   if (path === "/api/cross-repo-features") {
     type SharedFlag = { name: string; repos: string[]; coordinated: boolean };
     const raw = await kvStore.get("cross-repo:features");
-    if (!raw) return sendJson(res, { flags: [] });
+    if (!raw) return sendJson(res, { flags: [] }, 200, corsOrigin);
     try {
       const flags = JSON.parse(raw) as SharedFlag[];
       const repo = query.single["repo"];
       const filtered = repo ? flags.filter((f) => f.repos.includes(repo)) : flags;
-      return sendJson(res, { flags: filtered });
+      return sendJson(res, { flags: filtered }, 200, corsOrigin);
     } catch {
-      return sendJson(res, { flags: [] });
+      return sendJson(res, { flags: [] }, 200, corsOrigin);
     }
   }
 
@@ -575,16 +588,16 @@ async function handleApi(
       targetFaultTreeCount: number;
     };
     const raw = await kvStore.get("cross-repo:faults");
-    if (!raw) return sendJson(res, { faultLinks: [] });
+    if (!raw) return sendJson(res, { faultLinks: [] }, 200, corsOrigin);
     try {
       const faultLinks = JSON.parse(raw) as CrossRepoFaultLink[];
       const repo = query.single["repo"];
       const filtered = repo
         ? faultLinks.filter((l) => l.sourceRepo === repo || l.targetRepo === repo)
         : faultLinks;
-      return sendJson(res, { faultLinks: filtered });
+      return sendJson(res, { faultLinks: filtered }, 200, corsOrigin);
     } catch {
-      return sendJson(res, { faultLinks: [] });
+      return sendJson(res, { faultLinks: [] }, 200, corsOrigin);
     }
   }
 
@@ -603,7 +616,7 @@ async function handleApi(
       producers: string[];
     };
     const raw = await kvStore.get("cross-repo:catalog");
-    if (!raw) return sendJson(res, { entries: [] });
+    if (!raw) return sendJson(res, { entries: [] }, 200, corsOrigin);
     try {
       const entries = JSON.parse(raw) as SystemCatalogEntry[];
       const repo = query.single["repo"];
@@ -612,13 +625,13 @@ async function handleApi(
             (e) => e.repo === repo || e.consumers.includes(repo) || e.producers.includes(repo),
           )
         : entries;
-      return sendJson(res, { entries: filtered });
+      return sendJson(res, { entries: filtered }, 200, corsOrigin);
     } catch {
-      return sendJson(res, { entries: [] });
+      return sendJson(res, { entries: [] }, 200, corsOrigin);
     }
   }
 
-  return sendError(res, "Not found", 404);
+  return sendError(res, "Not found", 404, corsOrigin);
 }
 
 function readBody(req: IncomingMessage): Promise<string> {
@@ -646,22 +659,26 @@ function deserializeGraph(raw: {
 
 export async function dashboardCommand(options: DashboardOptions): Promise<void> {
   const { kvStore, graphStore, port, staticDir } = options;
+  const corsOrigins = options.corsOrigins ?? new Set<string>();
 
   const server = createServer(
     (req: IncomingMessage, res: ServerResponse): void => {
       const url = req.url ?? "/";
       const path = url.split("?")[0]!;
+      const corsOrigin = getAllowedOrigin(req, corsOrigins);
 
       if (req.method === "OPTIONS") {
-        res.writeHead(204, { "Access-Control-Allow-Origin": "http://localhost" });
+        const headers: Record<string, string | number> = { Allow: "GET, POST, OPTIONS" };
+        if (corsOrigin) headers["Access-Control-Allow-Origin"] = corsOrigin;
+        res.writeHead(204, headers);
         res.end();
         return;
       }
 
       if (path.startsWith("/api/")) {
-        handleApi(req, res, kvStore, graphStore).catch((err: unknown) => {
+        handleApi(req, res, kvStore, graphStore, corsOrigin).catch((err: unknown) => {
           if (!res.headersSent) {
-            sendError(res, err instanceof Error ? err.message : String(err));
+            sendError(res, err instanceof Error ? err.message : String(err), 500, corsOrigin);
           }
         });
       } else {
@@ -676,21 +693,25 @@ export async function dashboardCommand(options: DashboardOptions): Promise<void>
   );
 
   await new Promise<void>((resolve, reject) => {
-    server.listen(port, "127.0.0.1", () => resolve());
+    server.listen(port, options.host, () => resolve());
     server.once("error", reject);
   });
 
-  const url = `http://localhost:${port}`;
-  console.log(`Dashboard running at ${url}`);
+  const browseHost = options.host === "0.0.0.0" ? "localhost" : options.host;
+  const url = `http://${browseHost}:${port}`;
+  console.log(`Dashboard running at ${url}${options.host === "0.0.0.0" ? " (listening on all interfaces)" : ""}`);
 
-  // Auto-open browser (best-effort, platform-aware)
-  const opener =
-    process.platform === "darwin"
-      ? `open ${url}`
-      : process.platform === "win32"
-        ? `start ${url}`
-        : `xdg-open ${url}`;
-  exec(opener, () => { /* ignore errors */ });
+  // Auto-open browser (best-effort, platform-aware, no shell interpolation)
+  if (process.platform === "win32") {
+    spawn("cmd", ["/c", "start", url], { stdio: "ignore" })
+      .on("error", () => { /* ignore – browser open is best-effort */ })
+      .unref();
+  } else {
+    const binary = process.platform === "darwin" ? "open" : "xdg-open";
+    spawn(binary, [url], { stdio: "ignore" })
+      .on("error", () => { /* ignore – browser open is best-effort */ })
+      .unref();
+  }
 
   // Clean shutdown on SIGINT / SIGTERM
   const shutdown = (): void => {

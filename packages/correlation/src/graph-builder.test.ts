@@ -301,6 +301,35 @@ describe("buildCrossRepoGraph", () => {
     expect(graph.edges).toHaveLength(0);
   });
 
+  it("skips Node.js built-in module targets (node: prefix)", async () => {
+    await store.addEdges([
+      {
+        source: "repo-a/src/utils.ts",
+        target: "node:path",
+        kind: "imports",
+        metadata: { repo: "repo-a" },
+      },
+      {
+        source: "repo-a/src/server.ts",
+        target: "node:fs",
+        kind: "imports",
+        metadata: { repo: "repo-a" },
+      },
+      {
+        source: "repo-a/src/stream.ts",
+        target: "node:stream/promises",
+        kind: "imports",
+        metadata: { repo: "repo-a" },
+      },
+    ]);
+
+    const graph = await buildCrossRepoGraph(store, repos, packageRoots);
+
+    // node: built-ins must never appear as cross-repo edges
+    expect(graph.edges).toHaveLength(0);
+    expect(graph.repoPairs.size).toBe(0);
+  });
+
   it("does not match a repo whose localPath is a prefix of another repo name", async () => {
     // Regression test for the prefix-ambiguity bug: a bare startsWith check would
     // incorrectly match /repos/repo-b against /repos/repo-b-extra/src/file.ts.

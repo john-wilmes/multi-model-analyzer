@@ -39,8 +39,8 @@ describe("computeHotspots", () => {
       change("c2", "src/a.ts"),
       change("c1", "src/b.ts"),
     ];
-    // a.ts: churn=2, symbols=10, raw=20
-    // b.ts: churn=1, symbols=5,  raw=5
+    // a.ts: churn=2, symbols=10 — maxChurn=2, maxSymbolCount=10
+    // b.ts: churn=1, symbols=5
     const symbolCounts = new Map([
       ["src/a.ts", 10],
       ["src/b.ts", 5],
@@ -53,8 +53,8 @@ describe("computeHotspots", () => {
     const b = result.hotspots.find((h) => h.filePath === "src/b.ts")!;
 
     expect(a.hotspotScore).toBe(100);
-    // b raw=5, max raw=20 → 5/20 * 100 = 25
-    expect(b.hotspotScore).toBe(25);
+    // b: churnScore=(1/2)*100=50, complexityScore=(5/10)*100=50 → average=50
+    expect(b.hotspotScore).toBe(50);
   });
 
   it("filters out files with 0 symbols (non-source files)", () => {
@@ -103,6 +103,55 @@ describe("computeHotspots", () => {
 
     expect(result.hotspots[0]!.filePath).toBe("src/high.ts");
     expect(result.hotspots[result.hotspots.length - 1]!.filePath).toBe("src/low.ts");
+  });
+
+  it("single outlier file does not collapse scores of normal files to zero", () => {
+    // Regression: under the old churn*symbolCount formula, one machine-generated file
+    // with 1000 symbols would make all normal files score near-zero after normalisation.
+    const fileChanges = [
+      // Outlier: low churn, huge symbol count (machine-generated)
+      change("c1", "src/generated.ts"),
+      // Normal files: higher churn, moderate symbols
+      change("c1", "src/service.ts"),
+      change("c2", "src/service.ts"),
+      change("c3", "src/service.ts"),
+      change("c4", "src/service.ts"),
+      change("c5", "src/service.ts"),
+      change("c1", "src/controller.ts"),
+      change("c2", "src/controller.ts"),
+      change("c3", "src/controller.ts"),
+    ];
+    const symbolCounts = new Map([
+      ["src/generated.ts", 1000], // outlier: 1000 symbols, churn=1
+      ["src/service.ts", 50], // normal: 50 symbols, churn=5
+      ["src/controller.ts", 40], // normal: 40 symbols, churn=3
+    ]);
+
+    const result = computeHotspots(fileChanges, symbolCounts);
+
+    const generated = result.hotspots.find(
+      (h) => h.filePath === "src/generated.ts",
+    )!;
+    const service = result.hotspots.find(
+      (h) => h.filePath === "src/service.ts",
+    )!;
+    const controller = result.hotspots.find(
+      (h) => h.filePath === "src/controller.ts",
+    )!;
+
+    // The outlier has max symbolCount → complexityScore=100, but low churn → churnScore=(1/5)*100=20
+    // hotspotScore = round((20 + 100) / 2) = 60
+    expect(generated.hotspotScore).toBe(60);
+
+    // service.ts: churnScore=(5/5)*100=100, complexityScore=(50/1000)*100=5 → round(52.5)=53
+    expect(service.hotspotScore).toBe(53);
+
+    // controller.ts: churnScore=(3/5)*100=60, complexityScore=(40/1000)*100=4 → round(32)=32
+    expect(controller.hotspotScore).toBe(32);
+
+    // Normal files must NOT collapse to 0 — old formula would have given ~0
+    expect(service.hotspotScore).toBeGreaterThan(10);
+    expect(controller.hotspotScore).toBeGreaterThan(10);
   });
 
   it("counts distinct commits per file (not raw appearances)", () => {

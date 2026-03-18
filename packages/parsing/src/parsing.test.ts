@@ -90,6 +90,28 @@ describe("tree-sitter parsing", () => {
     expect(methods.some((m) => m.name === "save")).toBe(true);
   });
 
+  it("extracts abstract class with methods", () => {
+    const code = `
+      export abstract class BaseCommand {
+        abstract execute(): Promise<void>;
+        validate() { return true; }
+      }
+    `;
+    const tree = parseSource(code, "test.ts");
+    expect(tree.rootNode.hasError).toBe(false);
+    const { symbols, errors } = extractSymbolsFromTree(tree, "test.ts", "repo");
+    tree.delete();
+    expect(errors).toHaveLength(0);
+
+    const cls = symbols.find((s) => s.name === "BaseCommand");
+    expect(cls).toBeDefined();
+    expect(cls!.kind).toBe("class");
+
+    const methods = symbols.filter((s) => s.kind === "method");
+    expect(methods.some((m) => m.name === "execute")).toBe(true);
+    expect(methods.some((m) => m.name === "validate")).toBe(true);
+  });
+
   it("extracts interfaces and type aliases", () => {
     const code = `
       export interface Config { key: string; }

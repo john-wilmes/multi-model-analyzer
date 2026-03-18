@@ -33,6 +33,7 @@ import { deltaCommand } from "./commands/delta-cmd.js";
 import { catalogCommand } from "./commands/catalog-cmd.js";
 import { computeAffected } from "./commands/affected-cmd.js";
 import { auditCommand } from "./commands/audit-cmd.js";
+import { enrichCommand } from "./commands/enrich-cmd.js";
 import { printJson, printTable, printSarif, validateFormat, validateReportFormat } from "./formatter.js";
 import { parseWatchInterval, watchLoop } from "./watch.js";
 
@@ -73,8 +74,12 @@ async function main(): Promise<void> {
       "narrate-only": { type: "boolean", default: false },
       force: { type: "boolean", default: false },
       "force-full-reindex": { type: "boolean", default: false },
+      enrich: { type: "boolean", default: false },
       port: { type: "string", default: "3000" },
+      host: { type: "string", default: "127.0.0.1" },
+      "cors-origin": { type: "string", multiple: true },
       backend: { type: "string" },
+      transport: { type: "string" },
       "exit-code": { type: "boolean", default: false },
       repo: { type: "string" },
       "max-depth": { type: "string", default: "5" },
@@ -138,10 +143,16 @@ async function main(): Promise<void> {
     }
     const stores = await createStores({ backend: earlyBackend, dbPath, readonly: true });
     try {
+      const transport = values.transport === "http" ? "http" as const : "stdio" as const;
+      const servePort = parseInt(values.port ?? "3001", 10);
       await serveCommand({
         graphStore: stores.graphStore,
         searchStore: stores.searchStore,
         kvStore: stores.kvStore,
+        transport,
+        port: servePort,
+        host: values.host,
+        token: process.env["MMA_MCP_TOKEN"],
       });
     } finally {
       stores.close();
@@ -238,6 +249,40 @@ async function main(): Promise<void> {
         graphStore: stores.graphStore,
         verbose,
       });
+    } finally {
+      stores.close();
+    }
+    process.exit(0);
+  }
+
+  // enrich command: standalone LLM enrichment (Tier 3/4) outside of index
+  if (command === "enrich") {
+    if (!existsSync(dbPath)) {
+      console.error(`Database not found: ${dbPath}`);
+      console.error("Run 'mma index' first to create the analysis database.");
+      process.exit(1);
+    }
+    const anthropicApiKey = values["api-key"] || process.env.ANTHROPIC_API_KEY;
+    if (!anthropicApiKey) {
+      console.error("enrich requires --api-key or ANTHROPIC_API_KEY environment variable.");
+      process.exit(1);
+    }
+    const maxApiCalls = values["max-api-calls"] ? parseInt(values["max-api-calls"], 10) : undefined;
+    if (maxApiCalls !== undefined && (isNaN(maxApiCalls) || maxApiCalls < 0)) {
+      console.error(`Invalid --max-api-calls: "${values["max-api-calls"]}". Must be a non-negative integer.`);
+      process.exit(1);
+    }
+    const stores = await createStores({ backend: earlyBackend, dbPath });
+    try {
+      const result = await enrichCommand({
+        kvStore: stores.kvStore,
+        searchStore: stores.searchStore,
+        apiKey: anthropicApiKey,
+        maxApiCalls,
+        repo: values.repo,
+        verbose,
+      });
+      console.log(`Enriched ${result.reposEnriched} repo(s): ${result.tier3Count} tier-3, ${result.tier4Count} tier-4 summaries (${result.apiCallsMade} API calls)`);
     } finally {
       stores.close();
     }
@@ -569,11 +614,16 @@ async function main(): Promise<void> {
     );
     const stores = await createStores({ backend: earlyBackend, dbPath, readonly: true });
     try {
+      const corsOriginList = values["cors-origin"] as string[] | undefined;
       await dashboardCommand({
         kvStore: stores.kvStore,
         graphStore: stores.graphStore,
         port,
+        host: values.host ?? "127.0.0.1",
         staticDir,
+        corsOrigins: corsOriginList && corsOriginList.length > 0
+          ? new Set(corsOriginList)
+          : undefined,
       });
     } finally {
       stores.close();
@@ -683,6 +733,10 @@ async function main(): Promise<void> {
           console.error("--narrate-only requires --api-key or ANTHROPIC_API_KEY environment variable.");
           process.exit(1);
         }
+        if (values.enrich && !anthropicApiKey) {
+          console.error("--enrich requires --api-key or ANTHROPIC_API_KEY environment variable.");
+          process.exit(1);
+        }
         const indexOpts = {
           repos: config.repos,
           mirrorDir: config.mirrorDir,
@@ -693,6 +747,7 @@ async function main(): Promise<void> {
           rules: validatedRules,
           affected: values.affected,
           anthropicApiKey,
+          enrich: values.enrich,
           maxApiCalls,
           narrateOnly: values["narrate-only"],
           narrateForce: values["force"],
@@ -764,7 +819,7 @@ function printUsage(): void {
 Multi-Model Analyzer (mma)
 
 Usage:
-  mma index [-c config.json] [-v] [--affected] [--baseline file.db]
+  mma index [-c config.json] [-v] [--affected] [--enrich] [--baseline file.db]
             [--format json|table|sarif] [--watch [-w] [--watch-interval N]]
             [--narrate-only] [--force] [--force-full-reindex]
                                           Index repositories (default: table)
@@ -774,7 +829,8 @@ Usage:
              [--format json|table|sarif]        Show blast radius (default: table)
   mma delta <rev-range> [-c config.json] [--db path] [--format markdown|json|sarif] [--exit-code]
                                                 Show new/worsened findings for changed files (default: markdown)
-  mma serve [--db path/to/mma.db]               Start MCP server (stdio)
+  mma serve [--db path] [--transport stdio|http] [--port 3001] [--host 127.0.0.1]
+                                                Start MCP server
   mma export [--db path] [-o file.db] [--salt hex] [--raw]
                                                 Export SQLite DB (default: anonymized)
   mma import <file.db> [--db path] [-v]         Import raw export baseline
@@ -796,8 +852,11 @@ Usage:
                                                 Export Backstage catalog-info.yaml (default: stdout)
   mma audit [--audit-file file.json] [--repo name] [--db path] [-v]
                                                 Parse npm audit JSON and check vulnerability reachability
+  mma enrich [--db path] [--api-key KEY] [--max-api-calls N] [--repo name] [-v]
+                                                Enrich summaries with LLM (Tier 3/4)
   mma compress [--db path]                      Gzip the analysis database
-  mma dashboard [--db path] [--port 3000]       Serve local web dashboard
+  mma dashboard [--db path] [--port 3000] [--host 127.0.0.1]
+                                                Serve local web dashboard
 
 Options:
   -c, --config    Path to config file (default: mma.config.json)
@@ -817,9 +876,13 @@ Options:
   --sample-size   Findings to sample per check (default: 50)
   --seed          PRNG seed for reproducibility (default: 42)
   --port          Port for dashboard server (default: 3000)
+  --host          Host/IP to bind dashboard server (default: 127.0.0.1)
+  --cors-origin   Allowed CORS origin(s) for the dashboard API (repeatable, e.g. --cors-origin http://localhost:5173)
   --force         Bypass narration cache (use with --narrate-only or --api-key)
   --force-full-reindex  Clear and rebuild graph for each repo (default: incremental)
+  --enrich        Enable LLM enrichment (Tier 3/4) during indexing (requires --api-key)
   --backend       Storage backend: sqlite (default) or kuzu
+  --transport     MCP transport: stdio (default) or http (use with serve)
   --exit-code     Exit with code 1 if new/updated findings exist (use with delta)
   --repo          Filter to a single repo (use with affected, catalog)
   --max-depth     Max blast radius depth (default: 5, use with affected)

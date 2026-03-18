@@ -10,17 +10,21 @@
  */
 
 import type { Summary } from "@mma/core";
+import type { KVStore } from "@mma/storage";
 import { callAnthropicWithRetry } from "./sonnet.js";
+
+const T3_CACHE_PREFIX = "summary:t3:";
 
 export interface HaikuOptions {
   readonly model?: string;
   readonly maxTokens?: number;
   readonly concurrency?: number;
+  readonly kvStore?: KVStore;
 }
 
 const DEFAULT_HAIKU_MODEL = "claude-haiku-4-5-20251001";
 const DEFAULT_MAX_TOKENS = 200;
-const DEFAULT_CONCURRENCY = 10;
+const DEFAULT_CONCURRENCY = 20;
 
 export async function summarizeWithHaiku(
   entityId: string,
@@ -29,6 +33,14 @@ export async function summarizeWithHaiku(
   apiKey: string,
   options: HaikuOptions = {},
 ): Promise<Summary> {
+  // Check KV cache before hitting the API
+  if (options.kvStore) {
+    const cached = await options.kvStore.get(T3_CACHE_PREFIX + entityId);
+    if (cached) {
+      return JSON.parse(cached) as Summary;
+    }
+  }
+
   const model = options.model ?? DEFAULT_HAIKU_MODEL;
   const maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
 
@@ -50,12 +62,17 @@ export async function summarizeWithHaiku(
         confidence: 0,
       };
     }
-    return {
+    const result: Summary = {
       entityId,
       tier: 3,
       description: trimmed,
       confidence: 0.85,
     };
+    // Write to cache on success
+    if (options.kvStore && result.confidence > 0) {
+      await options.kvStore.set(T3_CACHE_PREFIX + entityId, JSON.stringify(result));
+    }
+    return result;
   } catch {
     return {
       entityId,
