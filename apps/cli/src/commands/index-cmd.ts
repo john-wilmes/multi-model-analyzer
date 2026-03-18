@@ -457,15 +457,16 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     }
   }
 
-  for (const repo of repos) {
+  const limit = pLimit(4);
+  await Promise.all(repos.map((repo) => limit(async () => {
     let trees: ReadonlyMap<string, TreeSitterTree> | undefined;
 
     // Recovery repos skip Phases 3-4b (already have parsedFiles + graph edges)
     if (recoveryRepos.has(repo.name)) {
       log(`  [${repo.name}] Skipping Phases 3-4b (recovery mode, 4c/4d will still run)`);
     } else {
-    let classified = classifiedByRepo.get(repo.name);
-    if (!classified || classified.length === 0) continue;
+    let classified = classifiedByRepo.get(repo.name) ?? ([] as ReturnType<typeof classifyFiles>);
+    if (classified.length === 0) return;
 
     // Filter to affected scope when --affected is active
     if (scopeByRepo) {
@@ -541,7 +542,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       log(`  [${repo.name}] Phase 3: ${Math.round(performance.now() - phase3Start)}ms`);
     } catch (error) {
       console.error(`  Failed to parse ${repo.name}:`, error);
-      continue;
+      return;
     }
 
     // --- Phase 4: Dependency graph extraction ---
@@ -1261,7 +1262,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     flagsByRepo.delete(repo.name);
     logIndexByRepo.delete(repo.name);
     namingByRepo.delete(repo.name);
-  }
+  })));
 
   log(`  Phase 6b total: ${phase6bTotalMs}ms`);
   log(`  Phase 6c total: ${phase6cTotalMs}ms`);
