@@ -173,3 +173,47 @@ export interface RepoDebtSummary {
 export async function fetchDebtByRepo(repo: string): Promise<RepoDebtSummary | null> {
   return fetchJson<RepoDebtSummary>(`${BASE}/api/debt/${encodeURIComponent(repo)}`).catch(() => null);
 }
+
+// -- Cross-Repo Model Types --
+
+export interface SharedFlag {
+  name: string;
+  repos: string[];
+  coordinated: boolean;
+}
+
+export interface CrossRepoFaultLink {
+  endpoint: string;
+  sourceRepo: string;
+  targetRepo: string;
+  sourceFaultTreeCount: number;
+  targetFaultTreeCount: number;
+}
+
+export interface SystemCatalogEntry {
+  entry: {
+    name: string;
+    purpose: string;
+    dependencies: string[];
+    apiSurface: { method: string; path: string }[];
+    errorHandlingSummary: string;
+  };
+  repo: string;
+  consumers: string[];
+  producers: string[];
+}
+
+export async function fetchCrossRepoFeatures(repo?: string): Promise<{ flags: SharedFlag[] }> {
+  const qs = repo ? `?repo=${encodeURIComponent(repo)}` : '';
+  return fetchJson(`${BASE}/api/cross-repo-features${qs}`);
+}
+
+export async function fetchCrossRepoFaults(repo?: string): Promise<{ faultLinks: CrossRepoFaultLink[] }> {
+  const qs = repo ? `?repo=${encodeURIComponent(repo)}` : '';
+  return fetchJson(`${BASE}/api/cross-repo-faults${qs}`);
+}
+
+export async function fetchCrossRepoCatalog(repo?: string): Promise<{ entries: SystemCatalogEntry[] }> {
+  const qs = repo ? `?repo=${encodeURIComponent(repo)}` : '';
+  return fetchJson(`${BASE}/api/cross-repo-catalog${qs}`);
+}
