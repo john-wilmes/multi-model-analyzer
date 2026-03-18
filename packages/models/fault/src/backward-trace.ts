@@ -21,6 +21,7 @@ export interface BackwardTrace {
   readonly steps: readonly TraceStep[];
   readonly crossServiceCalls: readonly CrossServiceCall[];
   readonly tracedEdges: readonly CfgEdge[];
+  readonly failReason?: "no-fqn" | "no-cfg-match" | "no-log-node";
 }
 
 export interface CrossServiceCall {
@@ -46,15 +47,17 @@ export function traceBackwardFromLog(
   const colonIdx = fqn?.lastIndexOf(":");
   const filePath = colonIdx != null && colonIdx > 0 ? fqn!.slice(0, colonIdx) : undefined;
   if (!filePath) {
-    return { root, steps: [], crossServiceCalls: [], tracedEdges: [] };
+    return { root, steps: [], crossServiceCalls: [], tracedEdges: [], failReason: "no-fqn" };
   }
 
   // CFGs are keyed as "filePath#functionName" -- find by file prefix
   let cfg: ControlFlowGraph | undefined;
   let containingFunction = "";
   let logNode: string | null = null;
+  let anyCfgMatchedFile = false;
   for (const [key, candidate] of cfgs) {
     if (key.startsWith(filePath + "#")) {
+      anyCfgMatchedFile = true;
       const found = findLogNode(candidate, root);
       if (found) {
         cfg = candidate;
@@ -65,7 +68,8 @@ export function traceBackwardFromLog(
     }
   }
   if (!cfg || !logNode) {
-    return { root, steps: [], crossServiceCalls: [], tracedEdges: [] };
+    const failReason = anyCfgMatchedFile ? "no-log-node" : "no-cfg-match";
+    return { root, steps: [], crossServiceCalls: [], tracedEdges: [], failReason };
   }
 
   // Trace backward through CFG
@@ -107,6 +111,19 @@ function findLogNode(
         return node.id;
       }
     }
+    // Fuzzy fallback: find closest node within ±2 lines (first node wins ties)
+    let bestNode: (typeof cfg.nodes)[number] | undefined;
+    let bestDist = Infinity;
+    for (const node of cfg.nodes) {
+      if (node.line != null) {
+        const dist = Math.abs(node.line - lineNum);
+        if (dist <= 2 && dist < bestDist) {
+          bestDist = dist;
+          bestNode = node;
+        }
+      }
+    }
+    if (bestNode) return bestNode.id;
   }
 
   // Strategy 2: match by the root's template text

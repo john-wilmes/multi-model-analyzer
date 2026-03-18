@@ -2,23 +2,59 @@ import { useEffect, useState, useMemo } from 'react';
 import { fetchCrossRepoCatalog } from '../api/client.ts';
 import type { SystemCatalogEntry } from '../api/client.ts';
 
-export default function ServiceCatalogTable() {
+type SortKey = 'name' | 'repo' | 'consumers' | 'producers';
+type SortDir = 'asc' | 'desc';
+
+interface Props {
+  repo?: string;
+}
+
+export default function ServiceCatalogTable({ repo }: Props) {
   const [entries, setEntries] = useState<SystemCatalogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [sortKey, setSortKey] = useState<SortKey>('name');
+  const [sortDir, setSortDir] = useState<SortDir>('asc');
 
   useEffect(() => {
-    fetchCrossRepoCatalog()
+    setLoading(true);
+    setSearch('');
+    fetchCrossRepoCatalog(repo)
       .then((data) => setEntries(data.entries))
       .catch(() => setEntries([]))
       .finally(() => setLoading(false));
-  }, []);
+  }, [repo]);
 
   const filtered = useMemo(() => {
     if (!search) return entries;
     const q = search.toLowerCase();
     return entries.filter((e) => e.entry.name.toLowerCase().includes(q));
   }, [entries, search]);
+
+  const sorted = useMemo(() => {
+    const arr = [...filtered];
+    arr.sort((a, b) => {
+      let cmp = 0;
+      if (sortKey === 'name') cmp = a.entry.name.localeCompare(b.entry.name);
+      else if (sortKey === 'repo') cmp = a.repo.localeCompare(b.repo);
+      else if (sortKey === 'consumers') cmp = a.consumers.length - b.consumers.length;
+      else if (sortKey === 'producers') cmp = a.producers.length - b.producers.length;
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+    return arr;
+  }, [filtered, sortKey, sortDir]);
+
+  function toggleSort(key: SortKey) {
+    if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortKey(key); setSortDir('asc'); }
+  }
+
+  function SortIndicator({ k }: { k: SortKey }) {
+    if (sortKey !== k) return <span className="ml-1 text-slate-300">↕</span>;
+    return <span className="ml-1">{sortDir === 'asc' ? '▲' : '▼'}</span>;
+  }
+
+  const withCrossRepoConsumers = entries.filter((e) => e.consumers.length > 0).length;
 
   if (loading) return <div className="p-8 text-center text-slate-500">Loading service catalog...</div>;
 
@@ -29,9 +65,12 @@ export default function ServiceCatalogTable() {
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-xl font-semibold text-slate-800">
-          Service Catalog <span className="text-sm font-normal text-slate-500">({filtered.length})</span>
-        </h2>
+        <div>
+          <h2 className="text-xl font-semibold text-slate-800">Service Catalog</h2>
+          <p className="text-sm text-slate-500 mt-0.5">
+            {entries.length} services ({withCrossRepoConsumers} with cross-repo consumers)
+          </p>
+        </div>
         <input
           type="text"
           value={search}
@@ -44,14 +83,34 @@ export default function ServiceCatalogTable() {
         <table className="w-full text-sm">
           <thead className="bg-slate-50 border-b border-slate-200">
             <tr>
-              <th className="text-left px-3 py-2">Service</th>
-              <th className="text-left px-3 py-2">Owner Repo</th>
-              <th className="text-left px-3 py-2">Consumers</th>
-              <th className="text-left px-3 py-2">Producers</th>
+              <th
+                className="text-left px-3 py-2 cursor-pointer select-none hover:bg-slate-100"
+                onClick={() => toggleSort('name')}
+              >
+                Service<SortIndicator k="name" />
+              </th>
+              <th
+                className="text-left px-3 py-2 cursor-pointer select-none hover:bg-slate-100"
+                onClick={() => toggleSort('repo')}
+              >
+                Owner Repo<SortIndicator k="repo" />
+              </th>
+              <th
+                className="text-left px-3 py-2 cursor-pointer select-none hover:bg-slate-100"
+                onClick={() => toggleSort('consumers')}
+              >
+                Consumers<SortIndicator k="consumers" />
+              </th>
+              <th
+                className="text-left px-3 py-2 cursor-pointer select-none hover:bg-slate-100"
+                onClick={() => toggleSort('producers')}
+              >
+                Producers<SortIndicator k="producers" />
+              </th>
             </tr>
           </thead>
           <tbody>
-            {filtered.map((e, i) => (
+            {sorted.map((e, i) => (
               <tr key={`${e.repo}-${e.entry.name}`} className={i % 2 === 0 ? 'bg-white' : 'bg-slate-50'}>
                 <td className="px-3 py-1.5">
                   <div className="font-medium text-slate-800">{e.entry.name}</div>
