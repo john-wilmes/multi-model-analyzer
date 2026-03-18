@@ -82,6 +82,127 @@ describe("traceBackwardFromLog", () => {
     expect(trace.steps).toHaveLength(0);
   });
 
+  it("sets failReason='no-fqn' when fullyQualifiedName is missing", () => {
+    const root = makeLogRoot({
+      location: { repo: "test-repo", module: "src/handler.ts", fullyQualifiedName: undefined },
+    });
+    const cfgs = new Map([["src/handler.ts#fn", makeCfg("src/handler.ts#fn")]]);
+
+    const trace = traceBackwardFromLog(root, cfgs, emptyCallGraph);
+
+    expect(trace.failReason).toBe("no-fqn");
+  });
+
+  it("sets failReason='no-cfg-match' when no CFG key matches the file path", () => {
+    const root = makeLogRoot({
+      location: { repo: "test-repo", module: "src/handler.ts", fullyQualifiedName: "src/handler.ts:10" },
+    });
+    // CFG key is for a different file
+    const cfgs = new Map([["src/other.ts#fn", makeCfg("src/other.ts#fn")]]);
+
+    const trace = traceBackwardFromLog(root, cfgs, emptyCallGraph);
+
+    expect(trace.steps).toHaveLength(0);
+    expect(trace.failReason).toBe("no-cfg-match");
+  });
+
+  it("sets failReason='no-log-node' when CFG matches file but log node not found", () => {
+    const root = makeLogRoot({
+      location: { repo: "test-repo", module: "src/handler.ts", fullyQualifiedName: "src/handler.ts:99" },
+      template: {
+        id: "t-nomatch",
+        template: "unique-unmatched-message-xyz",
+        severity: "error",
+        locations: [],
+        frequency: 1,
+      },
+    });
+    // CFG matches file but has no node at line 99 or with matching text
+    const cfg: ControlFlowGraph = {
+      functionId: "src/handler.ts#fn",
+      nodes: [
+        { id: "n1", kind: "entry", label: "entry", location: { repo: "test-repo", module: "src/handler.ts" }, line: 1 },
+      ],
+      edges: [],
+    };
+    const cfgs = new Map([["src/handler.ts#fn", cfg]]);
+
+    const trace = traceBackwardFromLog(root, cfgs, emptyCallGraph);
+
+    expect(trace.steps).toHaveLength(0);
+    expect(trace.failReason).toBe("no-log-node");
+  });
+
+  it("fuzzy-matches log node within ±1 line", () => {
+    const root = makeLogRoot({
+      location: { repo: "r", module: "src/handler.ts", fullyQualifiedName: "src/handler.ts:11" },
+    });
+    // Node is at line 10, target is line 11 (distance 1)
+    const cfg: ControlFlowGraph = {
+      functionId: "src/handler.ts#fn",
+      nodes: [
+        { id: "e", kind: "entry", label: "entry", location: { repo: "r", module: "m" }, line: 1 },
+        { id: "target", kind: "statement", label: "console.log('msg')", location: { repo: "r", module: "m" }, line: 10 },
+      ],
+      edges: [{ from: "e", to: "target" }],
+    };
+    const cfgs = new Map([["src/handler.ts#fn", cfg]]);
+
+    const trace = traceBackwardFromLog(root, cfgs, emptyCallGraph);
+
+    expect(trace.steps.length).toBeGreaterThan(0);
+    expect(trace.failReason).toBeUndefined();
+  });
+
+  it("fuzzy-matches log node within ±2 lines", () => {
+    const root = makeLogRoot({
+      location: { repo: "r", module: "src/handler.ts", fullyQualifiedName: "src/handler.ts:12" },
+    });
+    // Node is at line 10, target is line 12 (distance 2)
+    const cfg: ControlFlowGraph = {
+      functionId: "src/handler.ts#fn",
+      nodes: [
+        { id: "e", kind: "entry", label: "entry", location: { repo: "r", module: "m" }, line: 1 },
+        { id: "target", kind: "statement", label: "console.log('msg')", location: { repo: "r", module: "m" }, line: 10 },
+      ],
+      edges: [{ from: "e", to: "target" }],
+    };
+    const cfgs = new Map([["src/handler.ts#fn", cfg]]);
+
+    const trace = traceBackwardFromLog(root, cfgs, emptyCallGraph);
+
+    expect(trace.steps.length).toBeGreaterThan(0);
+    expect(trace.failReason).toBeUndefined();
+  });
+
+  it("does not fuzzy-match beyond ±2 lines", () => {
+    const root = makeLogRoot({
+      location: { repo: "r", module: "src/handler.ts", fullyQualifiedName: "src/handler.ts:15" },
+      template: {
+        id: "t-nomatch",
+        template: "unique-unmatched-xyz",
+        severity: "error",
+        locations: [],
+        frequency: 1,
+      },
+    });
+    // Node is at line 10, target is line 15 (distance 5 -- beyond ±2)
+    const cfg: ControlFlowGraph = {
+      functionId: "src/handler.ts#fn",
+      nodes: [
+        { id: "e", kind: "entry", label: "entry", location: { repo: "r", module: "m" }, line: 1 },
+        { id: "target", kind: "statement", label: "console.log('msg')", location: { repo: "r", module: "m" }, line: 10 },
+      ],
+      edges: [{ from: "e", to: "target" }],
+    };
+    const cfgs = new Map([["src/handler.ts#fn", cfg]]);
+
+    const trace = traceBackwardFromLog(root, cfgs, emptyCallGraph);
+
+    // With no text match and no line match, should fail
+    expect(trace.failReason).toBe("no-log-node");
+  });
+
   it("detects cross-service calls from call graph", () => {
     const root = makeLogRoot();
     const cfg = makeCfg("src/handler.ts#handleRequest");

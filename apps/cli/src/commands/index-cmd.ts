@@ -980,21 +980,23 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         // Limit tracing for POC performance; full-scale tracing requires call graph
         const MAX_TRACED_ROOTS = 50;
         const tracedRoots = logRoots.slice(0, MAX_TRACED_ROOTS);
-        let emptyTraces = 0;
+        const failCounts = new Map<string, number>();
         for (const root of tracedRoots) {
           const trace = traceBackwardFromLog(root, cfgs, callGraph);
           allTraces.push(trace);
           if (trace.steps.length > 0) {
             faultTrees.push(buildFaultTree(trace, repo.name));
-          } else {
-            emptyTraces++;
+          } else if (trace.failReason) {
+            failCounts.set(trace.failReason, (failCounts.get(trace.failReason) ?? 0) + 1);
           }
         }
         if (logRoots.length > MAX_TRACED_ROOTS) {
           log(`    warning: ${logRoots.length - MAX_TRACED_ROOTS} log roots not traced (POC limit=${MAX_TRACED_ROOTS})`);
         }
-        if (emptyTraces > 0) {
-          log(`    ${emptyTraces}/${tracedRoots.length} traces returned no steps (no matching CFG or log node)`);
+        if (failCounts.size > 0) {
+          const breakdown = [...failCounts.entries()].map(([reason, count]) => `${count} ${reason}`).join(", ");
+          const totalFailed = [...failCounts.values()].reduce((a, b) => a + b, 0);
+          log(`    trace failures: ${breakdown} (${totalFailed}/${tracedRoots.length} total)`);
         }
 
         // Collect all fault SARIF results
@@ -1592,6 +1594,16 @@ function findFunctionNodes(rootNode: TreeSitterNode): FunctionNodeInfo[] {
       );
       const name = nameNode?.text ?? `anon_${node.startPosition.row}`;
       results.push({ name, node });
+    } else if (node.type === "public_field_definition") {
+      // Class arrow property: handler = async (req) => {}
+      const arrowChild = node.namedChildren.find((c) => c.type === "arrow_function");
+      if (arrowChild) {
+        const nameNode = node.namedChildren.find(
+          (c) => c.type === "property_identifier" || c.type === "identifier",
+        );
+        const name = nameNode?.text ?? `anon_${node.startPosition.row}`;
+        results.push({ name, node: arrowChild });
+      }
     } else if (node.type === "arrow_function") {
       // Arrow function names live in the parent variable_declarator, not the arrow_function itself
       let name = `anon_${node.startPosition.row}`;
@@ -1603,6 +1615,9 @@ function findFunctionNodes(rootNode: TreeSitterNode): FunctionNodeInfo[] {
         // Object property: { handler: (e) => ... }
         const key = parent.namedChildren.find((c) => c.type === "property_identifier" || c.type === "string");
         if (key) name = key.text;
+      } else if (parent?.type === "export_statement") {
+        // Exported default arrow: export default (req) => {}
+        name = "default_export";
       }
       results.push({ name, node });
     }
