@@ -139,4 +139,30 @@ describe("routeQuery", () => {
     // "what is the impact of changing X" has no "flag" keyword — should be blastradius
     expect(routeQuery("what is the impact of changing X").route).toBe("blastradius");
   });
+
+  // Bug #8: query router misfires on 4 query types
+  it("routes 'cross-repo dependencies' to architecture, not structural", () => {
+    // architecture check must precede structural so "cross-repo" wins over "dependencies"
+    expect(routeQuery("cross-repo dependencies").route).toBe("architecture");
+    expect(routeQuery("show cross-repo dependency graph").route).toBe("architecture");
+  });
+
+  it("routes complexity queries to analytical", () => {
+    expect(routeQuery("most complex files").route).toBe("analytical");
+    expect(routeQuery("show file complexity").route).toBe("analytical");
+    expect(routeQuery("highest complexity modules").route).toBe("analytical");
+  });
+
+  it("routes 'repository pattern' to pattern, not structural", () => {
+    // pattern check must precede structural to avoid ambiguous term confusion
+    expect(routeQuery("repository pattern classes").route).toBe("pattern");
+    expect(routeQuery("find repository patterns").route).toBe("pattern");
+  });
+
+  it("routes temporal queries to analytical", () => {
+    expect(routeQuery("recent changes to auth").route).toBe("analytical");
+    expect(routeQuery("recently updated files").route).toBe("analytical");
+    expect(routeQuery("what was modified last commit").route).toBe("analytical");
+    expect(routeQuery("history of payments module").route).toBe("analytical");
+  });
 });

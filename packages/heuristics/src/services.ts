@@ -63,6 +63,13 @@ export function inferServices(input: ServiceInferenceInput): InferredService[] {
     // would flood the service catalog with non-service entries.
     if (entryPoints.length === 0) continue;
 
+    // Distinguish real services (bin/start) from libraries (main-only).
+    // A package with only `main` is typically a library entry point, not
+    // a deployable service. Demote to 0.5 confidence so it doesn't crowd
+    // the service catalog alongside actual services.
+    const hasServiceEntry = !!(pkgInfo.bin || pkgInfo.scripts["start"]);
+    const confidence = hasServiceEntry ? 0.9 : 0.5;
+
     const deps = findServiceDependencies(dirPath, input.dependencyGraph, input.repo);
 
     services.push({
@@ -70,7 +77,7 @@ export function inferServices(input: ServiceInferenceInput): InferredService[] {
       rootPath: dirPath,
       entryPoints,
       dependencies: deps,
-      confidence: 0.9,
+      confidence,
     });
   }
 

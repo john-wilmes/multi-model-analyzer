@@ -155,6 +155,20 @@ describe("analyzeGaps", () => {
     expect(results).toHaveLength(0);
   });
 
+  it("does not flag catch block with console.error logging", () => {
+    const cfg: ControlFlowGraph = {
+      functionId: "test#fn",
+      nodes: [
+        { id: "n1", kind: "catch", label: "catch", location: loc },
+        { id: "n2", kind: "statement", label: "console.error(e)", location: loc },
+      ],
+      edges: [{ from: "n1", to: "n2" }],
+    };
+
+    const results = analyzeGaps(new Map([["test#fn", cfg]]), "test-repo");
+    expect(results).toHaveLength(0);
+  });
+
   it("does not flag catch block with rethrow", () => {
     const cfg: ControlFlowGraph = {
       functionId: "test#fn",
@@ -167,6 +181,21 @@ describe("analyzeGaps", () => {
 
     const results = analyzeGaps(new Map([["test#fn", cfg]]), "test-repo");
     expect(results).toHaveLength(0);
+  });
+
+  it("does not treat new Error() construction as logging", () => {
+    const cfg: ControlFlowGraph = {
+      functionId: "test#fn",
+      nodes: [
+        { id: "n1", kind: "catch", label: "catch", location: loc },
+        { id: "n2", kind: "statement", label: "const err = new Error(\"wrapped\")", location: loc },
+      ],
+      edges: [{ from: "n1", to: "n2" }],
+    };
+
+    const results = analyzeGaps(new Map([["test#fn", cfg]]), "test-repo");
+    expect(results).toHaveLength(1); // no real logging — should still flag
+    expect(results[0]!.ruleId).toBe("fault/unhandled-error-path");
   });
 
   it("does not match 'catalog' or 'dialog' as logging", () => {

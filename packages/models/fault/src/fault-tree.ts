@@ -254,7 +254,11 @@ export function analyzeGaps(
       // not falsely flagged.
       const reachable = reachableNodes(catchNode.id, cfg);
 
-      const loggingPattern = /\b(log(ger)?|error|warn(ing)?|console)\s*[.(]/i;
+      // Match object.method call forms (console.error, logger.warn, log.info, etc.)
+      // and standalone logging calls (log(), warn(), error()). Case-sensitive to
+      // avoid false-positives from `new Error(` or `new TypeError(`.
+      const loggingPattern =
+        /\b(console|log(ger)?)\s*\.\s*(log|error|warn|info|debug)\s*\(|\b(log|warn|error)\s*\(/;
       const hasLogging = reachable.some(
         (n) => loggingPattern.test(n.label),
       );

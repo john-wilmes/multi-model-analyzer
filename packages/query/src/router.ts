@@ -74,6 +74,29 @@ export function routeQuery(query: string): RouteDecision {
     return decision("blastradius", 0.9);
   }
 
+  // Narration patterns — must precede architecture so "narrate architecture" routes to synthesis
+  if (/\b(narrat(?:e|ion|ive))\b/.test(normalized)) {
+    return decision("synthesis", 0.9);
+  }
+
+  // Architecture patterns (cross-repo topology, service overview) — before structural so
+  // "cross-repo dependencies" routes to architecture, not structural
+  if (/\b(architecture|topology|service[\s-]?map|cross[\s-]?repo|(?:architecture|service)\s+overview)\b/.test(normalized)) {
+    return decision("architecture", 0.9);
+  }
+
+  // Pattern detection patterns — before structural so "repository pattern" doesn't fall through
+  // to structural on ambiguous terms
+  if (/\b(patterns?|factor(?:y|ies)|singletons?|observers?|adapters?|facades?|repositor(?:y|ies)|middlewares?|decorators?)\b/.test(normalized)) {
+    return decision("pattern", 0.85);
+  }
+
+  // Complexity/temporal patterns — before structural so "most complex files" and
+  // "history of X module" route to analytical rather than matching incidental structural terms
+  if (/\b(complex(?:ity)?|recent(?:ly)?|changed?|updated?|history|modified|last\s+commit)\b/.test(normalized)) {
+    return decision("analytical", 0.85);
+  }
+
   // Structural patterns
   if (/\b(calls?|depend(?:s|ency|encies)?|imports?|extends?|implements?|references?|definition|callers?|callees?|uses|used|modules?|files?)\b/.test(normalized)) {
     return decision("structural", 0.9);
@@ -85,23 +108,8 @@ export function routeQuery(query: string): RouteDecision {
   }
 
   // Analytical patterns
-  if (/\b(risks?|faults?|errors?|failures?|dead|unused|orphan|violations?|flags?|config|diagnostics?|warnings?|issues?|gaps?|missing|circular)\b/.test(normalized)) {
+  if (/\b(risks?|faults?|errors?|failures?|dead|unused|orphan|violations?|flags?|config|diagnostics?|warnings?|issues?|gaps?|missing|circular|complex(?:ity)?)\b/.test(normalized)) {
     return decision("analytical", 0.85);
-  }
-
-  // Narration patterns — must precede architecture so "narrate architecture" routes to synthesis
-  if (/\b(narrat(?:e|ion|ive))\b/.test(normalized)) {
-    return decision("synthesis", 0.9);
-  }
-
-  // Architecture patterns (cross-repo topology, service overview)
-  if (/\b(architecture|topology|service[\s-]?map|cross[\s-]?repo|(?:architecture|service)\s+overview)\b/.test(normalized)) {
-    return decision("architecture", 0.9);
-  }
-
-  // Pattern detection patterns
-  if (/\b(patterns?|factor(?:y|ies)|singletons?|observers?|adapters?|facades?|repositor(?:y|ies)|middlewares?|decorators?)\b/.test(normalized)) {
-    return decision("pattern", 0.85);
   }
 
   // Documentation patterns (before synthesis to avoid "describe" triggering synthesis)
