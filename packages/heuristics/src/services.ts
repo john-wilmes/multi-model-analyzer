@@ -120,6 +120,28 @@ export function inferServices(input: ServiceInferenceInput): InferredService[] {
     });
   }
 
+  // Post-process: add package.json npm dependencies that match known service names.
+  // This captures intra-repo deps (e.g., @novu/shared -> novu-libs) that don't
+  // appear in the import-based dependency graph for single-service repos.
+  const serviceNames = new Set(services.map((s) => s.name));
+  for (let i = 0; i < services.length; i++) {
+    const svc = services[i]!;
+    const pkgJson = [...input.packageJsons.entries()].find(
+      ([dir]) => dir === svc.rootPath || isUnderDir(svc.rootPath, dir) || isUnderDir(dir, svc.rootPath),
+    );
+    if (pkgJson) {
+      const extraDeps: string[] = [];
+      for (const depName of Object.keys(pkgJson[1].dependencies)) {
+        if (serviceNames.has(depName) && depName !== svc.name && !svc.dependencies.includes(depName)) {
+          extraDeps.push(depName);
+        }
+      }
+      if (extraDeps.length > 0) {
+        services[i] = { ...svc, dependencies: [...svc.dependencies, ...extraDeps] };
+      }
+    }
+  }
+
   // Post-process: translate dependency file paths to service names where
   // possible. Raw paths like "packages/db/src/client.ts" become the service
   // name "db" (or "@myapp/db") when that file falls under a known service root.

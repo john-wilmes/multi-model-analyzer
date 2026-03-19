@@ -382,7 +382,10 @@ export async function checkUnstableDependency(
     const findings = (allInstabilityForRecall.get(repo) ?? []).filter(
       (f) => f.ruleId === "structural/unstable-dependency",
     );
-    const reportedPairs = new Set(findings.map((f) => fqn(f)));
+    // Findings are grouped by source module (one finding per source with violations),
+    // so recall checks at the source level, not the edge-pair level.
+    const reportedSources = new Set(findings.map((f) => fqn(f)));
+    const checkedSources = new Set<string>();
 
     for (const edge of edges) {
       if (edge.kind !== "imports") continue;
@@ -391,12 +394,12 @@ export async function checkUnstableDependency(
       if (!src || !tgt) continue;
 
       const delta = tgt.instability - src.instability;
-      if (delta > 0.3) {
-        const key = `${edge.source}->${edge.target}`;
-        if (reportedPairs.has(key)) {
-          reporter.pass("unstable-dep", repo, `recall: ${key}`);
+      if (delta > 0.3 && !checkedSources.has(edge.source)) {
+        checkedSources.add(edge.source);
+        if (reportedSources.has(edge.source)) {
+          reporter.pass("unstable-dep", repo, `recall: ${edge.source}`);
         } else {
-          reporter.fail("unstable-dep", repo, `recall: ${key}`,
+          reporter.fail("unstable-dep", repo, `recall: ${edge.source}`,
             `delta=${delta.toFixed(2)} > 0.3 but not in findings`);
         }
       }
@@ -743,7 +746,8 @@ export async function checkBlastRadius(
   for (const repo of sampledRepos) {
     const edges = await getImportEdges(graphStore, repo);
     const prResult = computePageRank(edges);
-    const top10 = prResult.ranked.slice(0, 10);
+    // pageRankToSarif() filters out nodes with score <= 0.03; align recall check
+    const top10 = prResult.ranked.slice(0, 10).filter((r) => r.score > 0.03);
 
     const findings = allBlastRadius.get(repo) ?? [];
     const flaggedPaths = new Set(findings.map((f) => fqn(f)));

@@ -189,7 +189,7 @@ describe("checkUnstableDependency", () => {
         ruleId: "structural/unstable-dependency",
         level: "warning",
         message: { text: "src/stable.ts (I=0.25) depends on src/unstable.ts (I=0.75): threshold=0.3" },
-        locations: [{ logicalLocations: [{ fullyQualifiedName: "src/stable.ts->src/unstable.ts" }] }],
+        locations: [{ logicalLocations: [{ fullyQualifiedName: "src/stable.ts" }] }],
       },
     ];
     await kv.set("sarif:instability:repo1", JSON.stringify(findings));
