@@ -66,6 +66,25 @@ describe("summarizeFromTemplate", () => {
     expect(summary.description).toContain("Promise<Result>");
   });
 
+  it("extracts return type from arrow function without leaking body", () => {
+    const symbol = sym("format", "function");
+    const source = "const format = (x: number): string => x.toString();";
+    const summary = summarizeFromTemplate(symbol, "src/format.ts", source);
+
+    expect(summary.description).toContain("returns string");
+    expect(summary.description).not.toContain("=>");
+    expect(summary.description).not.toContain("toString");
+  });
+
+  it("extracts return type from multi-param arrow function", () => {
+    const symbol = sym("add", "function");
+    const source = "const add = (a: number, b: number): number => a + b;";
+    const summary = summarizeFromTemplate(symbol, "src/math.ts", source);
+
+    expect(summary.description).toContain("returns number");
+    expect(summary.description).not.toContain("=>");
+  });
+
   it("handles function with no params gracefully", () => {
     const symbol = sym("init", "function");
     const source = "function init(): void {";

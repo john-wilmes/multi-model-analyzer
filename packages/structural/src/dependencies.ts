@@ -130,6 +130,17 @@ export function resolveImportSpecifier(
   knownPaths: ReadonlySet<string>,
   packageRoots?: ReadonlyMap<string, string>,
 ): string {
+  // Handle @/ path alias (common tsconfig paths convention: "@/*" -> "src/*")
+  if (specifier.startsWith("@/")) {
+    const aliasPath = "src/" + specifier.slice(2);
+    // Also try resolving relative to the importer's root (no src/ prefix)
+    const resolved = probeExtensions(aliasPath, knownPaths);
+    if (resolved) return resolved;
+    // Try without src/ prefix (alias might map to project root directly)
+    const resolvedRoot = probeExtensions(specifier.slice(2), knownPaths);
+    if (resolvedRoot) return resolvedRoot;
+  }
+
   // Non-relative imports: try packageRoots first, then return as-is
   if (!specifier.startsWith(".")) {
     if (packageRoots) {

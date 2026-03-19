@@ -254,6 +254,51 @@ describe("findCircularDependencies", () => {
   });
 });
 
+describe("resolveImportSpecifier with @/ path alias", () => {
+  const known = new Set([
+    "src/utils/helpers.ts",
+    "src/components/Button.tsx",
+    "src/index.ts",
+    "src/config.ts",
+    "src/hooks/useAuth/index.ts",
+  ]);
+
+  it("resolves @/ alias to src/ directory with .ts extension", () => {
+    expect(resolveImportSpecifier("@/config", "src/app.ts", known)).toBe("src/config.ts");
+  });
+
+  it("resolves @/ alias with nested path", () => {
+    expect(resolveImportSpecifier("@/utils/helpers", "src/app.ts", known)).toBe("src/utils/helpers.ts");
+  });
+
+  it("resolves @/ alias with .tsx extension", () => {
+    expect(resolveImportSpecifier("@/components/Button", "src/app.ts", known)).toBe("src/components/Button.tsx");
+  });
+
+  it("resolves @/ alias to index file in subdirectory", () => {
+    expect(resolveImportSpecifier("@/hooks/useAuth", "src/app.ts", known)).toBe("src/hooks/useAuth/index.ts");
+  });
+
+  it("resolves @/ alias regardless of importer location", () => {
+    expect(resolveImportSpecifier("@/config", "src/deep/nested/file.ts", known)).toBe("src/config.ts");
+  });
+
+  it("falls back to raw specifier when @/ alias cannot be resolved", () => {
+    expect(resolveImportSpecifier("@/nonexistent", "src/app.ts", known)).toBe("@/nonexistent");
+  });
+
+  it("resolves @/ when files are at project root (no src/ prefix)", () => {
+    const rootKnown = new Set(["utils/helpers.ts", "config.ts"]);
+    expect(resolveImportSpecifier("@/config", "app.ts", rootKnown)).toBe("config.ts");
+    expect(resolveImportSpecifier("@/utils/helpers", "app.ts", rootKnown)).toBe("utils/helpers.ts");
+  });
+
+  it("does not confuse @/ with scoped packages like @org/pkg", () => {
+    // @org/pkg should NOT be treated as @/ alias
+    expect(resolveImportSpecifier("@org/pkg", "src/app.ts", known)).toBe("@org/pkg");
+  });
+});
+
 describe("resolveImportSpecifier edge cases", () => {
   it("deeply nested relative import with multiple parent dirs", () => {
     // src/deep/nested/ + ../../lib/utils → src/lib/utils
