@@ -3,6 +3,9 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { writeFileSync, unlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { InMemoryKVStore, InMemoryGraphStore } from "@mma/storage";
 import { auditCommand } from "./audit-cmd.js";
 
@@ -57,9 +60,6 @@ describe("auditCommand — empty stores", () => {
     const gs = new InMemoryGraphStore();
 
     // Write an empty audit file
-    const { writeFileSync, unlinkSync } = await import("node:fs");
-    const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
     const auditFile = join(tmpdir(), `audit-empty-${Date.now()}.json`);
     writeFileSync(auditFile, EMPTY_AUDIT_JSON, "utf-8");
 
@@ -79,9 +79,6 @@ describe("auditCommand — empty stores", () => {
     const kv = new InMemoryKVStore();
     const gs = new InMemoryGraphStore();
     // No sarif:latest:index key — no repos
-    const { writeFileSync, unlinkSync } = await import("node:fs");
-    const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
     const auditFile = join(tmpdir(), `audit-norepos-${Date.now()}.json`);
     writeFileSync(auditFile, MINIMAL_AUDIT_JSON, "utf-8");
 
@@ -120,9 +117,6 @@ describe("auditCommand — with indexed repos", () => {
 
   it("returns AuditResult with hasFindings boolean", async () => {
     const { kv, gs } = await makeStoresWithRepo("my-repo");
-    const { writeFileSync, unlinkSync } = await import("node:fs");
-    const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
     const auditFile = join(tmpdir(), `audit-basic-${Date.now()}.json`);
     writeFileSync(auditFile, MINIMAL_AUDIT_JSON, "utf-8");
 
@@ -141,39 +135,35 @@ describe("auditCommand — with indexed repos", () => {
 
   it("stores sarif:vuln:<repo> in KV when reachable findings exist", async () => {
     const { kv, gs } = await makeStoresWithRepo("vuln-repo");
-    const { writeFileSync, unlinkSync } = await import("node:fs");
-    const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
     const auditFile = join(tmpdir(), `audit-vuln-${Date.now()}.json`);
     writeFileSync(auditFile, MINIMAL_AUDIT_JSON, "utf-8");
 
     try {
-      await auditCommand({
+      const result = await auditCommand({
         auditFile,
         kvStore: kv,
         graphStore: gs,
         repo: "vuln-repo",
       });
-      // If findings were stored, the key should contain valid JSON
+      // The lodash import edge triggers reachability — findings must be written
+      expect(result.hasFindings).toBe(true);
       const stored = await kv.get("sarif:vuln:vuln-repo");
-      if (stored !== undefined) {
-        expect(() => JSON.parse(stored) as unknown).not.toThrow();
-        const findings = JSON.parse(stored) as Array<{
-          ruleId: string;
-          message: { text: string };
-          level: string;
-        }>;
-        expect(Array.isArray(findings)).toBe(true);
-        if (findings.length > 0) {
-          expect(findings[0]).toMatchObject({
-            ruleId: expect.any(String) as unknown,
-            message: expect.objectContaining({
-              text: expect.any(String),
-            }) as unknown,
-            level: expect.any(String) as unknown,
-          });
-        }
-      }
+      expect(stored).toBeDefined();
+      expect(() => JSON.parse(stored!) as unknown).not.toThrow();
+      const findings = JSON.parse(stored!) as Array<{
+        ruleId: string;
+        message: { text: string };
+        level: string;
+      }>;
+      expect(Array.isArray(findings)).toBe(true);
+      expect(findings.length).toBeGreaterThan(0);
+      expect(findings[0]).toMatchObject({
+        ruleId: expect.any(String) as unknown,
+        message: expect.objectContaining({
+          text: expect.any(String) as unknown,
+        }) as unknown,
+        level: expect.any(String) as unknown,
+      });
     } finally {
       unlinkSync(auditFile);
     }
@@ -195,9 +185,6 @@ describe("auditCommand — with indexed repos", () => {
       },
     ]);
 
-    const { writeFileSync, unlinkSync } = await import("node:fs");
-    const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
     const auditFile = join(tmpdir(), `audit-scoped-${Date.now()}.json`);
     writeFileSync(auditFile, MINIMAL_AUDIT_JSON, "utf-8");
 
@@ -221,9 +208,6 @@ describe("auditCommand — AuditResult exit-code integration (PR #49)", () => {
   it("returns AuditResult object (not void)", async () => {
     const kv = new InMemoryKVStore();
     const gs = new InMemoryGraphStore();
-    const { writeFileSync, unlinkSync } = await import("node:fs");
-    const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
     const auditFile = join(tmpdir(), `audit-result-${Date.now()}.json`);
     writeFileSync(auditFile, EMPTY_AUDIT_JSON, "utf-8");
 

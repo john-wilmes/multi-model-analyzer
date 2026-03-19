@@ -251,7 +251,7 @@ describe("GET /api/findings", () => {
     if (body.results.length > 0) {
       expect(body.results[0]).toMatchObject({
         ruleId: expect.any(String) as unknown,
-        message: expect.objectContaining({ text: expect.any(String) }) as unknown,
+        message: expect.objectContaining({ text: expect.any(String) as unknown }) as unknown,
         level: expect.any(String) as unknown,
       });
     }
@@ -356,7 +356,7 @@ describe("GET /api/practices", () => {
   it("returns a practices report without crashing", async () => {
     const res = await get("/api/practices");
     expect(res.status).toBe(200);
-    const body = (await res.json()) as unknown;
+    const body: unknown = await res.json();
     expect(body).toBeDefined();
   });
 
