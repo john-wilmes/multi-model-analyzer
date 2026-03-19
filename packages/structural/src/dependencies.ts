@@ -5,6 +5,7 @@
  * For scale: dependency-cruiser integration for circular detection and rule violations.
  */
 
+import { relative } from "node:path";
 import { makeFileId } from "@mma/core";
 import type { DependencyGraph, GraphEdge } from "@mma/core";
 import type { TreeSitterNode, TreeSitterTree } from "@mma/parsing";
@@ -35,11 +36,11 @@ export function extractDependencyGraph(
   // absolute form so cross-repo resolution still works.
   let localRoots = packageRoots;
   if (packageRoots && repoRoot) {
-    const prefix = repoRoot.endsWith("/") ? repoRoot : repoRoot + "/";
     const merged = new Map<string, string>();
     for (const [name, dir] of packageRoots) {
-      if (dir.startsWith(prefix)) {
-        merged.set(name, dir.slice(prefix.length));
+      const rel = relative(repoRoot, dir).replace(/\\/g, "/");
+      if (!rel.startsWith("..")) {
+        merged.set(name, rel);
       } else {
         merged.set(name, dir);
       }
