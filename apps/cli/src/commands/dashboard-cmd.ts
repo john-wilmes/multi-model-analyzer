@@ -88,7 +88,7 @@ interface CacheEntry { data: unknown; expires: number }
 const apiCache = new Map<string, CacheEntry>();
 const CACHE_TTL_MS = 60_000;
 
-function cacheGet(key: string): unknown | undefined {
+function cacheGet(key: string): unknown {
   const entry = apiCache.get(key);
   if (!entry) return undefined;
   if (Date.now() > entry.expires) { apiCache.delete(key); return undefined; }
@@ -205,7 +205,7 @@ async function handleApi(
 
   // GET /api/metrics-all?limit=1000
   if (path === "/api/metrics-all") {
-    const limit = Math.min(parseInt(query.single["limit"] ?? "1000", 10) || 1000, 5000);
+    const limit = Math.max(1, Math.min(parseInt(query.single["limit"] ?? "1000", 10) || 1000, 5000));
     const cacheKey = `metrics-all:${limit}`;
     const cached = cacheGet(cacheKey);
     if (cached !== undefined) return sendJson(res, cached, 200, corsOrigin);
@@ -337,7 +337,7 @@ async function handleApi(
   const depsMatch = path.match(/^\/api\/dependencies\/(.+)$/);
   if (depsMatch) {
     const root = decodeURIComponent(depsMatch[1]!);
-    const maxDepth = Math.min(parseInt(query.single["depth"] ?? "3", 10) || 3, 10);
+    const maxDepth = Math.max(1, Math.min(parseInt(query.single["depth"] ?? "3", 10) || 3, 10));
 
     // root may be "repo:module" or just "module"
     const colonIdx = root.indexOf(":");
@@ -444,7 +444,7 @@ async function handleApi(
 
   // GET /api/hotspots?limit=50&offset=0
   if (path === "/api/hotspots") {
-    const limit = Math.min(parseInt(query.single["limit"] ?? "50", 10) || 50, 500);
+    const limit = Math.max(1, Math.min(parseInt(query.single["limit"] ?? "50", 10) || 50, 500));
     const offset = Math.max(parseInt(query.single["offset"] ?? "0", 10) || 0, 0);
     const keys = await kvStore.keys("hotspots:");
     const result: Array<unknown> = [];
@@ -680,16 +680,18 @@ function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let totalBytes = 0;
+    let aborted = false;
     req.on("data", (chunk: Buffer) => {
       totalBytes += chunk.byteLength;
       if (totalBytes > MAX_BODY_BYTES) {
+        aborted = true;
         req.destroy();
         reject(new Error("Request body exceeds 1MB limit"));
         return;
       }
       chunks.push(chunk);
     });
-    req.on("end", () => resolve(Buffer.concat(chunks).toString()));
+    req.on("end", () => { if (!aborted) resolve(Buffer.concat(chunks).toString()); });
     req.on("error", reject);
   });
 }
