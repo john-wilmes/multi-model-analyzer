@@ -40,8 +40,8 @@ const TEST_PATH_PATTERNS = [
   /(^|\/)jest\.config\./,
   /(^|\/)vitest\.config\./,
   /\.setup\./,
-  /(^|\/)fixtures?\//,
-  /(^|\/)helpers?\//,
+  /(^|\/)(?:test|tests|__tests__)\/(?:.*\/)?fixtures?\//,
+  /(^|\/)(?:test|tests|__tests__)\/(?:.*\/)?helpers?\//,
   /(^|\/)__mocks__\//,
 ];
 

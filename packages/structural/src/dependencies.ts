@@ -30,17 +30,21 @@ export function extractDependencyGraph(
   const edges: GraphEdge[] = [];
   const knownPaths = new Set(files.keys());
 
-  // Relativize absolute packageRoots for probing against relative knownPaths
+  // Relativize absolute packageRoots for probing against relative knownPaths.
+  // Keep non-matching entries (packages outside this repo) in their original
+  // absolute form so cross-repo resolution still works.
   let localRoots = packageRoots;
   if (packageRoots && repoRoot) {
     const prefix = repoRoot.endsWith("/") ? repoRoot : repoRoot + "/";
-    const relMap = new Map<string, string>();
+    const merged = new Map<string, string>();
     for (const [name, dir] of packageRoots) {
       if (dir.startsWith(prefix)) {
-        relMap.set(name, dir.slice(prefix.length));
+        merged.set(name, dir.slice(prefix.length));
+      } else {
+        merged.set(name, dir);
       }
     }
-    if (relMap.size > 0) localRoots = relMap;
+    localRoots = merged;
   }
 
   for (const [filePath, tree] of files) {

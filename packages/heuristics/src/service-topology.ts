@@ -123,7 +123,7 @@ const WORKER_SERVICE_PATTERN = /^(Standard|Workflow)Worker(Service)?$/;
 
 // Libraries that use queue-like APIs but are NOT message brokers.
 // p-queue is a local in-memory concurrency limiter, not a service bus.
-const NON_BROKER_QUEUE_IMPORTS = new Set(["p-queue", "p-queue/"]);
+const NON_BROKER_QUEUE_IMPORTS = new Set(["p-queue"]);
 
 /**
  * Find queue producer patterns:
@@ -139,10 +139,10 @@ function findQueueProducers(
   // If the file imports a non-broker queue library (e.g. p-queue), skip
   // heuristic .add()/.addBulk() detection — those calls are concurrency
   // control, not message-queue producers.
-  const usesNonBrokerQueue = fileImports.some(
-    (imp) =>
-      NON_BROKER_QUEUE_IMPORTS.has(imp) ||
-      [...NON_BROKER_QUEUE_IMPORTS].some((prefix) => imp.startsWith(prefix)),
+  const usesNonBrokerQueue = fileImports.some((imp) =>
+    [...NON_BROKER_QUEUE_IMPORTS].some(
+      (pkg) => imp === pkg || imp.startsWith(`${pkg}/`),
+    ),
   );
 
   const results: QueueRef[] = [];
