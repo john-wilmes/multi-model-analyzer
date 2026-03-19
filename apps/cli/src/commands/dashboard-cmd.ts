@@ -89,7 +89,7 @@ interface CacheEntry { data: unknown; expires: number }
 const apiCache = new Map<string, CacheEntry>();
 const CACHE_TTL_MS = 60_000;
 
-function cacheGet(key: string): unknown | undefined {
+function cacheGet(key: string): unknown {
   const entry = apiCache.get(key);
   if (!entry) return undefined;
   if (Date.now() > entry.expires) { apiCache.delete(key); return undefined; }

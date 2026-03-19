@@ -63,7 +63,7 @@ export default function BlastRadius() {
     fetchRepos()
       .then((d) => {
         setRepos(d.repos);
-        if (!selectedRepo && d.repos.length > 0) setSelectedRepo(d.repos[0]!);
+        if (d.repos.length > 0) setSelectedRepo((prev) => prev || d.repos[0]!);
       })
       .catch(() => setRepos([]));
   }, []);
