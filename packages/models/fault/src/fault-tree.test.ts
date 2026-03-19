@@ -230,12 +230,26 @@ describe("analyzeGaps", () => {
     expect(results).toHaveLength(0);
   });
 
-  it("does not flag catch block with reject() or next() error forwarding", () => {
+  it("does not flag catch block with reject() error forwarding", () => {
     const cfg: ControlFlowGraph = {
       functionId: "test#fn",
       nodes: [
         { id: "n1", kind: "catch", label: "catch", location: loc },
         { id: "n2", kind: "statement", label: "reject(err)", location: loc },
+      ],
+      edges: [{ from: "n1", to: "n2" }],
+    };
+
+    const results = analyzeGaps(new Map([["test#fn", cfg]]), "test-repo");
+    expect(results).toHaveLength(0);
+  });
+
+  it("does not flag catch block with next(err) error forwarding", () => {
+    const cfg: ControlFlowGraph = {
+      functionId: "test#fn",
+      nodes: [
+        { id: "n1", kind: "catch", label: "catch", location: loc },
+        { id: "n2", kind: "statement", label: "next(err)", location: loc },
       ],
       edges: [{ from: "n1", to: "n2" }],
     };
