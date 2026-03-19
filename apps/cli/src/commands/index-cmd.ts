@@ -207,8 +207,9 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         if (val) {
           try {
             const s = JSON.parse(val) as { entityId: string; description: string };
-            if (s.entityId.startsWith(`service:`) && s.entityId.includes(repo.name)) {
-              services.push(s.entityId.replace("service:", ""));
+            const repoServicePrefix = `service:${repo.name}/`;
+            if (s.entityId.startsWith(repoServicePrefix)) {
+              services.push(s.entityId.slice(repoServicePrefix.length));
               if (s.description) serviceSummaries.push(s.description);
             }
           } catch { /* skip malformed */ }
@@ -1234,7 +1235,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
           const services6b = servicesByRepo.get(repo.name);
           if (services6b && services6b.length > 0) {
             const inputs: ServiceSummaryInput[] = services6b.map((svc) => ({
-              entityId: `service:${svc.name}`,
+              entityId: `service:${repo.name}/${svc.name}`,
               serviceName: svc.name,
               methodSummaries: [...summaryMap!.values()]
                 .filter((s) => s.entityId.startsWith(svc.rootPath))
@@ -1582,8 +1583,9 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         if (val) {
           try {
             const s = JSON.parse(val) as { entityId: string; description: string };
-            if (s.entityId.startsWith(`service:`) && s.entityId.includes(repo.name)) {
-              services.push(s.entityId.replace("service:", ""));
+            const repoServicePrefix = `service:${repo.name}/`;
+            if (s.entityId.startsWith(repoServicePrefix)) {
+              services.push(s.entityId.slice(repoServicePrefix.length));
               if (s.description) serviceSummaries.push(s.description);
             }
           } catch { /* skip malformed */ }
