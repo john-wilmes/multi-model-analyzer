@@ -63,7 +63,7 @@ export function inferServices(input: ServiceInferenceInput): InferredService[] {
     // would flood the service catalog with non-service entries.
     if (entryPoints.length === 0) continue;
 
-    const deps = findServiceDependencies(dirPath, input.dependencyGraph);
+    const deps = findServiceDependencies(dirPath, input.dependencyGraph, input.repo);
 
     services.push({
       name: pkgInfo.name || dirPath.split("/").pop() || dirPath,
@@ -109,7 +109,7 @@ export function inferServices(input: ServiceInferenceInput): InferredService[] {
       if (!hasEntryPoint) continue;
     }
 
-    const deps = findServiceDependencies(rootPath, input.dependencyGraph);
+    const deps = findServiceDependencies(rootPath, input.dependencyGraph, input.repo);
 
     services.push({
       name,
@@ -179,15 +179,23 @@ function isUnderDir(filePath: string, dirPath: string): boolean {
 function findServiceDependencies(
   rootPath: string,
   graph: DependencyGraph,
+  repo?: string,
 ): string[] {
+  // Edge sources/targets use canonical IDs (repo:filePath) from makeFileId,
+  // but rootPath is a bare directory path. Strip the repo: prefix for matching.
+  const repoPrefix = repo ? `${repo}:` : undefined;
   const deps = new Set<string>();
   for (const edge of graph.edges) {
+    const source = repoPrefix && edge.source.startsWith(repoPrefix)
+      ? edge.source.slice(repoPrefix.length) : edge.source;
+    const target = repoPrefix && edge.target.startsWith(repoPrefix)
+      ? edge.target.slice(repoPrefix.length) : edge.target;
     if (
-      isUnderDir(edge.source, rootPath) &&
-      !isUnderDir(edge.target, rootPath) &&
-      !edge.target.startsWith("node_modules")
+      isUnderDir(source, rootPath) &&
+      !isUnderDir(target, rootPath) &&
+      !target.startsWith("node_modules")
     ) {
-      deps.add(edge.target);
+      deps.add(target);
     }
   }
   return [...deps];

@@ -31,7 +31,7 @@ function buildTemplateDescription(
   sourceText: string,
 ): string {
   const lines = sourceText.split("\n");
-  const signatureLine = lines[symbol.startLine - 1] ?? "";
+  const signatureLine = extractSignature(lines, symbol.startLine - 1);
 
   switch (symbol.kind) {
     case "function":
@@ -60,6 +60,28 @@ function buildTemplateDescription(
   }
 }
 
+/**
+ * Extract the full signature from multi-line function/method declarations.
+ * Joins lines from startIdx until closing `)` followed by optional return type
+ * and `{` or `;` is found (max 10 lines). Uses a smarter termination check to
+ * avoid stopping on `{` or `;` inside object-typed parameters.
+ */
+function extractSignature(lines: string[], startIdx: number): string {
+  let sig = lines[startIdx] ?? "";
+  if (isSignatureComplete(sig)) return sig;
+  const limit = Math.min(startIdx + 10, lines.length);
+  for (let i = startIdx + 1; i < limit; i++) {
+    sig += " " + (lines[i]?.trim() ?? "");
+    if (isSignatureComplete(sig)) break;
+  }
+  return sig;
+}
+
+/** A signature is complete when `)` is followed by optional return type and `{` or `;`. */
+function isSignatureComplete(text: string): boolean {
+  return /\)\s*(?::[\s\S]+?)?\s*[{;]\s*$/.test(text);
+}
+
 function extractParams(line: string): string | null {
   // Balanced-paren scanner: find the opening "(", track nesting depth,
   // and extract everything up to the matching ")". This correctly handles
@@ -82,7 +104,7 @@ function extractParams(line: string): string | null {
 }
 
 function extractReturnType(line: string): string | null {
-  const match = /\):\s*(.+?)\s*[{;]/.exec(line);
+  const match = /\):\s*(.+?)\s*(?:[{;]|=>)/.exec(line);
   return match?.[1]?.trim() || null;
 }
 

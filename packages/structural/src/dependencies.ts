@@ -24,16 +24,30 @@ export function extractDependencyGraph(
   repo: string,
   options: Partial<DependencyGraphOptions> = {},
   packageRoots?: ReadonlyMap<string, string>,
+  repoRoot?: string,
 ): DependencyGraph {
   const opts = { ...DEFAULT_OPTIONS, ...options };
   const edges: GraphEdge[] = [];
   const knownPaths = new Set(files.keys());
 
+  // Relativize absolute packageRoots for probing against relative knownPaths
+  let localRoots = packageRoots;
+  if (packageRoots && repoRoot) {
+    const prefix = repoRoot.endsWith("/") ? repoRoot : repoRoot + "/";
+    const relMap = new Map<string, string>();
+    for (const [name, dir] of packageRoots) {
+      if (dir.startsWith(prefix)) {
+        relMap.set(name, dir.slice(prefix.length));
+      }
+    }
+    if (relMap.size > 0) localRoots = relMap;
+  }
+
   for (const [filePath, tree] of files) {
     const imports = extractImports(tree.rootNode);
     for (const imp of imports) {
       if (opts.ignorePatterns.some((p) => imp.includes(p))) continue;
-      const resolved = resolveImportSpecifier(imp, filePath, knownPaths, packageRoots);
+      const resolved = resolveImportSpecifier(imp, filePath, knownPaths, localRoots);
       // Use canonical ID for local files so source and target share the same
       // namespace (enabling cycle detection). External specifiers stay as-is.
       const target = knownPaths.has(resolved) ? makeFileId(repo, resolved) : resolved;

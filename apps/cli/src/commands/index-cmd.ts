@@ -388,10 +388,11 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         const parsed = JSON.parse(raw) as Record<string, unknown>;
         const name = parsed.name as string | undefined;
         if (name) {
+          const absDir = join(repo.localPath, dirname(pjFile.path));
           if (packageRoots.has(name)) {
-            log(`    warning: duplicate package name "${name}" (overwriting ${packageRoots.get(name)} with ${dirname(pjFile.path)})`);
+            log(`    warning: duplicate package name "${name}" (overwriting ${packageRoots.get(name)} with ${absDir})`);
           }
-          packageRoots.set(name, dirname(pjFile.path));
+          packageRoots.set(name, absDir);
         }
       } catch {
         // Skip unreadable package.json files
@@ -590,7 +591,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       log(`  [${repo.name}] Extracting dependency graph...`);
       try {
         const start = performance.now();
-        const graph = extractDependencyGraph(trees, repo.name, { detectCircular: true }, packageRoots);
+        const graph = extractDependencyGraph(trees, repo.name, { detectCircular: true }, packageRoots, repo.localPath);
         const elapsed = Math.round(performance.now() - start);
 
         depGraphByRepo.set(repo.name, graph);

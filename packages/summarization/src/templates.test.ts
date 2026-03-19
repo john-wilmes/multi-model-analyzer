@@ -50,6 +50,22 @@ describe("summarizeFromTemplate", () => {
     expect(summary.entityId).toBe("src/api.ts#ApiClient.fetch");
   });
 
+  it("handles multi-line function signature", () => {
+    const symbol = sym("processItems", "function");
+    const source = [
+      "async function processItems(",
+      "  items: Item[],",
+      "  options: ProcessOptions,",
+      "): Promise<Result> {",
+      "  // body",
+      "}",
+    ].join("\n");
+    const summary = summarizeFromTemplate(symbol, "src/process.ts", source);
+
+    expect(summary.description).toContain("items: Item[]");
+    expect(summary.description).toContain("Promise<Result>");
+  });
+
   it("handles function with no params gracefully", () => {
     const symbol = sym("init", "function");
     const source = "function init(): void {";
