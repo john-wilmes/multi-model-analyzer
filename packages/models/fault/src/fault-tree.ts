@@ -271,7 +271,7 @@ export function analyzeGaps(
       // (e.g., `return promise.catch(...)`, `reject(err)`, `next(err)`) as
       // valid error handling within catch blocks.
       const errorForwardPattern =
-        /\.catch\s*\(|\breject\s*\(|\bnext\s*\(|\bthrow\b/;
+        /\.catch\s*\(|\breject\s*\(|\bnext\s*\(\s*[^)\s][^)]*\)/;
       const hasErrorForwarding = reachable.some(
         (n) => errorForwardPattern.test(n.label),
       );
