@@ -362,3 +362,112 @@ describe("tree-sitter -> CFG counter isolation", () => {
     expect(new Set(ids2).size).toBe(ids2.length);
   });
 });
+
+describe("loader prefix stripping in dependency extraction", () => {
+  it("strips directcss: prefix and resolves the underlying path", () => {
+    const files = new Map<string, TreeSitterTree>();
+
+    files.set("src/app.ts", parseSource(`
+import "./utils";
+import "directcss:./styles.css";
+`, "src/app.ts"));
+
+    files.set("src/utils.ts", parseSource(`export const x = 1;`, "src/utils.ts"));
+    files.set("src/styles.css", parseSource(``, "src/styles.css"));
+
+    const graph = extractDependencyGraph(files, "test-repo");
+    const appEdges = graph.edges.filter((e) => e.source === "test-repo:src/app.ts");
+
+    // Should have 2 edges: one to utils.ts, one to styles.css (with prefix stripped)
+    expect(appEdges).toHaveLength(2);
+    const targets = appEdges.map((e) => e.target).sort();
+    expect(targets).toEqual(["test-repo:src/styles.css", "test-repo:src/utils.ts"]);
+  });
+
+  it("strips various loader prefixes (raw:, url:, inline:, asset:, worker:)", () => {
+    const files = new Map<string, TreeSitterTree>();
+
+    files.set("src/app.ts", parseSource(`
+import "raw:./data.txt";
+import "url:./image.png";
+import "inline:./template.html";
+import "asset:./font.woff";
+import "worker:./worker.ts";
+`, "src/app.ts"));
+
+    const graph = extractDependencyGraph(files, "test-repo");
+    const appEdges = graph.edges.filter((e) => e.source === "test-repo:src/app.ts");
+
+    // All prefixes stripped — targets are the raw specifiers (no matching files)
+    const targets = appEdges.map((e) => e.target).sort();
+    expect(targets).toEqual([
+      "./data.txt",
+      "./font.woff",
+      "./image.png",
+      "./template.html",
+      "./worker.ts",
+    ]);
+  });
+
+  it("strips webpack-style loader prefixes (raw-loader!, url-loader!, file-loader!)", () => {
+    const files = new Map<string, TreeSitterTree>();
+
+    files.set("src/app.ts", parseSource(`
+import "raw-loader!./data.csv";
+import "url-loader!./icon.svg";
+import "file-loader!./document.pdf";
+`, "src/app.ts"));
+
+    const graph = extractDependencyGraph(files, "test-repo");
+    const appEdges = graph.edges.filter((e) => e.source === "test-repo:src/app.ts");
+
+    const targets = appEdges.map((e) => e.target).sort();
+    expect(targets).toEqual(["./data.csv", "./document.pdf", "./icon.svg"]);
+  });
+
+  it("does not strip prefixes that are not loader prefixes", () => {
+    const files = new Map<string, TreeSitterTree>();
+
+    files.set("src/app.ts", parseSource(`
+import "node:fs";
+import "@scope/pkg";
+`, "src/app.ts"));
+
+    const graph = extractDependencyGraph(files, "test-repo");
+    const appEdges = graph.edges.filter((e) => e.source === "test-repo:src/app.ts");
+
+    const targets = appEdges.map((e) => e.target).sort();
+    expect(targets).toEqual(["@scope/pkg", "node:fs"]);
+  });
+
+  it("strips loader prefix from bare require() calls", () => {
+    const files = new Map<string, TreeSitterTree>();
+
+    // Bare require() as expression statement (not assigned to a variable)
+    files.set("src/app.ts", parseSource(`
+require("directcss:./styles.css");
+`, "src/app.ts"));
+
+    files.set("src/styles.css", parseSource(``, "src/styles.css"));
+
+    const graph = extractDependencyGraph(files, "test-repo");
+    const appEdges = graph.edges.filter((e) => e.source === "test-repo:src/app.ts");
+
+    expect(appEdges).toHaveLength(1);
+    expect(appEdges[0]!.target).toBe("test-repo:src/styles.css");
+  });
+
+  it("strips loader prefix from re-export statements", () => {
+    const files = new Map<string, TreeSitterTree>();
+
+    files.set("src/index.ts", parseSource(`
+export * from "raw:./data";
+`, "src/index.ts"));
+
+    const graph = extractDependencyGraph(files, "test-repo");
+    const edges = graph.edges.filter((e) => e.source === "test-repo:src/index.ts");
+
+    expect(edges).toHaveLength(1);
+    expect(edges[0]!.target).toBe("./data");
+  });
+});

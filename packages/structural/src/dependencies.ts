@@ -67,24 +67,52 @@ export function extractDependencyGraph(
   return { repo, edges, circularDependencies };
 }
 
+/**
+ * Bundler loader prefixes (Vite, webpack, etc.) that appear before the real
+ * module specifier, e.g. `import 'directcss:./styles.css'`.  We strip these
+ * so the underlying path resolves normally (or is dropped as an external).
+ */
+const LOADER_PREFIXES = [
+  "directcss:",
+  "raw:",
+  "url:",
+  "inline:",
+  "asset:",
+  "worker:",
+  "sharedworker:",
+  "raw-loader!",
+  "url-loader!",
+  "file-loader!",
+];
+
+/** Strip a bundler loader prefix from an import specifier, if present. */
+function stripLoaderPrefix(specifier: string): string {
+  for (const prefix of LOADER_PREFIXES) {
+    if (specifier.startsWith(prefix)) {
+      return specifier.slice(prefix.length);
+    }
+  }
+  return specifier;
+}
+
 function extractImports(rootNode: TreeSitterNode): string[] {
   const imports: string[] = [];
 
   for (const child of rootNode.namedChildren) {
     if (child.type === "import_statement") {
       const source = findStringLiteral(child);
-      if (source) imports.push(source);
+      if (source) imports.push(stripLoaderPrefix(source));
     } else if (child.type === "expression_statement") {
       // Handle require() calls
       const req = findRequireCall(child);
-      if (req) imports.push(req);
+      if (req) imports.push(stripLoaderPrefix(req));
     } else if (child.type === "export_statement") {
       // Handle re-exports: export * from './x', export { X } from './x'
       // Use the "source" field to avoid matching strings inside exported class/function bodies
       const sourceNode = (child as any).childForFieldName?.("source");
       if (sourceNode) {
         const source = findStringLiteral(sourceNode);
-        if (source) imports.push(source);
+        if (source) imports.push(stripLoaderPrefix(source));
       }
     }
   }
