@@ -136,6 +136,7 @@ export interface IndexResult {
   readonly repoCount: number;
   readonly totalFiles: number;
   readonly totalSarifResults: number;
+  readonly failedRepos: number;
 }
 
 export async function indexCommand(options: IndexOptions): Promise<IndexResult> {
@@ -143,6 +144,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
 
   const log = verbose ? console.log : () => {};
   const tracer = new PipelineTracer();
+  const failedRepoNames = new Set<string>();
 
   log(`Indexing ${repos.length} repositories...`);
 
@@ -282,6 +284,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       repoCount: repos.length,
       totalFiles: 0,
       totalSarifResults: totalFindings,
+      failedRepos: 0,
     };
   }
 
@@ -297,7 +300,17 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
   tracer.startPhase("Ingestion");
   const phase1Start = performance.now();
   const changeSets: ChangeSet[] = [];
-  for (const repo of repos) {
+  const isTTY = process.stderr.isTTY;
+  for (let i = 0; i < repos.length; i++) {
+    const repo = repos[i]!;
+    if (!verbose) {
+      const progress = `[${i + 1}/${repos.length}] ${repo.name}`;
+      if (isTTY) {
+        process.stderr.write(`\r${progress}\x1b[K`);
+      } else {
+        process.stderr.write(`${progress}\n`);
+      }
+    }
     try {
       const changeSet = await detectChanges(repo, {
         mirrorDir,
@@ -307,7 +320,12 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       log(`  ${repo.name}: ${changeSet.addedFiles.length} added, ${changeSet.modifiedFiles.length} modified, ${changeSet.deletedFiles.length} deleted`);
     } catch (error) {
       console.error(`  Failed to index ${repo.name}:`, error);
+      failedRepoNames.add(repo.name);
     }
+  }
+  // Clear progress line when done (TTY only)
+  if (!verbose && isTTY && repos.length > 0) {
+    process.stderr.write(`\r\x1b[K`);
   }
   tracer.record("changeSets", changeSets.length);
   tracer.endPhase();
@@ -563,6 +581,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       log(`  [${repo.name}] Phase 3: ${Math.round(performance.now() - phase3Start)}ms`);
     } catch (error) {
       console.error(`  Failed to parse ${repo.name}:`, error);
+      failedRepoNames.add(repo.name);
       return;
     }
 
@@ -950,6 +969,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         log(`  [${repo.name}] Phase 5: ${Math.round(performance.now() - phase5Start)}ms`);
       } catch (error) {
         console.error(`  Failed to run heuristics for ${repo.name}:`, error);
+        failedRepoNames.add(repo.name);
       }
     }
 
@@ -1269,6 +1289,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         log(`  [${repo.name}] Summaries: ${tierBreakdown}, ${summaryMap.size} total`);
       } catch (error) {
         console.error(`  Failed to generate summaries for ${repo.name}:`, error);
+        failedRepoNames.add(repo.name);
       }
       phase6bTotalMs += Math.round(performance.now() - phase6bRepoStart);
     }
@@ -1636,6 +1657,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     repoCount: repos.length,
     totalFiles,
     totalSarifResults: allSarifResults.length,
+    failedRepos: failedRepoNames.size,
   };
 }
 

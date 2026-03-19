@@ -29,6 +29,7 @@ function makeResult(hadChanges: boolean): IndexResult {
     repoCount: 1,
     totalFiles: 10,
     totalSarifResults: 0,
+    failedRepos: 0,
   };
 }
 

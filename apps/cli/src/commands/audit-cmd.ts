@@ -18,7 +18,11 @@ export interface AuditOptions {
   readonly verbose?: boolean;
 }
 
-export async function auditCommand(options: AuditOptions): Promise<void> {
+export interface AuditResult {
+  readonly hasFindings: boolean;
+}
+
+export async function auditCommand(options: AuditOptions): Promise<AuditResult> {
   const log = options.verbose ? console.log.bind(console) : () => {};
 
   // Read npm audit JSON from file or stdin
@@ -38,7 +42,7 @@ export async function auditCommand(options: AuditOptions): Promise<void> {
 
   if (advisories.length === 0) {
     console.log("No advisories found in audit output.");
-    return;
+    return { hasFindings: false };
   }
 
   // Get repo list from index
@@ -48,9 +52,10 @@ export async function auditCommand(options: AuditOptions): Promise<void> {
 
   if (targetRepos.length === 0) {
     console.log("No repos found. Run 'mma index' first.");
-    return;
+    return { hasFindings: false };
   }
 
+  let totalFindings = 0;
   for (const repo of targetRepos) {
     const edges = await options.graphStore.getEdgesByKind("imports", repo);
     if (edges.length === 0) {
@@ -74,8 +79,11 @@ export async function auditCommand(options: AuditOptions): Promise<void> {
       for (const r of sarif) {
         console.log(`  ${r.level}: ${r.message.text}`);
       }
+      totalFindings += sarif.length;
     } else {
       console.log(`[${repo}] No reachable vulnerabilities`);
     }
   }
+
+  return { hasFindings: totalFindings > 0 };
 }
