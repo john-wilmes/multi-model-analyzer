@@ -141,10 +141,23 @@ async function main(): Promise<void> {
       console.error("Run 'mma index' first to create the analysis database.");
       process.exit(1);
     }
-    const stores = await createStores({ backend: earlyBackend, dbPath, readonly: true });
+    // W25: Validate port
+    const servePort = parseInt(values.port ?? "3001", 10);
+    if (isNaN(servePort) || servePort < 1 || servePort > 65535) {
+      console.error(`Invalid --port: "${values.port}". Must be 1–65535.`);
+      process.exit(1);
+    }
+    // W24: Respect config.backend for serve command
+    let serveBackend = earlyBackend;
+    if (!values.backend && values.config) {
+      try {
+        const cfgRaw = JSON.parse(readFileSync(resolve(values.config), "utf-8")) as Record<string, unknown>;
+        if (cfgRaw["backend"] === "kuzu") serveBackend = "kuzu";
+      } catch { /* use earlyBackend */ }
+    }
+    const stores = await createStores({ backend: serveBackend, dbPath, readonly: true });
     try {
       const transport = values.transport === "http" ? "http" as const : "stdio" as const;
-      const servePort = parseInt(values.port ?? "3001", 10);
       await serveCommand({
         graphStore: stores.graphStore,
         searchStore: stores.searchStore,
@@ -241,8 +254,9 @@ async function main(): Promise<void> {
   // audit command: parse npm audit JSON and check transitive vulnerability reachability
   if (command === "audit") {
     const stores = await createStores({ backend: earlyBackend, dbPath });
+    let auditResult: { hasFindings: boolean } = { hasFindings: false };
     try {
-      await auditCommand({
+      auditResult = await auditCommand({
         auditFile: values["audit-file"],
         repo: values.repo,
         kvStore: stores.kvStore,
@@ -251,6 +265,10 @@ async function main(): Promise<void> {
       });
     } finally {
       stores.close();
+    }
+    // W22: exit code 1 when --exit-code is set and findings exist
+    if (values["exit-code"] && auditResult.hasFindings) {
+      process.exit(1);
     }
     process.exit(0);
   }
@@ -635,7 +653,36 @@ async function main(): Promise<void> {
   let config: CliConfig;
   try {
     const raw = await readFile(configPath, "utf-8");
-    config = JSON.parse(raw) as CliConfig;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (jsonErr) {
+      console.error(`Could not parse config file: ${configPath}`);
+      console.error(`  JSON error: ${jsonErr instanceof Error ? jsonErr.message : String(jsonErr)}`);
+      process.exit(1);
+    }
+    // W23: Validate required fields
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      console.error(`Config file must be a JSON object: ${configPath}`);
+      process.exit(1);
+    }
+    const cfg = parsed as Record<string, unknown>;
+    if (!Array.isArray(cfg["repos"])) {
+      console.error(`Config missing required field: "repos" (must be an array)`);
+      process.exit(1);
+    }
+    if (typeof cfg["mirrorDir"] !== "string") {
+      console.error(`Config missing required field: "mirrorDir" (must be a string)`);
+      process.exit(1);
+    }
+    // Warn on unknown top-level fields (catches typos)
+    const knownFields = new Set(["repos", "mirrorDir", "dbPath", "rules", "baselinePath", "backend", "advisories"]);
+    for (const key of Object.keys(cfg)) {
+      if (!knownFields.has(key)) {
+        console.error(`warning: unknown config field "${key}" — possible typo`);
+      }
+    }
+    config = cfg as unknown as CliConfig;
   } catch {
     console.error(`Could not read config file: ${configPath}`);
     console.error("Create an mma.config.json with repos and mirrorDir.");
@@ -783,6 +830,12 @@ async function main(): Promise<void> {
           } else if (!verbose) {
             // table (default) — one-line summary when not verbose
             console.log(`Indexed ${result.repoCount} repo(s), ${result.totalFiles} files, ${result.totalSarifResults} findings`);
+          }
+
+          // W21: Exit with code 1 if any repos failed
+          if (result.failedRepos > 0) {
+            console.error(`${result.failedRepos} repo(s) failed to index.`);
+            process.exit(1);
           }
         }
         break;
