@@ -144,7 +144,11 @@ export function pageRankToSarif(
   // Filter to internal files only (prefixed with "repo:path") — excludes
   // external packages like "class-validator" that have high PageRank but
   // aren't meaningful for blast radius analysis.
-  const internal = result.ranked.filter(f => f.path.includes(":"));
+  // Internal files are prefixed with "repo:" by the indexing pipeline
+  // (e.g. "novu-api:src/app.ts"). External packages (lodash, @novu/shared,
+  // node:fs) lack this prefix.
+  const repoPrefix = `${repo}:`;
+  const internal = result.ranked.filter(f => f.path.startsWith(repoPrefix));
 
   // Use explicit minScore if provided, otherwise derive from internal distribution:
   // default to 10% of the top internal score (adapts to different graph sizes).
