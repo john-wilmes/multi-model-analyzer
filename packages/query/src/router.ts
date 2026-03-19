@@ -70,7 +70,7 @@ export function routeQuery(query: string): RouteDecision {
   }
 
   // Blast radius patterns
-  if (/\b(blast\s*radius|impact|affected\s*by|ripple)\b/.test(normalized)) {
+  if (/\b(blast\s*radius|impact|affected\s*by|ripple|critical|high[\s-]?risk|hotspot|risky|important)\b/.test(normalized)) {
     return decision("blastradius", 0.9);
   }
 
