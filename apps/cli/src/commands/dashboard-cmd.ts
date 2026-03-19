@@ -81,11 +81,30 @@ function parseQuery(url: string): ParsedQuery {
   return result;
 }
 
+const VALID_EDGE_KINDS = new Set<string>(["calls", "imports", "extends", "implements", "depends-on", "contains", "service-call"]);
+
+// Simple TTL cache for read-only endpoints (C5)
+interface CacheEntry { data: unknown; expires: number }
+const apiCache = new Map<string, CacheEntry>();
+const CACHE_TTL_MS = 60_000;
+
+function cacheGet(key: string): unknown | undefined {
+  const entry = apiCache.get(key);
+  if (!entry) return undefined;
+  if (Date.now() > entry.expires) { apiCache.delete(key); return undefined; }
+  return entry.data;
+}
+
+function cacheSet(key: string, data: unknown): void {
+  apiCache.set(key, { data, expires: Date.now() + CACHE_TTL_MS });
+}
+
 function sendJson(res: ServerResponse, data: unknown, status = 200, corsOrigin?: string): void {
   const body = JSON.stringify(data);
   const headers: Record<string, string | number> = {
     "Content-Type": "application/json",
     "Content-Length": Buffer.byteLength(body),
+    "X-Content-Type-Options": "nosniff",
   };
   if (corsOrigin) headers["Access-Control-Allow-Origin"] = corsOrigin;
   res.writeHead(status, headers);
@@ -184,19 +203,26 @@ async function handleApi(
     return sendJson(res, result, 200, corsOrigin);
   }
 
-  // GET /api/metrics-all
+  // GET /api/metrics-all?limit=1000
   if (path === "/api/metrics-all") {
+    const limit = Math.min(parseInt(query.single["limit"] ?? "1000", 10) || 1000, 5000);
+    const cacheKey = `metrics-all:${limit}`;
+    const cached = cacheGet(cacheKey);
+    if (cached !== undefined) return sendJson(res, cached, 200, corsOrigin);
     const keys = await kvStore.keys("metrics:");
     const result: ModuleMetrics[] = [];
     for (const key of keys) {
+      if (result.length >= limit) break;
       const json = await kvStore.get(key);
       if (json) {
         try {
           const metrics = JSON.parse(json) as ModuleMetrics[];
-          result.push(...metrics);
+          const remaining = limit - result.length;
+          result.push(...metrics.slice(0, remaining));
         } catch { /* skip malformed */ }
       }
     }
+    cacheSet(cacheKey, result);
     return sendJson(res, result, 200, corsOrigin);
   }
 
@@ -204,7 +230,11 @@ async function handleApi(
   const dsmMatch = path.match(/^\/api\/dsm\/(.+)$/);
   if (dsmMatch) {
     const repo = decodeURIComponent(dsmMatch[1]!);
-    const edgeKind = (query.single["kind"] ?? "imports") as EdgeKind;
+    const kindParam = query.single["kind"] ?? "imports";
+    if (!VALID_EDGE_KINDS.has(kindParam)) {
+      return sendError(res, `Invalid edgeKind: ${kindParam}. Must be one of: ${[...VALID_EDGE_KINDS].join(", ")}`, 400, corsOrigin);
+    }
+    const edgeKind = kindParam as EdgeKind;
     const edges = await graphStore.getEdgesByKind(edgeKind, repo);
 
     // Count connections per module
@@ -293,7 +323,11 @@ async function handleApi(
   const graphMatch = path.match(/^\/api\/graph\/(.+)$/);
   if (graphMatch) {
     const repo = decodeURIComponent(graphMatch[1]!);
-    const kind = query.single["kind"] ?? "imports";
+    const kindParam = query.single["kind"] ?? "imports";
+    if (!VALID_EDGE_KINDS.has(kindParam)) {
+      return sendError(res, `Invalid edgeKind: ${kindParam}. Must be one of: ${[...VALID_EDGE_KINDS].join(", ")}`, 400, corsOrigin);
+    }
+    const kind = kindParam;
     const limit = Math.min(Math.max(parseInt(query.single["limit"] ?? "1000", 10) || 1000, 1), 10000);
     const edges = await graphStore.getEdgesByKind(kind as Parameters<typeof graphStore.getEdgesByKind>[0], repo, { limit });
     return sendJson(res, { edges, limit }, 200, corsOrigin);
@@ -303,7 +337,7 @@ async function handleApi(
   const depsMatch = path.match(/^\/api\/dependencies\/(.+)$/);
   if (depsMatch) {
     const root = decodeURIComponent(depsMatch[1]!);
-    const maxDepth = parseInt(query.single["depth"] ?? "3", 10) || 3;
+    const maxDepth = Math.min(parseInt(query.single["depth"] ?? "3", 10) || 3, 10);
 
     // root may be "repo:module" or just "module"
     const colonIdx = root.indexOf(":");
@@ -379,12 +413,15 @@ async function handleApi(
 
   // GET /api/practices
   if (path === "/api/practices") {
+    const cached = cacheGet("practices");
+    if (cached !== undefined) return sendJson(res, cached, 200, corsOrigin);
     try {
       const report = await practicesCommand({
         kvStore,
         format: "json",
         silent: true,
       });
+      cacheSet("practices", report);
       return sendJson(res, report, 200, corsOrigin);
     } catch (err) {
       return sendError(res, err instanceof Error ? err.message : String(err), 500, corsOrigin);
@@ -405,8 +442,10 @@ async function handleApi(
   }
 
 
-  // GET /api/hotspots
+  // GET /api/hotspots?limit=50&offset=0
   if (path === "/api/hotspots") {
+    const limit = Math.min(parseInt(query.single["limit"] ?? "50", 10) || 50, 500);
+    const offset = Math.max(parseInt(query.single["offset"] ?? "0", 10) || 0, 0);
     const keys = await kvStore.keys("hotspots:");
     const result: Array<unknown> = [];
     for (const key of keys) {
@@ -423,7 +462,8 @@ async function handleApi(
     }
     // Sort by hotspotScore descending
     (result as Array<Record<string, unknown>>).sort((a, b) => (b["hotspotScore"] as number) - (a["hotspotScore"] as number));
-    return sendJson(res, result, 200, corsOrigin);
+    const page = result.slice(offset, offset + limit);
+    return sendJson(res, { results: page, total: result.length, limit, offset }, 200, corsOrigin);
   }
 
   // GET /api/temporal-coupling
@@ -634,10 +674,21 @@ async function handleApi(
   return sendError(res, "Not found", 404, corsOrigin);
 }
 
+const MAX_BODY_BYTES = 1024 * 1024; // 1MB
+
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    let totalBytes = 0;
+    req.on("data", (chunk: Buffer) => {
+      totalBytes += chunk.byteLength;
+      if (totalBytes > MAX_BODY_BYTES) {
+        req.destroy();
+        reject(new Error("Request body exceeds 1MB limit"));
+        return;
+      }
+      chunks.push(chunk);
+    });
     req.on("end", () => resolve(Buffer.concat(chunks).toString()));
     req.on("error", reject);
   });
