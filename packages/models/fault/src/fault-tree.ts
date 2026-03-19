@@ -267,6 +267,15 @@ export function analyzeGaps(
         (n) => n.kind === "throw",
       );
 
+      // Recognize Promise .catch() handlers and error-forwarding patterns
+      // (e.g., `return promise.catch(...)`, `reject(err)`, `next(err)`) as
+      // valid error handling within catch blocks.
+      const errorForwardPattern =
+        /\.catch\s*\(|\breject\s*\(|\bnext\s*\(|\bthrow\b/;
+      const hasErrorForwarding = reachable.some(
+        (n) => errorForwardPattern.test(n.label),
+      );
+
       // Empty catch block = silent failure (swallowed error)
       if (reachable.length === 0) {
         results.push(
@@ -286,7 +295,7 @@ export function analyzeGaps(
         continue;
       }
 
-      if (!hasLogging && !hasRethrow) {
+      if (!hasLogging && !hasRethrow && !hasErrorForwarding) {
         results.push(
           createSarifResult(
             "fault/unhandled-error-path",
