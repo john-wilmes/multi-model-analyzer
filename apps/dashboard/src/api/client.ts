@@ -217,3 +217,44 @@ export async function fetchCrossRepoCatalog(repo?: string): Promise<{ entries: S
   const qs = repo ? `?repo=${encodeURIComponent(repo)}` : '';
   return fetchJson(`${BASE}/api/cross-repo-catalog${qs}`);
 }
+
+// -- Blast Radius Types --
+
+export interface BlastRadiusOverviewFile {
+  path: string;
+  score: number;
+  rank: number;
+  reachCount: number;
+}
+
+export interface BlastRadiusOverview {
+  repo: string;
+  files: BlastRadiusOverviewFile[];
+  totalNodes: number;
+}
+
+export interface BlastRadiusAffectedFile {
+  path: string;
+  depth: number;
+  via: 'imports' | 'calls' | 'both';
+  repo: string;
+  score: number;
+}
+
+export interface BlastRadiusDetail {
+  changedFiles: string[];
+  affectedFiles: BlastRadiusAffectedFile[];
+  totalAffected: number;
+  maxDepth: number;
+  description: string;
+}
+
+export async function fetchBlastRadiusOverview(repo: string): Promise<BlastRadiusOverview> {
+  return fetchJson(`${BASE}/api/blast-radius/${encodeURIComponent(repo)}`);
+}
+
+export async function fetchBlastRadius(repo: string, file: string, depth?: number): Promise<BlastRadiusDetail> {
+  const params = new URLSearchParams({ file });
+  if (depth !== undefined) params.set('maxDepth', String(depth));
+  return fetchJson(`${BASE}/api/blast-radius/${encodeURIComponent(repo)}?${params}`);
+}
