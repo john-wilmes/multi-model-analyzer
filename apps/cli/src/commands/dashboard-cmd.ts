@@ -677,7 +677,10 @@ export async function handleApi(
   if (blastMatch) {
     const repo = decodeURIComponent(blastMatch[1]!);
     const fileParam = query.single["file"];
-    const maxDepth = Math.min(Math.max(parseInt(query.single["maxDepth"] ?? "5", 10) || 5, 1), 10);
+    const parsedMaxDepth = Number.parseInt(query.single["maxDepth"] ?? "", 10);
+    const maxDepth = Number.isNaN(parsedMaxDepth)
+      ? 5
+      : Math.min(Math.max(parsedMaxDepth, 1), 10);
 
     if (!fileParam) {
       // Overview mode: return pre-computed PageRank + reach counts from KV
@@ -689,8 +692,10 @@ export async function handleApi(
       const rcRaw = await kvStore.get(`reachCounts:${repo}`);
 
       type PrEntry = { ruleId: string; message: { text: string }; properties?: { pageRankScore?: number; rank?: number }; locations?: Array<{ logicalLocations?: Array<{ fullyQualifiedName?: string }> }> };
-      const prSarif: PrEntry[] = prRaw ? JSON.parse(prRaw) as PrEntry[] : [];
-      const rcEntries: [string, number][] = rcRaw ? JSON.parse(rcRaw) as [string, number][] : [];
+      let prSarif: PrEntry[] = [];
+      let rcEntries: [string, number][] = [];
+      try { prSarif = prRaw ? JSON.parse(prRaw) as PrEntry[] : []; } catch { /* malformed */ }
+      try { rcEntries = rcRaw ? JSON.parse(rcRaw) as [string, number][] : []; } catch { /* malformed */ }
       const reachMap = new Map(rcEntries);
 
       const files = prSarif.map((r) => {

@@ -37,9 +37,18 @@ export default function Layout() {
           <Link to="/temporal-coupling" className={navClass('/temporal-coupling')}>
             Temporal Coupling
           </Link>
-          <Link to={`/blast-radius/${repos[0] ? encodeURIComponent(repos[0]) : ''}`} className={navClass('/blast-radius', true)}>
-            Blast Radius
-          </Link>
+          {repos[0] ? (
+            <Link
+              to={`/blast-radius/${encodeURIComponent(repos[0])}`}
+              className={navClass('/blast-radius', true)}
+            >
+              Blast Radius
+            </Link>
+          ) : (
+            <span className="block px-3 py-2 rounded text-sm text-slate-500">
+              Blast Radius
+            </span>
+          )}
           {repos.length > 0 && (
             <div className="mt-4">
               <p className="px-3 text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">

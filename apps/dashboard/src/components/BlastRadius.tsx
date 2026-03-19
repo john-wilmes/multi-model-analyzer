@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import cytoscape from 'cytoscape';
-import cytoscapeDagre from 'cytoscape-dagre';
 import {
   fetchBlastRadiusOverview,
   fetchBlastRadius,
@@ -11,8 +10,6 @@ import type {
   BlastRadiusOverviewFile,
   BlastRadiusAffectedFile,
 } from '../api/client.ts';
-
-cytoscapeDagre(cytoscape);
 
 function lastSegment(path: string): string {
   const parts = path.split('/');
@@ -33,19 +30,19 @@ function depthBorder(depth: number): string {
   return '#64748b';
 }
 
-function viaColor(via: string): string {
-  if (via === 'imports') return '#3b82f6';
-  if (via === 'calls') return '#8b5cf6';
-  return '#10b981'; // both
-}
-
 export default function BlastRadius() {
   const { name } = useParams<{ name: string }>();
   const navigate = useNavigate();
 
   const [repos, setRepos] = useState<string[]>([]);
-  const [selectedRepo, setSelectedRepo] = useState(name ?? '');
+  const routeRepo = name ?? '';
+  const [selectedRepo, setSelectedRepo] = useState(routeRepo);
   const [maxDepth, setMaxDepth] = useState(5);
+
+  // Sync selectedRepo when route param changes (back/forward nav)
+  useEffect(() => {
+    setSelectedRepo(routeRepo);
+  }, [routeRepo]);
 
   const [overviewFiles, setOverviewFiles] = useState<BlastRadiusOverviewFile[]>([]);
   const [totalNodes, setTotalNodes] = useState(0);
@@ -73,10 +70,10 @@ export default function BlastRadius() {
 
   // Update URL when repo changes
   useEffect(() => {
-    if (selectedRepo && selectedRepo !== name) {
+    if (selectedRepo && selectedRepo !== routeRepo) {
       navigate(`/blast-radius/${encodeURIComponent(selectedRepo)}`, { replace: true });
     }
-  }, [selectedRepo, name, navigate]);
+  }, [selectedRepo, routeRepo, navigate]);
 
   // Fetch overview when repo changes
   useEffect(() => {
@@ -155,38 +152,9 @@ export default function BlastRadius() {
       },
     }));
 
-    // Build edges: connect each affected file to its "parent" at depth - 1
-    // Since we don't have explicit parent info, connect by depth layers
-    const byDepth = new Map<number, string[]>();
-    for (const [id, info] of nodeMap) {
-      const arr = byDepth.get(info.depth) ?? [];
-      arr.push(id);
-      byDepth.set(info.depth, arr);
-    }
-
-    const cyEdges: Array<{ data: { id: string; source: string; target: string; via: string } }> = [];
-    let edgeIdx = 0;
-
-    // For each affected file, create an edge from the file to one at depth-1
-    // Use a simple heuristic: connect to the nearest parent by depth
-    for (const f of affectedFiles) {
-      const parents = byDepth.get(f.depth - 1) ?? [];
-      if (parents.length > 0) {
-        // Pick the first parent (simplified — real graph would need actual edge data)
-        cyEdges.push({
-          data: {
-            id: `e${edgeIdx++}`,
-            source: parents[0]!,
-            target: f.path,
-            via: f.via,
-          },
-        });
-      }
-    }
-
     const cy = cytoscape({
       container: cyRef.current,
-      elements: [...nodes, ...cyEdges],
+      elements: nodes,
       style: [
         {
           selector: 'node',
@@ -204,16 +172,6 @@ export default function BlastRadius() {
           } as cytoscape.Css.Node,
         },
         {
-          selector: 'edge',
-          style: {
-            width: 1.5,
-            'line-color': (ele: cytoscape.EdgeSingular) => viaColor(ele.data('via') as string),
-            'target-arrow-color': (ele: cytoscape.EdgeSingular) => viaColor(ele.data('via') as string),
-            'target-arrow-shape': 'triangle',
-            'curve-style': 'bezier',
-          } as cytoscape.Css.Edge,
-        },
-        {
           selector: 'node.highlighted',
           style: {
             'border-width': 3,
@@ -221,37 +179,27 @@ export default function BlastRadius() {
           } as cytoscape.Css.Node,
         },
         {
-          selector: 'edge.highlighted',
-          style: { width: 3 } as cytoscape.Css.Edge,
-        },
-        {
           selector: 'node.dimmed',
           style: { opacity: 0.3 } as cytoscape.Css.Node,
         },
-        {
-          selector: 'edge.dimmed',
-          style: { opacity: 0.15 } as cytoscape.Css.Edge,
-        },
       ],
       layout: {
-        name: 'dagre',
-        rankDir: 'LR',
-        nodeSep: 50,
-        rankSep: 70,
+        name: 'concentric',
+        concentric: (node: cytoscape.NodeSingular) => -(node.data('depth') as number),
+        levelWidth: () => 1,
+        minNodeSpacing: 30,
       } as cytoscape.LayoutOptions,
       minZoom: 0.2,
       maxZoom: 3,
     });
 
-    // Hover: highlight connected
+    // Hover: highlight same-depth nodes
     cy.on('mouseover', 'node', (evt) => {
       const node = evt.target;
-      const connected = node.connectedEdges();
-      const connectedNodes = connected.connectedNodes();
+      const depth = node.data('depth') as number;
       cy.elements().addClass('dimmed');
       node.removeClass('dimmed').addClass('highlighted');
-      connected.removeClass('dimmed').addClass('highlighted');
-      connectedNodes.removeClass('dimmed').addClass('highlighted');
+      cy.nodes().filter((n: cytoscape.NodeSingular) => (n.data('depth') as number) === depth).removeClass('dimmed');
     });
 
     cy.on('mouseout', 'node', () => {
@@ -393,16 +341,8 @@ export default function BlastRadius() {
                 <span className="flex items-center gap-1">
                   <span className="inline-block w-3 h-3 rounded-full bg-slate-400" /> Depth 3+
                 </span>
-                <span className="ml-auto flex items-center gap-2">
-                  <span className="flex items-center gap-1">
-                    <span className="inline-block w-4 h-0.5 bg-blue-500" /> imports
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <span className="inline-block w-4 h-0.5 bg-purple-500" /> calls
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <span className="inline-block w-4 h-0.5 bg-emerald-500" /> both
-                  </span>
+                <span className="ml-auto text-xs text-slate-400">
+                  Node size = PageRank score
                 </span>
               </div>
             </>

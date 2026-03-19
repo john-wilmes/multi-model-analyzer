@@ -443,11 +443,11 @@ describe("GET /api/blast-radius/:repo?file=... (detail)", () => {
   it("clamps maxDepth to 1-10 range", async () => {
     const res0 = await get("/api/blast-radius/repo-a?file=src%2Futils.ts&maxDepth=0");
     const body0 = (await res0.json()) as { maxDepth: number };
-    expect(body0.maxDepth).toBeGreaterThanOrEqual(1);
+    expect(body0.maxDepth).toBe(1);
 
     const res99 = await get("/api/blast-radius/repo-a?file=src%2Futils.ts&maxDepth=99");
     const body99 = (await res99.json()) as { maxDepth: number };
-    expect(body99.maxDepth).toBeLessThanOrEqual(10);
+    expect(body99.maxDepth).toBe(10);
   });
 });
 
