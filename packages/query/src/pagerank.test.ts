@@ -97,12 +97,18 @@ describe("computePageRank", () => {
   });
 });
 
+// pageRankToSarif uses repo-prefixed paths (e.g. "repo:src/a.ts") matching
+// the format produced by the indexing pipeline.
+function repoEdge(source: string, target: string): GraphEdge {
+  return { source: `repo:${source}`, target: `repo:${target}`, kind: "imports", metadata: { repo: "test" } };
+}
+
 describe("pageRankToSarif", () => {
   it("converts top-ranked files to SARIF notes", () => {
     const edges = [
-      importEdge("a.ts", "shared.ts"),
-      importEdge("b.ts", "shared.ts"),
-      importEdge("c.ts", "shared.ts"),
+      repoEdge("a.ts", "shared.ts"),
+      repoEdge("b.ts", "shared.ts"),
+      repoEdge("c.ts", "shared.ts"),
     ];
     const pr = computePageRank(edges);
     const sarif = pageRankToSarif(pr, "test-repo", { topN: 2 });
@@ -121,8 +127,8 @@ describe("pageRankToSarif", () => {
 
   it("respects minScore filter", () => {
     const edges = [
-      importEdge("a.ts", "shared.ts"),
-      importEdge("b.ts", "shared.ts"),
+      repoEdge("a.ts", "shared.ts"),
+      repoEdge("b.ts", "shared.ts"),
     ];
     const pr = computePageRank(edges);
     // With a very high minScore, nothing should pass
@@ -131,7 +137,7 @@ describe("pageRankToSarif", () => {
   });
 
   it("includes repo in SARIF location properties", () => {
-    const edges = [importEdge("a.ts", "b.ts")];
+    const edges = [repoEdge("a.ts", "b.ts")];
     const pr = computePageRank(edges);
     const sarif = pageRankToSarif(pr, "my-repo", { topN: 5 });
     for (const result of sarif) {
@@ -140,7 +146,7 @@ describe("pageRankToSarif", () => {
   });
 
   it("includes pageRankScore and rank in SARIF properties", () => {
-    const edges = [importEdge("a.ts", "b.ts")];
+    const edges = [repoEdge("a.ts", "b.ts")];
     const pr = computePageRank(edges);
     const sarif = pageRankToSarif(pr, "test", { topN: 5 });
     expect(sarif.length).toBeGreaterThan(0);
@@ -148,6 +154,25 @@ describe("pageRankToSarif", () => {
       expect(result.properties?.["pageRankScore"]).toBeGreaterThan(0);
       expect(result.properties?.["rank"]).toBeGreaterThanOrEqual(1);
     }
+  });
+
+  it("excludes external packages (no repo: prefix) from SARIF output", () => {
+    // Mix of internal (repo-prefixed) and external (bare package name) nodes
+    const edges: GraphEdge[] = [
+      { source: "repo:src/a.ts", target: "lodash", kind: "imports", metadata: { repo: "test" } },
+      { source: "repo:src/b.ts", target: "lodash", kind: "imports", metadata: { repo: "test" } },
+      { source: "repo:src/c.ts", target: "lodash", kind: "imports", metadata: { repo: "test" } },
+      repoEdge("src/a.ts", "src/shared.ts"),
+      repoEdge("src/b.ts", "src/shared.ts"),
+    ];
+    const pr = computePageRank(edges);
+    const sarif = pageRankToSarif(pr, "test-repo", { topN: 10 });
+
+    // "lodash" has highest PageRank but should be excluded
+    const paths = sarif.map(r => r.locations?.[0]?.logicalLocations?.[0]?.fullyQualifiedName);
+    expect(paths).not.toContain("lodash");
+    // Internal files should still appear
+    expect(paths.some(p => p?.includes("shared.ts"))).toBe(true);
   });
 });
 

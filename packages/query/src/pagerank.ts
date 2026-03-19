@@ -140,15 +140,26 @@ export function pageRankToSarif(
   options?: { topN?: number; minScore?: number },
 ): SarifResult[] {
   const topN = options?.topN ?? 10;
-  const minScore = options?.minScore ?? 0.03;
 
-  return result.ranked
-    .filter(f => f.rank <= topN && f.score > minScore)
-    .map(f => ({
+  // Filter to internal files only (prefixed with "repo:path") — excludes
+  // external packages like "class-validator" that have high PageRank but
+  // aren't meaningful for blast radius analysis.
+  const internal = result.ranked.filter(f => f.path.includes(":"));
+
+  // Use explicit minScore if provided, otherwise derive from internal distribution:
+  // default to 10% of the top internal score (adapts to different graph sizes).
+  const topInternalScore = internal.length > 0 ? internal[0]!.score : 0;
+  const minScore = options?.minScore ?? topInternalScore * 0.1;
+
+  const filtered = internal.filter(f => f.score > minScore).slice(0, topN);
+
+  return filtered.map((f, i) => {
+    const rank = i + 1;
+    return {
       ruleId: "blast-radius/high-pagerank",
       level: "note" as const,
       message: {
-        text: `High blast radius: "${f.path}" has PageRank score ${f.score.toFixed(4)} (rank #${f.rank}). Changes to this file affect many dependents.`,
+        text: `High blast radius: "${f.path}" has PageRank score ${f.score.toFixed(4)} (rank #${rank}). Changes to this file affect many dependents.`,
       },
       locations: [{
         logicalLocations: [{
@@ -157,6 +168,7 @@ export function pageRankToSarif(
           properties: { repo },
         }],
       }],
-      properties: { pageRankScore: f.score, rank: f.rank },
-    }));
+      properties: { pageRankScore: f.score, rank },
+    };
+  });
 }
