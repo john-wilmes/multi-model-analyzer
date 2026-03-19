@@ -170,7 +170,7 @@ function getAllowedOrigin(req: IncomingMessage, corsOrigins: ReadonlySet<string>
   return corsOrigins.has(origin) ? origin : undefined;
 }
 
-async function handleApi(
+export async function handleApi(
   req: IncomingMessage,
   res: ServerResponse,
   kvStore: KVStore,
