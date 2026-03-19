@@ -47,6 +47,66 @@ interface CliConfig {
   readonly advisories?: readonly Advisory[];
 }
 
+const KNOWN_CONFIG_FIELDS = new Set([
+  "repos", "mirrorDir", "dbPath", "rules", "baselinePath", "backend", "advisories",
+]);
+
+/**
+ * Parse and validate a raw config object, emitting warnings for unknown fields
+ * and errors for malformed entries. Returns the validated CliConfig.
+ *
+ * @param strict - When true (default), calls process.exit(1) if required fields
+ *   ("repos", "mirrorDir") are missing. Pass false for commands (e.g. serve) that
+ *   only need optional config fields like "backend".
+ */
+function validateCliConfig(parsed: unknown, configPath: string, strict = true): CliConfig {
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    console.error(`Config file must be a JSON object: ${configPath}`);
+    process.exit(1);
+  }
+  const cfg = parsed as Record<string, unknown>;
+  if (!Array.isArray(cfg["repos"])) {
+    if (strict) {
+      console.error(`Config missing required field: "repos" (must be an array)`);
+      process.exit(1);
+    } else {
+      console.error(`warning: config field "repos" is missing or not an array`);
+    }
+  }
+  if (typeof cfg["mirrorDir"] !== "string") {
+    if (strict) {
+      console.error(`Config missing required field: "mirrorDir" (must be a string)`);
+      process.exit(1);
+    } else {
+      console.error(`warning: config field "mirrorDir" is missing or not a string`);
+    }
+  }
+  // Warn on unknown top-level fields (catches typos)
+  for (const key of Object.keys(cfg)) {
+    if (!KNOWN_CONFIG_FIELDS.has(key)) {
+      console.error(`warning: unknown config field "${key}" — possible typo`);
+    }
+  }
+  // Validate each repos[] entry has at least a url or localPath string
+  if (Array.isArray(cfg["repos"])) {
+    const repos = cfg["repos"] as unknown[];
+    for (let i = 0; i < repos.length; i++) {
+      const entry = repos[i];
+      if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+        console.error(`warning: repos[${i}] is not an object — skipping`);
+        continue;
+      }
+      const e = entry as Record<string, unknown>;
+      const hasUrl = typeof e["url"] === "string" && e["url"].length > 0;
+      const hasLocalPath = typeof e["localPath"] === "string" && e["localPath"].length > 0;
+      if (!hasUrl && !hasLocalPath) {
+        console.error(`warning: repos[${i}] missing "url" or "localPath" string — entry will likely fail`);
+      }
+    }
+  }
+  return cfg as unknown as CliConfig;
+}
+
 async function main(): Promise<void> {
   const { positionals, values } = parseArgs({
     allowPositionals: true,
@@ -147,13 +207,17 @@ async function main(): Promise<void> {
       console.error(`Invalid --port: "${values.port}". Must be 1–65535.`);
       process.exit(1);
     }
-    // W24: Respect config.backend for serve command
+    // W24: Respect config.backend for serve command; also run shared validation
+    // to catch typos and malformed entries in the config file (W23).
     let serveBackend = earlyBackend;
     if (!values.backend && values.config) {
       try {
-        const cfgRaw = JSON.parse(readFileSync(resolve(values.config), "utf-8")) as Record<string, unknown>;
-        if (cfgRaw["backend"] === "kuzu") serveBackend = "kuzu";
-      } catch { /* use earlyBackend */ }
+        const cfgRaw = JSON.parse(readFileSync(resolve(values.config), "utf-8"));
+        // Run validation — emits warnings for unknown fields and repo entries.
+        // Pass strict=false: serve does not require repos/mirrorDir.
+        validateCliConfig(cfgRaw, resolve(values.config), false);
+        if ((cfgRaw as Record<string, unknown>)["backend"] === "kuzu") serveBackend = "kuzu";
+      } catch { /* config is optional for serve — use earlyBackend */ }
     }
     const stores = await createStores({ backend: serveBackend, dbPath, readonly: true });
     try {
@@ -619,10 +683,17 @@ async function main(): Promise<void> {
       process.exit(1);
     }
     // eslint-disable-next-line @typescript-eslint/unbound-method -- path.resolve/dirname are pure functions
-    const { resolve, dirname } = await import("node:path");
+    const { resolve: pathResolve, dirname: pathDirname } = await import("node:path");
     const { fileURLToPath } = await import("node:url");
-    const staticDir = resolve(
-      dirname(fileURLToPath(import.meta.url)),
+    // Run shared config validation when -c is provided (catches typos, unknown fields).
+    if (values.config) {
+      try {
+        const cfgRaw = JSON.parse(readFileSync(pathResolve(values.config), "utf-8"));
+        validateCliConfig(cfgRaw, pathResolve(values.config), false);
+      } catch { /* config is optional for dashboard */ }
+    }
+    const staticDir = pathResolve(
+      pathDirname(fileURLToPath(import.meta.url)),
       "..",
       "..",
       "..",
@@ -661,28 +732,8 @@ async function main(): Promise<void> {
       console.error(`  JSON error: ${jsonErr instanceof Error ? jsonErr.message : String(jsonErr)}`);
       process.exit(1);
     }
-    // W23: Validate required fields
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      console.error(`Config file must be a JSON object: ${configPath}`);
-      process.exit(1);
-    }
-    const cfg = parsed as Record<string, unknown>;
-    if (!Array.isArray(cfg["repos"])) {
-      console.error(`Config missing required field: "repos" (must be an array)`);
-      process.exit(1);
-    }
-    if (typeof cfg["mirrorDir"] !== "string") {
-      console.error(`Config missing required field: "mirrorDir" (must be a string)`);
-      process.exit(1);
-    }
-    // Warn on unknown top-level fields (catches typos)
-    const knownFields = new Set(["repos", "mirrorDir", "dbPath", "rules", "baselinePath", "backend", "advisories"]);
-    for (const key of Object.keys(cfg)) {
-      if (!knownFields.has(key)) {
-        console.error(`warning: unknown config field "${key}" — possible typo`);
-      }
-    }
-    config = cfg as unknown as CliConfig;
+    // W23: Validate required fields, unknown fields, and repo entry shapes
+    config = validateCliConfig(parsed, configPath);
   } catch {
     console.error(`Could not read config file: ${configPath}`);
     console.error("Create an mma.config.json with repos and mirrorDir.");

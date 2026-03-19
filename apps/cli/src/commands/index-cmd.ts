@@ -969,6 +969,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         log(`  [${repo.name}] Phase 5: ${Math.round(performance.now() - phase5Start)}ms`);
       } catch (error) {
         console.error(`  Failed to run heuristics for ${repo.name}:`, error);
+        failedRepoNames.add(repo.name);
       }
     }
 
@@ -1288,6 +1289,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         log(`  [${repo.name}] Summaries: ${tierBreakdown}, ${summaryMap.size} total`);
       } catch (error) {
         console.error(`  Failed to generate summaries for ${repo.name}:`, error);
+        failedRepoNames.add(repo.name);
       }
       phase6bTotalMs += Math.round(performance.now() - phase6bRepoStart);
     }
