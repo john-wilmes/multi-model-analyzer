@@ -108,7 +108,7 @@ export function routeQuery(query: string): RouteDecision {
   }
 
   // Analytical patterns
-  if (/\b(risks?|faults?|errors?|failures?|dead|unused|orphan|violations?|flags?|config|diagnostics?|warnings?|issues?|gaps?|missing|circular|complex(?:ity)?)\b/.test(normalized)) {
+  if (/\b(risks?|faults?|errors?|failures?|dead|unused|orphan|violations?|flags?|config|diagnostics?|warnings?|issues?|gaps?|missing|circular)\b/.test(normalized)) {
     return decision("analytical", 0.85);
   }
 
