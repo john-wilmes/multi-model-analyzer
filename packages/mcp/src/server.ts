@@ -78,6 +78,7 @@ async function startHttpServer(opts: ServerOptions): Promise<HttpServerHandle> {
   const host = opts.host ?? "127.0.0.1";
   const port = opts.port ?? 3001;
 
+  // eslint-disable-next-line @typescript-eslint/no-misused-promises -- async handler with internal error handling
   const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const url = req.url ?? "/";
 
