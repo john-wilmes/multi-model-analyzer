@@ -632,7 +632,7 @@ async function main(): Promise<void> {
     );
     const stores = await createStores({ backend: earlyBackend, dbPath, readonly: true });
     try {
-      const corsOriginList = values["cors-origin"] as string[] | undefined;
+      const corsOriginList = values["cors-origin"];
       await dashboardCommand({
         kvStore: stores.kvStore,
         graphStore: stores.graphStore,

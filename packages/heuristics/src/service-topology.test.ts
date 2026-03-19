@@ -66,6 +66,47 @@ class JobService {
       expect(queueEdge!.metadata?.detail).toBe("@InjectQueue");
     });
 
+    it("ignores p-queue .add() calls (not a message broker)", () => {
+      const source = `
+import PQueue from 'p-queue';
+const queue = new PQueue({ concurrency: 4 });
+await queue.add(() => fetchData());`;
+      const input = makeInput([
+        { path: "concurrency.ts", source, imports: ["p-queue"] },
+      ]);
+      const edges = extractServiceTopology(input);
+
+      const queueEdge = edges.find(
+        (e) => e.metadata?.protocol === "queue" && e.metadata?.role === "producer",
+      );
+      expect(queueEdge).toBeUndefined();
+    });
+
+    it("still detects BullMQ when p-queue is also imported", () => {
+      const source = `
+import PQueue from 'p-queue';
+class Sender {
+  constructor(private standardQueueService: StandardQueueService) {}
+  async send() {
+    const pQueue = new PQueue({ concurrency: 2 });
+    await pQueue.add(() => this.standardQueueService.add('job', {}));
+  }
+}`;
+      const input = makeInput([
+        { path: "mixed-queues.ts", source, imports: ["p-queue"] },
+      ]);
+      const edges = extractServiceTopology(input);
+
+      // Should detect the BullMQ StandardQueueService.add() but NOT pQueue.add()
+      const producers = edges.filter(
+        (e) => e.metadata?.protocol === "queue" && e.metadata?.role === "producer",
+      );
+      // The known typed field (standardQueueService) should still be detected
+      expect(producers.some((e) => e.target === "standard")).toBe(true);
+      // The pQueue.add() should NOT be detected as a queue producer
+      expect(producers.some((e) => e.metadata?.detail?.toString().includes("pQueue"))).toBe(false);
+    });
+
     it("detects .addBulk() calls on queue fields", () => {
       const source = `
 class BulkSender {

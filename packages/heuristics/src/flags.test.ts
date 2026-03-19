@@ -84,6 +84,40 @@ describe("scanForFlags", () => {
     expect(alpha!.locations).toHaveLength(2);
   });
 
+  it("excludes flags from test files", () => {
+    const files = makeFiles({
+      "src/config.test.ts": `const x = process.env.FEATURE_ALPHA;`,
+      "src/config.spec.ts": `const y = process.env.FEATURE_BETA;`,
+      "__tests__/setup.ts": `const z = process.env.FF_GAMMA;`,
+    });
+    const result = scanForFlags(files, "repo");
+    expect(result.flags).toHaveLength(0);
+  });
+
+  it("excludes flags from test setup and fixture files", () => {
+    const files = makeFiles({
+      "test/helpers.ts": `const a = process.env.FEATURE_X;`,
+      "jest.config.ts": `const b = process.env.ENABLE_COVERAGE;`,
+      "vitest.config.ts": `const c = process.env.FEATURE_Y;`,
+      "src/test.setup.ts": `const d = process.env.FF_Z;`,
+      "test/fixtures/flags.ts": `const e = process.env.FEATURE_W;`,
+      "src/__mocks__/env.ts": `const f = process.env.FLAG_MOCK;`,
+    });
+    const result = scanForFlags(files, "repo");
+    expect(result.flags).toHaveLength(0);
+  });
+
+  it("keeps flags from production files alongside test files", () => {
+    const files = makeFiles({
+      "src/config.ts": `const x = process.env.FEATURE_ALPHA;`,
+      "src/config.test.ts": `const y = process.env.FEATURE_ALPHA;`,
+    });
+    const result = scanForFlags(files, "repo");
+    expect(result.flags).toHaveLength(1);
+    expect(result.flags[0]!.locations).toHaveLength(1);
+    expect(result.flags[0]!.locations[0]!.module).toBe("src/config.ts");
+  });
+
   it("detects custom pattern flags", () => {
     const files = makeFiles({
       "src/app.ts": `const flag = getFlag("experiment_checkout_v2");`,

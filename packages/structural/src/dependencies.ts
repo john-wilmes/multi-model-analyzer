@@ -5,6 +5,7 @@
  * For scale: dependency-cruiser integration for circular detection and rule violations.
  */
 
+import { relative } from "node:path";
 import { makeFileId } from "@mma/core";
 import type { DependencyGraph, GraphEdge } from "@mma/core";
 import type { TreeSitterNode, TreeSitterTree } from "@mma/parsing";
@@ -24,16 +25,34 @@ export function extractDependencyGraph(
   repo: string,
   options: Partial<DependencyGraphOptions> = {},
   packageRoots?: ReadonlyMap<string, string>,
+  repoRoot?: string,
 ): DependencyGraph {
   const opts = { ...DEFAULT_OPTIONS, ...options };
   const edges: GraphEdge[] = [];
   const knownPaths = new Set(files.keys());
 
+  // Relativize absolute packageRoots for probing against relative knownPaths.
+  // Keep non-matching entries (packages outside this repo) in their original
+  // absolute form so cross-repo resolution still works.
+  let localRoots = packageRoots;
+  if (packageRoots && repoRoot) {
+    const merged = new Map<string, string>();
+    for (const [name, dir] of packageRoots) {
+      const rel = relative(repoRoot, dir).replace(/\\/g, "/");
+      if (!rel.startsWith("..")) {
+        merged.set(name, rel);
+      } else {
+        merged.set(name, dir);
+      }
+    }
+    localRoots = merged;
+  }
+
   for (const [filePath, tree] of files) {
     const imports = extractImports(tree.rootNode);
     for (const imp of imports) {
       if (opts.ignorePatterns.some((p) => imp.includes(p))) continue;
-      const resolved = resolveImportSpecifier(imp, filePath, knownPaths, packageRoots);
+      const resolved = resolveImportSpecifier(imp, filePath, knownPaths, localRoots);
       // Use canonical ID for local files so source and target share the same
       // namespace (enabling cycle detection). External specifiers stay as-is.
       const target = knownPaths.has(resolved) ? makeFileId(repo, resolved) : resolved;
@@ -53,24 +72,52 @@ export function extractDependencyGraph(
   return { repo, edges, circularDependencies };
 }
 
+/**
+ * Bundler loader prefixes (Vite, webpack, etc.) that appear before the real
+ * module specifier, e.g. `import 'directcss:./styles.css'`.  We strip these
+ * so the underlying path resolves normally (or is dropped as an external).
+ */
+const LOADER_PREFIXES = [
+  "directcss:",
+  "raw:",
+  "url:",
+  "inline:",
+  "asset:",
+  "worker:",
+  "sharedworker:",
+  "raw-loader!",
+  "url-loader!",
+  "file-loader!",
+];
+
+/** Strip a bundler loader prefix from an import specifier, if present. */
+function stripLoaderPrefix(specifier: string): string {
+  for (const prefix of LOADER_PREFIXES) {
+    if (specifier.startsWith(prefix)) {
+      return specifier.slice(prefix.length);
+    }
+  }
+  return specifier;
+}
+
 function extractImports(rootNode: TreeSitterNode): string[] {
   const imports: string[] = [];
 
   for (const child of rootNode.namedChildren) {
     if (child.type === "import_statement") {
       const source = findStringLiteral(child);
-      if (source) imports.push(source);
+      if (source) imports.push(stripLoaderPrefix(source));
     } else if (child.type === "expression_statement") {
       // Handle require() calls
       const req = findRequireCall(child);
-      if (req) imports.push(req);
+      if (req) imports.push(stripLoaderPrefix(req));
     } else if (child.type === "export_statement") {
       // Handle re-exports: export * from './x', export { X } from './x'
       // Use the "source" field to avoid matching strings inside exported class/function bodies
       const sourceNode = (child as any).childForFieldName?.("source");
       if (sourceNode) {
         const source = findStringLiteral(sourceNode);
-        if (source) imports.push(source);
+        if (source) imports.push(stripLoaderPrefix(source));
       }
     }
   }
@@ -116,6 +163,17 @@ export function resolveImportSpecifier(
   knownPaths: ReadonlySet<string>,
   packageRoots?: ReadonlyMap<string, string>,
 ): string {
+  // Handle @/ path alias (common tsconfig paths convention: "@/*" -> "src/*")
+  if (specifier.startsWith("@/")) {
+    const aliasPath = "src/" + specifier.slice(2);
+    // Also try resolving relative to the importer's root (no src/ prefix)
+    const resolved = probeExtensions(aliasPath, knownPaths);
+    if (resolved) return resolved;
+    // Try without src/ prefix (alias might map to project root directly)
+    const resolvedRoot = probeExtensions(specifier.slice(2), knownPaths);
+    if (resolvedRoot) return resolvedRoot;
+  }
+
   // Non-relative imports: try packageRoots first, then return as-is
   if (!specifier.startsWith(".")) {
     if (packageRoots) {

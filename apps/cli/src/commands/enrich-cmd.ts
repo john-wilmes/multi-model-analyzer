@@ -173,7 +173,7 @@ export async function enrichCommand(options: EnrichOptions): Promise<EnrichResul
         if (catalog.length > 0) {
           // Build ServiceSummaryInput from catalog entries and current summaryMap
           const inputs: ServiceSummaryInput[] = catalog.map((svc) => ({
-            entityId: `service:${svc.name}`,
+            entityId: `service:${repoName}/${svc.name}`,
             serviceName: svc.name,
             methodSummaries: [...summaryMap.values()]
               .filter((s) => s.entityId.includes(svc.name))

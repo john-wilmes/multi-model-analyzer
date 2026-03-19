@@ -28,6 +28,27 @@ const DEFAULT_SDK_IMPORTS = [
 
 const FLAG_ENV_PATTERN = /^(FEATURE_|FF_|FLAG_|ENABLE_|DISABLE_|IS_\w+_ENABLED)/;
 
+/**
+ * Path patterns that indicate test/setup files — flags found in these
+ * are configuration artifacts, not real feature flags.
+ */
+const TEST_PATH_PATTERNS = [
+  /\.test\./,
+  /\.spec\./,
+  /(^|\/)__tests__\//,
+  /(^|\/)test\//,
+  /(^|\/)jest\.config\./,
+  /(^|\/)vitest\.config\./,
+  /\.setup\./,
+  /(^|\/)(?:test|tests|__tests__)\/(?:.*\/)?fixtures?\//,
+  /(^|\/)(?:test|tests|__tests__)\/(?:.*\/)?helpers?\//,
+  /(^|\/)__mocks__\//,
+];
+
+function isTestPath(filePath: string): boolean {
+  return TEST_PATH_PATTERNS.some((pattern) => pattern.test(filePath));
+}
+
 export function scanForFlags(
   files: ReadonlyMap<string, TreeSitterTree>,
   repo: string,
@@ -37,6 +58,9 @@ export function scanForFlags(
   const sdkImports = options.sdkImports ?? DEFAULT_SDK_IMPORTS;
 
   for (const [filePath, tree] of files) {
+    // Skip test/setup/fixture files — flags there are config artifacts
+    if (isTestPath(filePath)) continue;
+
     // Scan for SDK-based flags
     const imports = findImports(tree.rootNode);
     const usesSDK = imports.some((imp) =>

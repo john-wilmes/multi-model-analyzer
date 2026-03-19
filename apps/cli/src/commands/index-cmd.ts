@@ -207,8 +207,9 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         if (val) {
           try {
             const s = JSON.parse(val) as { entityId: string; description: string };
-            if (s.entityId.startsWith(`service:`) && s.entityId.includes(repo.name)) {
-              services.push(s.entityId.replace("service:", ""));
+            const repoServicePrefix = `service:${repo.name}/`;
+            if (s.entityId.startsWith(repoServicePrefix)) {
+              services.push(s.entityId.slice(repoServicePrefix.length));
               if (s.description) serviceSummaries.push(s.description);
             }
           } catch { /* skip malformed */ }
@@ -388,10 +389,11 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         const parsed = JSON.parse(raw) as Record<string, unknown>;
         const name = parsed.name as string | undefined;
         if (name) {
+          const absDir = join(repo.localPath, dirname(pjFile.path));
           if (packageRoots.has(name)) {
-            log(`    warning: duplicate package name "${name}" (overwriting ${packageRoots.get(name)} with ${dirname(pjFile.path)})`);
+            log(`    warning: duplicate package name "${name}" (overwriting ${packageRoots.get(name)} with ${absDir})`);
           }
-          packageRoots.set(name, dirname(pjFile.path));
+          packageRoots.set(name, absDir);
         }
       } catch {
         // Skip unreadable package.json files
@@ -590,7 +592,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       log(`  [${repo.name}] Extracting dependency graph...`);
       try {
         const start = performance.now();
-        const graph = extractDependencyGraph(trees, repo.name, { detectCircular: true }, packageRoots);
+        const graph = extractDependencyGraph(trees, repo.name, { detectCircular: true }, packageRoots, repo.localPath);
         const elapsed = Math.round(performance.now() - start);
 
         depGraphByRepo.set(repo.name, graph);
@@ -1233,7 +1235,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
           const services6b = servicesByRepo.get(repo.name);
           if (services6b && services6b.length > 0) {
             const inputs: ServiceSummaryInput[] = services6b.map((svc) => ({
-              entityId: `service:${svc.name}`,
+              entityId: `service:${repo.name}/${svc.name}`,
               serviceName: svc.name,
               methodSummaries: [...summaryMap!.values()]
                 .filter((s) => s.entityId.startsWith(svc.rootPath))
@@ -1581,8 +1583,9 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         if (val) {
           try {
             const s = JSON.parse(val) as { entityId: string; description: string };
-            if (s.entityId.startsWith(`service:`) && s.entityId.includes(repo.name)) {
-              services.push(s.entityId.replace("service:", ""));
+            const repoServicePrefix = `service:${repo.name}/`;
+            if (s.entityId.startsWith(repoServicePrefix)) {
+              services.push(s.entityId.slice(repoServicePrefix.length));
               if (s.description) serviceSummaries.push(s.description);
             }
           } catch { /* skip malformed */ }

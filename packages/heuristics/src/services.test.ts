@@ -37,7 +37,7 @@ describe("inferServices", () => {
     expect(services[0]!.name).toBe("@myapp/api");
     expect(services[0]!.rootPath).toBe("packages/api");
     expect(services[0]!.entryPoints).toContain("dist/index.js");
-    expect(services[0]!.confidence).toBe(0.9);
+    expect(services[0]!.confidence).toBe(0.5);
   });
 
   it("infers service from bin entry", () => {
@@ -62,6 +62,44 @@ describe("inferServices", () => {
 
     const services = inferServices(input);
     expect(services[0]!.entryPoints).toContain("bin/cli.js");
+    expect(services[0]!.confidence).toBe(0.9);
+  });
+
+  it("demotes main-only packages to 0.5 confidence (libraries, not services)", () => {
+    const pkgs = new Map<string, PackageJsonInfo>([
+      [
+        "packages/utils",
+        {
+          name: "@myapp/utils",
+          main: "dist/index.js",
+          dependencies: {},
+          scripts: {},
+        },
+      ],
+      [
+        "packages/api",
+        {
+          name: "@myapp/api",
+          main: "dist/index.js",
+          bin: { api: "bin/serve.js" },
+          dependencies: {},
+          scripts: {},
+        },
+      ],
+    ]);
+
+    const input: ServiceInferenceInput = {
+      repo: "test-repo",
+      filePaths: [],
+      packageJsons: pkgs,
+      dependencyGraph: makeGraph(),
+    };
+
+    const services = inferServices(input);
+    const utils = services.find((s) => s.name === "@myapp/utils");
+    const api = services.find((s) => s.name === "@myapp/api");
+    expect(utils!.confidence).toBe(0.5);
+    expect(api!.confidence).toBe(0.9);
   });
 
   it("infers service from start script", () => {

@@ -38,7 +38,7 @@ export function extractServiceTopology(
     const fileImports = input.imports.get(filePath) ?? [];
 
     // Detect queue producers
-    const queueProducers = findQueueProducers(tree.rootNode, filePath);
+    const queueProducers = findQueueProducers(tree.rootNode, filePath, fileImports);
     for (const producer of queueProducers) {
       edges.push({
         source: filePath,
@@ -121,6 +121,10 @@ const QUEUE_SERVICE_PATTERN =
 const QUEUE_ADD_METHODS = new Set(["add", "addBulk", "addToQueue"]);
 const WORKER_SERVICE_PATTERN = /^(Standard|Workflow)Worker(Service)?$/;
 
+// Libraries that use queue-like APIs but are NOT message brokers.
+// p-queue is a local in-memory concurrency limiter, not a service bus.
+const NON_BROKER_QUEUE_IMPORTS = new Set(["p-queue"]);
+
 /**
  * Find queue producer patterns:
  * - Constructor injection of *QueueService + method calls to .add()/.addBulk()
@@ -130,7 +134,17 @@ const WORKER_SERVICE_PATTERN = /^(Standard|Workflow)Worker(Service)?$/;
 function findQueueProducers(
   rootNode: TreeSitterNode,
   _filePath: string,
+  fileImports: readonly string[] = [],
 ): QueueRef[] {
+  // If the file imports a non-broker queue library (e.g. p-queue), skip
+  // heuristic .add()/.addBulk() detection — those calls are concurrency
+  // control, not message-queue producers.
+  const usesNonBrokerQueue = fileImports.some((imp) =>
+    [...NON_BROKER_QUEUE_IMPORTS].some(
+      (pkg) => imp === pkg || imp.startsWith(`${pkg}/`),
+    ),
+  );
+
   const results: QueueRef[] = [];
   // Map from field name -> queue name (derived from injected type)
   const queueFields = new Map<string, string>();
@@ -177,12 +191,15 @@ function findQueueProducers(
         const objectKey = objectText.startsWith("this.")
           ? objectText.slice(5)
           : objectText;
-        // Check if object is a known queue field or matches queue pattern
-        if (
-          queueFields.has(objectKey) ||
-          objectKey.endsWith("Queue") ||
-          objectKey.endsWith("queue")
-        ) {
+        // Check if object is a known queue field or matches queue pattern.
+        // When a non-broker queue lib (p-queue) is imported, only trust
+        // explicitly typed queue fields — the generic name heuristic would
+        // false-positive on PQueue.add() / queue.add().
+        const isKnownQueueField = queueFields.has(objectKey);
+        const matchesNameHeuristic =
+          !usesNonBrokerQueue &&
+          (objectKey.endsWith("Queue") || objectKey.endsWith("queue"));
+        if (isKnownQueueField || matchesNameHeuristic) {
           const args = node.childForFieldName("arguments");
           const jobName = extractFirstStringArg(args);
           const queueName = queueFields.get(objectKey) ?? objectKey;
