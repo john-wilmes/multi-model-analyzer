@@ -139,10 +139,13 @@ async function startHttpServer(opts: ServerOptions): Promise<HttpServerHandle> {
     httpServer.once("error", reject);
   });
 
-  console.log(`MCP HTTP server listening on http://${host}:${port}/mcp`);
+  const addr = httpServer.address();
+  const actualPort = typeof addr === "object" && addr !== null ? addr.port : port;
+
+  console.log(`MCP HTTP server listening on http://${host}:${actualPort}/mcp`);
 
   return {
-    port,
+    port: actualPort,
     host,
     close(): Promise<void> {
       return new Promise((resolve, reject) => {

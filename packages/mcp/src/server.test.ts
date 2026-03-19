@@ -11,10 +11,6 @@ import type { ServerOptions } from "./server.js";
 // Helpers
 // ---------------------------------------------------------------------------
 
-function randomPort(): number {
-  return 30000 + Math.floor(Math.random() * 10000);
-}
-
 function makeStores() {
   return {
     graphStore: new InMemoryGraphStore(),
@@ -28,7 +24,7 @@ function baseOpts(overrides: Partial<ServerOptions> = {}): ServerOptions {
     ...makeStores(),
     transport: "http",
     host: "127.0.0.1",
-    port: randomPort(),
+    port: 0, // OS assigns a free port; read back from handle.port
     ...overrides,
   };
 }
@@ -210,9 +206,8 @@ describe("MCP HTTP transport — authentication", () => {
 
 describe("MCP HTTP transport — handle lifecycle", () => {
   it("exposes the correct port on the returned handle", async () => {
-    const port = randomPort();
-    const handle = await startServer(baseOpts({ port }));
-    expect(handle.port).toBe(port);
+    const handle = await startServer(baseOpts());
+    expect(handle.port).toBeGreaterThan(0);
     expect(handle.host).toBe("127.0.0.1");
   });
 

@@ -43,14 +43,22 @@ describe("runCorrelation", () => {
     const servicesRaw = await kv.get("correlation:services");
     const sarifRaw = await kv.get("sarif:correlation");
 
-    expect(graphRaw).toBeDefined();
-    expect(servicesRaw).toBeDefined();
-    expect(sarifRaw).toBeDefined();
+    expect(typeof graphRaw).toBe("string");
+    expect(typeof servicesRaw).toBe("string");
+    expect(typeof sarifRaw).toBe("string");
 
-    // Should be valid JSON
-    expect(() => JSON.parse(graphRaw!) as unknown).not.toThrow();
-    expect(() => JSON.parse(servicesRaw!) as unknown).not.toThrow();
-    expect(() => JSON.parse(sarifRaw!) as unknown).not.toThrow();
+    // Should be valid JSON with expected shapes
+    const graph = JSON.parse(graphRaw!) as { edges: unknown[]; repoPairs: string[] };
+    expect(Array.isArray(graph.edges)).toBe(true);
+    expect(Array.isArray(graph.repoPairs)).toBe(true);
+
+    const services = JSON.parse(servicesRaw!) as { links: unknown[]; linchpins: unknown[]; orphanedServices: unknown[] };
+    expect(Array.isArray(services.links)).toBe(true);
+    expect(Array.isArray(services.linchpins)).toBe(true);
+    expect(Array.isArray(services.orphanedServices)).toBe(true);
+
+    const sarif = JSON.parse(sarifRaw!) as unknown[];
+    expect(Array.isArray(sarif)).toBe(true);
   });
 
   it("returns full CorrelationResult with valid structure", async () => {
@@ -73,8 +81,17 @@ describe("runCorrelation", () => {
       packageRoots,
     });
 
-    expect(result.crossRepoGraph).toBeDefined();
-    expect(result.serviceCorrelation).toBeDefined();
+    expect(result.crossRepoGraph).toMatchObject({
+      edges: expect.any(Array) as unknown,
+      repoPairs: expect.any(Set) as unknown,
+      downstreamMap: expect.any(Map) as unknown,
+      upstreamMap: expect.any(Map) as unknown,
+    });
+    expect(result.serviceCorrelation).toMatchObject({
+      links: expect.any(Array) as unknown,
+      linchpins: expect.any(Array) as unknown,
+      orphanedServices: expect.any(Array) as unknown,
+    });
     expect(result.sarifResults).toBeInstanceOf(Array);
     expect(result.counts).toMatchObject({
       crossRepoEdges: expect.any(Number) as unknown,
