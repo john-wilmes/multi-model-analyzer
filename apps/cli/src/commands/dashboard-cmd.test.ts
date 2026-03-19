@@ -163,6 +163,24 @@ beforeAll(async () => {
     },
   ]);
 
+  // Seed blast radius data (PageRank SARIF + reach counts)
+  await kv.set(
+    "sarif:blastRadius:repo-a",
+    JSON.stringify([
+      {
+        ruleId: "blast-radius/high-pagerank",
+        level: "note",
+        message: { text: "High blast radius" },
+        locations: [{ logicalLocations: [{ fullyQualifiedName: "src/app.ts", kind: "module", properties: { repo: "repo-a" } }] }],
+        properties: { pageRankScore: 0.15, rank: 1 },
+      },
+    ]),
+  );
+  await kv.set(
+    "reachCounts:repo-a",
+    JSON.stringify([["src/app.ts", 3], ["src/index.ts", 1], ["src/utils.ts", 0]]),
+  );
+
   server = await startTestServer(kv, graph);
   baseUrl = `http://127.0.0.1:${server.port}`;
 });
@@ -366,6 +384,70 @@ describe("GET /api/practices", () => {
     expect(res1.status).toBe(200);
     expect(res2.status).toBe(200);
     expect(await res1.text()).toBe(await res2.text());
+  });
+});
+
+describe("GET /api/blast-radius/:repo (overview)", () => {
+  it("returns pre-computed PageRank + reach counts", async () => {
+    const res = await get("/api/blast-radius/repo-a");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      repo: string;
+      files: Array<{ path: string; score: number; rank: number; reachCount: number }>;
+      totalNodes: number;
+    };
+    expect(body.repo).toBe("repo-a");
+    expect(body.files.length).toBeGreaterThan(0);
+    expect(body.files[0]).toMatchObject({
+      path: "src/app.ts",
+      score: 0.15,
+      rank: 1,
+      reachCount: 3,
+    });
+    expect(body.totalNodes).toBe(3);
+  });
+
+  it("returns empty files array for repo with no blast radius data", async () => {
+    const res = await get("/api/blast-radius/repo-b");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { files: unknown[]; totalNodes: number };
+    expect(body.files).toEqual([]);
+    expect(body.totalNodes).toBe(0);
+  });
+});
+
+describe("GET /api/blast-radius/:repo?file=... (detail)", () => {
+  it("returns computed blast radius for a specific file", async () => {
+    const res = await get("/api/blast-radius/repo-a?file=src%2Futils.ts");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      changedFiles: string[];
+      affectedFiles: Array<{ path: string; depth: number; via: string }>;
+      totalAffected: number;
+      maxDepth: number;
+    };
+    expect(body.changedFiles).toContain("src/utils.ts");
+    expect(typeof body.totalAffected).toBe("number");
+    expect(typeof body.maxDepth).toBe("number");
+    // src/app.ts imports src/utils.ts, so it should be affected
+    expect(body.affectedFiles.some((f) => f.path === "src/app.ts")).toBe(true);
+  });
+
+  it("respects maxDepth parameter", async () => {
+    const res = await get("/api/blast-radius/repo-a?file=src%2Futils.ts&maxDepth=1");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { maxDepth: number };
+    expect(body.maxDepth).toBe(1);
+  });
+
+  it("clamps maxDepth to 1-10 range", async () => {
+    const res0 = await get("/api/blast-radius/repo-a?file=src%2Futils.ts&maxDepth=0");
+    const body0 = (await res0.json()) as { maxDepth: number };
+    expect(body0.maxDepth).toBeGreaterThanOrEqual(1);
+
+    const res99 = await get("/api/blast-radius/repo-a?file=src%2Futils.ts&maxDepth=99");
+    const body99 = (await res99.json()) as { maxDepth: number };
+    expect(body99.maxDepth).toBeLessThanOrEqual(10);
   });
 });
 

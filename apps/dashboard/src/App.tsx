@@ -6,6 +6,7 @@ import RepoDetail from './components/RepoDetail.tsx';
 import ModuleDetail from './components/ModuleDetail.tsx';
 import FindingsTable from './components/FindingsTable.tsx';
 import DependencyGraph from './components/DependencyGraph.tsx';
+import BlastRadius from './components/BlastRadius.tsx';
 import CrossRepoView from './components/CrossRepoView.tsx';
 import TemporalCouplingView from './views/TemporalCouplingView.tsx';
 
@@ -57,6 +58,7 @@ export default function App() {
             <Route path="/repo/:name/module/*" element={<ModuleDetail />} />
             <Route path="/findings" element={<FindingsTable />} />
             <Route path="/graph/:name" element={<DependencyGraph />} />
+            <Route path="/blast-radius/:name" element={<BlastRadius />} />
             <Route path="/cross-repo" element={<CrossRepoView />} />
             <Route path="/temporal-coupling" element={<TemporalCouplingView />} />
           </Route>

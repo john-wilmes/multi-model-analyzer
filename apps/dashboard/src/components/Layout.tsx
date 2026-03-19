@@ -12,8 +12,8 @@ export default function Layout() {
       .catch(() => setRepos([]));
   }, []);
 
-  function navClass(path: string) {
-    const active = location.pathname === path;
+  function navClass(path: string, prefix = false) {
+    const active = prefix ? location.pathname.startsWith(path) : location.pathname === path;
     return `block px-3 py-2 rounded text-sm ${active ? 'bg-slate-700 text-white' : 'text-slate-300 hover:bg-slate-700 hover:text-white'}`;
   }
 
@@ -36,6 +36,9 @@ export default function Layout() {
           </Link>
           <Link to="/temporal-coupling" className={navClass('/temporal-coupling')}>
             Temporal Coupling
+          </Link>
+          <Link to={`/blast-radius/${repos[0] ? encodeURIComponent(repos[0]) : ''}`} className={navClass('/blast-radius', true)}>
+            Blast Radius
           </Link>
           {repos.length > 0 && (
             <div className="mt-4">

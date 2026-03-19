@@ -20,6 +20,7 @@ import { getSarifResultsPaginated, discoverRepos } from "@mma/storage";
 import { practicesCommand } from "./practices-cmd.js";
 import { computeCrossRepoImpact } from "@mma/correlation";
 import type { CrossRepoGraph } from "@mma/correlation";
+import { computeBlastRadius, computePageRank } from "@mma/query";
 
 // ---------------------------------------------------------------------------
 // compress
@@ -669,6 +670,69 @@ export async function handleApi(
     } catch {
       return sendJson(res, { entries: [] }, 200, corsOrigin);
     }
+  }
+
+  // GET /api/blast-radius/:repo[?file=path&maxDepth=N]
+  const blastMatch = path.match(/^\/api\/blast-radius\/(.+)$/);
+  if (blastMatch) {
+    const repo = decodeURIComponent(blastMatch[1]!);
+    const fileParam = query.single["file"];
+    const maxDepth = Math.min(Math.max(parseInt(query.single["maxDepth"] ?? "5", 10) || 5, 1), 10);
+
+    if (!fileParam) {
+      // Overview mode: return pre-computed PageRank + reach counts from KV
+      const cacheKey = `blast-overview:${repo}`;
+      const cached = cacheGet(cacheKey);
+      if (cached !== undefined) return sendJson(res, cached, 200, corsOrigin);
+
+      const prRaw = await kvStore.get(`sarif:blastRadius:${repo}`);
+      const rcRaw = await kvStore.get(`reachCounts:${repo}`);
+
+      type PrEntry = { ruleId: string; message: { text: string }; properties?: { pageRankScore?: number; rank?: number }; locations?: Array<{ logicalLocations?: Array<{ fullyQualifiedName?: string }> }> };
+      const prSarif: PrEntry[] = prRaw ? JSON.parse(prRaw) as PrEntry[] : [];
+      const rcEntries: [string, number][] = rcRaw ? JSON.parse(rcRaw) as [string, number][] : [];
+      const reachMap = new Map(rcEntries);
+
+      const files = prSarif.map((r) => {
+        const filePath = r.locations?.[0]?.logicalLocations?.[0]?.fullyQualifiedName ?? "";
+        return {
+          path: filePath,
+          score: r.properties?.pageRankScore ?? 0,
+          rank: r.properties?.rank ?? 0,
+          reachCount: reachMap.get(filePath) ?? 0,
+        };
+      });
+
+      const result = { repo, files, totalNodes: reachMap.size };
+      cacheSet(cacheKey, result);
+      return sendJson(res, result, 200, corsOrigin);
+    }
+
+    // Detail mode: compute blast radius for a specific file
+    const cacheKey = `blast-detail:${repo}:${fileParam}:${maxDepth}`;
+    const cached = cacheGet(cacheKey);
+    if (cached !== undefined) return sendJson(res, cached, 200, corsOrigin);
+
+    const br = await computeBlastRadius([fileParam], graphStore, { maxDepth, repo });
+
+    // Compute PageRank on import edges for scoring
+    const importEdges = await graphStore.getEdgesByKind("imports", repo);
+    const pr = computePageRank(importEdges);
+
+    const affectedFiles = br.affectedFiles.map((f) => ({
+      ...f,
+      score: pr.scores.get(f.path) ?? 0,
+    }));
+
+    const result = {
+      changedFiles: br.changedFiles,
+      affectedFiles,
+      totalAffected: br.totalAffected,
+      maxDepth: br.maxDepth,
+      description: br.description,
+    };
+    cacheSet(cacheKey, result);
+    return sendJson(res, result, 200, corsOrigin);
   }
 
   return sendError(res, "Not found", 404, corsOrigin);
