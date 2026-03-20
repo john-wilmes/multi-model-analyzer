@@ -20,48 +20,27 @@ Implemented in `packages/structural/src/metrics.ts`. Computes afferent/efferent 
 
 Implemented in `packages/structural/src/dead-exports.ts`. Identifies exports with no incoming import references. Produces SARIF findings for code cleanup.
 
-## High Priority
+### Architectural Rules Engine ✓
 
-### Architectural Rules Engine
+Implemented in `packages/heuristics/src/arch-rules.ts`. Supports forbidden-import, layer-violation, and dependency-direction rules configured in `mma.config.json`.
 
-Declarative constraints checked during indexing, producing SARIF findings.
+### Blast Radius / Impact Analysis ✓
 
-Three rule categories (proven pattern from dependency-cruiser):
-- **Forbidden** -- dependencies that must not exist (e.g., "packages/core must not import packages/cli")
-- **Allowed** -- whitelist approach; anything not matching is a violation
-- **Required** -- dependencies that must exist (e.g., "all controllers must import base-controller")
+Implemented via PageRank scoring in `packages/query/src/pagerank.ts` and `mma affected` command for rev-range scoping.
 
-Rules defined in YAML/JSON config with regex path matching and capture group variables for workspace boundary enforcement (e.g., `$1`/`$2` groups to prevent cross-feature imports).
+### Git-Affected Scoping ✓
 
-**Known violations baseline:** Allow teams to adopt rules incrementally without fixing all pre-existing violations. SARIF already supports `baselineState` (new/unchanged/updated/absent) -- leverage this directly.
+Implemented as `mma affected <rev-range>` and `mma delta <rev-range>` commands.
 
-## Medium Priority
+### Temporal Coupling ✓
 
-### Blast Radius / Impact Analysis
+Implemented in `packages/heuristics/src/temporal-coupling.ts`. Detects co-change patterns from git history with NPMI scoring.
 
-Given a symbol or file, compute the transitive set of affected dependents ranked by importance. mma already has BFS traversal; adding a reach-count or PageRank-based metric would make queries like "what breaks if I change X" answerable.
+### Vulnerability Reachability ✓
 
-**Reference:** Roam Code uses Personalized PageRank for blast radius scoring.
-
-### Git-Affected Scoping
-
-Given a git diff (or revision range), compute the changed files plus their transitive dependents. Useful for CI: validate only the blast radius of a PR's changes rather than the full codebase.
-
-**Reference:** dependency-cruiser's `--affected <revision>` flag.
+Implemented in `packages/heuristics/src/vuln-match.ts`. Matches npm audit advisories against import graph reachability.
 
 ## Lower Priority
-
-### Temporal Coupling
-
-Co-change analysis from git history: files that frequently change together but have no import/call relationship (hidden coupling). Requires processing `git log` for file-level co-change matrices, then NPMI or lift-based correlation scoring.
-
-**Reference:** Roam Code's `coupling` and `dark-matter` commands.
-
-### Vulnerability Reachability
-
-Ingest npm audit (or Trivy/OSV) output, match vulnerable packages to symbols in the index, then trace call-graph paths from entry points to vulnerable code. Classifies vulnerabilities as reachable or unreachable from application entry points.
-
-**Reference:** Roam Code's `vuln-map` + `vuln-reach` two-stage pipeline.
 
 ### Data Flow / Taint Tracking
 

@@ -21,7 +21,7 @@ npm test
 
 ## Project Structure
 
-Monorepo with npm workspaces. 13 packages under `packages/` plus the CLI app:
+Monorepo with npm workspaces. 15 packages under `packages/` plus 2 apps (`apps/cli` and `apps/dashboard`):
 
 | Package | Purpose |
 |---------|---------|
@@ -32,6 +32,8 @@ Monorepo with npm workspaces. 13 packages under `packages/` plus the CLI app:
 | `packages/heuristics` | Service inference, pattern detection |
 | `packages/summarization` | 4-tier description generation |
 | `packages/storage` | Graph, search, KV stores (SQLite) |
+| `packages/storage-kuzu` | Kuzu graph DB backend (optional) |
+| `packages/correlation` | Cross-repo service correlation |
 | `packages/models/config` | Feature model + constraint validation |
 | `packages/models/fault` | Fault tree construction + gap analysis |
 | `packages/models/functional` | Service catalog + NL query |
@@ -39,6 +41,7 @@ Monorepo with npm workspaces. 13 packages under `packages/` plus the CLI app:
 | `packages/query` | Query routing |
 | `packages/mcp` | MCP server for IDE integration |
 | `apps/cli` | CLI entry point |
+| `apps/dashboard` | Web dashboard (React 19) |
 
 ## Development Workflow
 

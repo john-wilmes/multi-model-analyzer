@@ -76,7 +76,8 @@ mma merge      Combine multiple anonymized export DBs
 mma validate   Statistical validation of SARIF findings quality
 mma affected   Blast radius for a rev range
 mma serve      MCP server for IDE integration (stdio)
-mma baseline   Manage baseline snapshots for incremental indexing
+mma baseline create  Snapshot findings as known-violations baseline
+mma baseline check   Check for new violations against baseline (exit 1 if found)
 mma delta      Show diff of findings between two runs
 mma catalog    Inspect the inferred service catalog
 mma dashboard  Launch the web dashboard UI
@@ -173,7 +174,7 @@ Monorepo with npm workspaces:
 | `packages/query` | Natural language query routing |
 | `packages/mcp` | MCP server for IDE integration |
 | `apps/cli` | CLI entry point |
-| `apps/dashboard` | Web dashboard (React) |
+| `apps/dashboard` | Web dashboard (React 19, Recharts, Cytoscape) |
 
 ## Prerequisites
 
@@ -193,66 +194,21 @@ Optional:
 
 ## Baseline Sharing
 
-Share an indexed baseline so colleagues (or their agents) skip full reindexing -- only changed files are reprocessed.
-
-### Setup (one-time, by the person who indexed)
+Share an indexed baseline so colleagues skip full reindexing — only changed files are reprocessed.
 
 ```bash
-# Export raw baseline (includes all internal keys needed for incremental indexing)
+# Export
 mma export --raw -o baseline.db
-```
 
-Share `baseline.db` via shared drive, S3, artifact store, etc.
-
-### Usage (by colleagues)
-
-**Option A: Config-driven (recommended)**
-
-Add `baselinePath` to your `mma.config.json`:
-
-```jsonc
-{
-  "baselinePath": "baseline.db",   // relative to config file, or absolute
-  "mirrorDir": "./data/mirrors",
-  "repos": [...]
-}
-```
-
-Then just run:
-
-```bash
+# Import (option A: config-driven)
+# Add "baselinePath": "baseline.db" to mma.config.json, then:
 mma index -c mma.config.json -v
-```
 
-On a fresh database, the baseline is auto-imported before indexing. On subsequent runs it's skipped.
-
-**Option B: CLI flag**
-
-```bash
+# Import (option B: CLI flag)
 mma index -c mma.config.json --baseline baseline.db
 ```
 
-The `--baseline` flag overrides `baselinePath` from config.
-
-**Option C: Manual import**
-
-```bash
-mma import baseline.db --db my.db
-mma index -c mma.config.json --db my.db
-```
-
-### How it works
-
-The incremental engine checks stored commit hashes (`commit:<repo>`) against current HEAD. If a repo's hash matches, it's skipped entirely. If it differs, only changed files are reprocessed. The baseline seeds these hashes plus cached symbols and pipeline state, so the first incremental run only processes the delta.
-
-### For AI agents
-
-If you're an AI coding agent working with MMA:
-
-1. Check if `baselinePath` exists in `mma.config.json` -- if so, `mma index` handles everything automatically
-2. If you have a baseline file but no config field, use `--baseline path/to/baseline.db`
-3. The import is idempotent on fresh DBs and no-op on populated DBs -- safe to always include `--baseline` if unsure
-4. Errors during baseline import are non-fatal: indexing falls back to full processing with a warning
+See [docs/baseline-sharing.md](docs/baseline-sharing.md) for details, troubleshooting, and AI agent instructions.
 
 ## Findings Reference
 
