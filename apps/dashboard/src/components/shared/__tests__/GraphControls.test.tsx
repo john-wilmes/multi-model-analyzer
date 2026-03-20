@@ -69,11 +69,10 @@ describe('GraphControls', () => {
     expect(cyMock.zoom).toHaveBeenCalledWith(1.0 / 1.2);
   });
 
-  it('calls cy.fit() and cy.zoom(1) when reset is clicked', () => {
+  it('calls cy.fit() when reset is clicked', () => {
     render(<GraphControls cyInstanceRef={cyRef as React.RefObject<any>} />);
     fireEvent.click(screen.getByTitle('Reset view'));
     expect(cyMock.fit).toHaveBeenCalledOnce();
-    expect(cyMock.zoom).toHaveBeenCalledWith(1);
   });
 
   it('does not throw when cyInstanceRef.current is null', () => {

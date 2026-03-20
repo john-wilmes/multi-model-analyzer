@@ -218,9 +218,7 @@ export default function DependencyGraph() {
       ) : (
         <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 relative" style={{ minHeight: 500 }}>
           <div ref={cyRef} style={{ width: '100%', height: 600 }} />
-          <div className="absolute bottom-4 right-4">
-            <GraphControls cyInstanceRef={cyInstanceRef} />
-          </div>
+          <GraphControls cyInstanceRef={cyInstanceRef} />
         </div>
       )}
     </div>

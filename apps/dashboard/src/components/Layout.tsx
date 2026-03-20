@@ -135,7 +135,7 @@ interface BreadcrumbSegment {
   to: string | null; // null = current (last) segment, no link
 }
 
-function useBreadcrumbs(repos: string[]): BreadcrumbSegment[] {
+function useBreadcrumbs(): BreadcrumbSegment[] {
   const location = useLocation();
   const pathname = location.pathname;
 
@@ -245,15 +245,14 @@ export default function Layout() {
     } catch {
       // ignore
     }
-    // 2. Check prefers-color-scheme
+    // 2. Check prefers-color-scheme — respect explicit light preference
     if (typeof window !== 'undefined') {
-      const mq = window.matchMedia('(prefers-color-scheme: dark)');
-      if (mq.matches) {
-        document.documentElement.classList.add('dark');
-        return true;
+      if (window.matchMedia('(prefers-color-scheme: light)').matches) {
+        document.documentElement.classList.remove('dark');
+        return false;
       }
     }
-    // 3. Default to dark mode
+    // 3. Default to dark mode when no explicit preference
     document.documentElement.classList.add('dark');
     return true;
   });
@@ -287,7 +286,7 @@ export default function Layout() {
       .catch(() => setRepos([]));
   }, []);
 
-  const breadcrumbs = useBreadcrumbs(repos);
+  const breadcrumbs = useBreadcrumbs();
   usePageTitle(breadcrumbs);
 
   function navClass(path: string, prefix = false) {
@@ -315,9 +314,19 @@ export default function Layout() {
           }`}
         >
           {collapsed ? (
-            <span className="text-blue-400" title="MMA Dashboard">
-              <IconGrid />
-            </span>
+            <div className="flex flex-col items-center gap-2">
+              <span className="text-blue-400" title="MMA Dashboard">
+                <IconGrid />
+              </span>
+              <button
+                onClick={() => setDarkMode((d) => !d)}
+                className="text-slate-400 hover:text-white transition-colors"
+                title={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+                aria-label={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+              >
+                {darkMode ? <IconSun /> : <IconMoon />}
+              </button>
+            </div>
           ) : (
             <>
               <h1 className="text-white font-semibold text-base truncate">MMA Dashboard</h1>

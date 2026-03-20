@@ -331,9 +331,7 @@ export default function BlastRadius() {
               ) : (
                 <div className="relative flex-1" style={{ minHeight: 400 }}>
                   <div ref={cyRef} style={{ width: '100%', height: '100%', minHeight: 400 }} />
-                  <div className="absolute bottom-4 right-4">
-                    <GraphControls cyInstanceRef={cyInstanceRef} />
-                  </div>
+                  <GraphControls cyInstanceRef={cyInstanceRef} />
                 </div>
               )}
               <div className="px-3 py-2 border-t dark:border-slate-700 bg-slate-50 dark:bg-slate-900 flex gap-4 text-xs text-slate-500 dark:text-slate-400">

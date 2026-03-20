@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import type { DsmData } from '../api/client.ts';
 
 function cellColor(value: number, maxVal: number, dark = false): string {
@@ -32,7 +32,14 @@ interface HoverState {
 
 export default function DsmChart({ data }: { data: DsmData }) {
   const [hover, setHover] = useState<HoverState | null>(null);
-  const dark = document.documentElement.classList.contains('dark');
+  const [dark, setDark] = useState(() => document.documentElement.classList.contains('dark'));
+  useEffect(() => {
+    const observer = new MutationObserver(() => {
+      setDark(document.documentElement.classList.contains('dark'));
+    });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+    return () => observer.disconnect();
+  }, []);
 
   const { modules, matrix } = data;
   const n = modules.length;

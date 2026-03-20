@@ -91,10 +91,7 @@ export function GraphControls({
 
   const handleReset = (): void => {
     const cy = cyInstanceRef.current;
-    if (cy) {
-      cy.fit();
-      cy.zoom(1);
-    }
+    if (cy) cy.fit();
   };
 
   return (

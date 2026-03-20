@@ -114,9 +114,9 @@ export default function FindingsTable() {
       qs.set('offset', String(page * PAGE_SIZE));
       qs.set('limit', String(PAGE_SIZE));
     } else {
-      // Fetch all for group-by-rule mode
+      // Fetch up to 500 for group-by-rule mode
       qs.set('offset', '0');
-      qs.set('limit', '9999');
+      qs.set('limit', '500');
     }
     if (repo) qs.set('repo', repo);
     if (rule) qs.set('rule', rule);
@@ -477,6 +477,11 @@ export default function FindingsTable() {
           {total > 0 && (
             <p className="text-xs text-slate-500 dark:text-slate-400 text-right">
               {total} total findings · {ruleGroups.length} rules
+            </p>
+          )}
+          {total > 500 && (
+            <p className="text-xs text-amber-600 dark:text-amber-400 text-right">
+              Showing first 500 of {total} findings. Use filters to narrow results.
             </p>
           )}
         </div>
