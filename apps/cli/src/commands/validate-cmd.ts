@@ -982,7 +982,8 @@ export async function checkSanityDrain(
   for (const key of templateKeys) {
     const raw = await kvStore.get(key);
     if (!raw) continue;
-    const templates = JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    const templates = Array.isArray(parsed) ? parsed : (parsed?.templates ?? []);
     if (!Array.isArray(templates)) continue;
     for (const t of templates) {
       const tmpl = typeof t === "object" && t !== null ? (t as Record<string, unknown>)["template"] : undefined;

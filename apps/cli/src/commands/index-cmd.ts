@@ -1509,8 +1509,10 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
   // Stamp fingerprints on all results that lack them (SARIF spec compliance).
   // Runs after computeBaseline so "absent" results also get fingerprints.
   for (const r of finalResults) {
-    if (!r.fingerprints || Object.keys(r.fingerprints).length === 0) {
+    if (!r.fingerprints) {
       (r as { fingerprints?: Record<string, string> }).fingerprints = { "mma/v1": fingerprint(r) };
+    } else if (!r.fingerprints["mma/v1"]) {
+      r.fingerprints["mma/v1"] = fingerprint(r);
     }
   }
 
