@@ -96,12 +96,12 @@ beforeEach(() => {
 
 describe('Overview', () => {
   it('renders loading state initially', () => {
-    render(
+    const { container } = render(
       <MemoryRouter>
         <Overview />
       </MemoryRouter>,
     );
-    expect(screen.getByText('Loading...')).toBeInTheDocument();
+    expect(container.querySelector('.animate-pulse')).toBeInTheDocument();
   });
 
   it('renders repo cards after data loads', async () => {
