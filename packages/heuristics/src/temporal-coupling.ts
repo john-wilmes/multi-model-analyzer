@@ -34,7 +34,7 @@ export const DEFAULT_EXCLUDE_PATTERNS: readonly RegExp[] = [
   /\.spec\.[^/]+$/,    // *.spec.*
   /(?:^|\/)package\.json$/,   // package.json (any directory)
   /(?:^|\/)tsconfig[^/]*$/,   // tsconfig.json, tsconfig.*.json
-  /\.config\.[^/]+$/,  // *.config.*
+  /(?:^|\/)(?:webpack|rollup|vite|jest|vitest|eslint|prettier|babel|tailwind|postcss)\.config\.[^/]+$/,  // build tool configs only
 ];
 
 export interface TemporalCouplingOptions {

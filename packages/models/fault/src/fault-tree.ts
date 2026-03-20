@@ -43,7 +43,7 @@ export const FAULT_RULES: readonly SarifReportingDescriptor[] = [
     shortDescription: {
       text: "Async operation with no error handler",
     },
-    defaultConfiguration: { level: "warning", enabled: true },
+    defaultConfiguration: { level: "warning", enabled: false }, // detection not yet implemented
   },
   {
     id: "fault/cascading-failure-risk",

@@ -144,7 +144,7 @@ function findFunctions(rootNode: TsNode): FunctionInfo[] {
 
     // When entering a class_declaration/class, propagate class name to children
     const nextClass =
-      node.type === "class_declaration" || node.type === "class"
+      node.type === "class_declaration" || node.type === "abstract_class_declaration" || node.type === "class"
         ? (node.namedChildren.find((c) => c.type === "type_identifier" || c.type === "identifier")?.text ?? className)
         : className;
 
@@ -160,7 +160,7 @@ function findFunctions(rootNode: TsNode): FunctionInfo[] {
 function findEnclosingClassName(node: TsNode): string | undefined {
   let current = node.parent;
   while (current) {
-    if (current.type === "class_declaration" || current.type === "class") {
+    if (current.type === "class_declaration" || current.type === "abstract_class_declaration" || current.type === "class") {
       const nameNode = current.namedChildren.find(
         (c) => c.type === "type_identifier" || c.type === "identifier",
       );
@@ -204,7 +204,9 @@ function collectCallEdges(
         node.type === "function_expression" ||
         node.type === "arrow_function" ||
         node.type === "method_definition" ||
-        node.type === "class_declaration")
+        node.type === "class_declaration" ||
+        node.type === "abstract_class_declaration" ||
+        node.type === "class")
     ) {
       return;
     }
@@ -240,8 +242,13 @@ function resolveCallTarget(
       return makeSymbolId(repo, filePath, `${enclosingClassName}.${property.text}`);
     }
 
-    // obj.method() -> "obj.method"
-    return `${object.text}.${property.text}`;
+    // obj.method() -> "obj.method" (only for simple identifiers)
+    // Skip complex expressions (new_expression, call chains, etc.) to avoid
+    // garbage targets like "new Foo().bar"
+    if (object.type === "identifier") {
+      return `${object.text}.${property.text}`;
+    }
+    return null;
   }
 
   // Skip other patterns (new_expression is not a call_expression,

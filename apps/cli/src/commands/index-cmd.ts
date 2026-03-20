@@ -951,14 +951,27 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         // 5i: Vulnerability reachability
         if (options.advisories && options.advisories.length > 0) {
           const installed: InstalledPackage[] = [];
+          const skippedProtocols: string[] = [];
           for (const [, pj] of packageJsons) {
             for (const [name, version] of Object.entries(pj.dependencies ?? {})) {
+              // Skip non-semver version protocols (workspace:*, link:, file:, etc.)
+              if (/^(?:workspace|link|file|portal|patch):/.test(version)) {
+                skippedProtocols.push(`${name}@${version}`);
+                continue;
+              }
               const clean = version.replace(/^[~^>=<v ]+/, "");
               if (clean && clean !== "*") installed.push({ name, version: clean });
             }
           }
+          if (skippedProtocols.length > 0) {
+            log(`    [vuln] skipped ${skippedProtocols.length} non-semver deps (${skippedProtocols.slice(0, 3).join(", ")}${skippedProtocols.length > 3 ? "..." : ""})`);
+          }
           if (installed.length === 0) {
-            log(`    [vuln] no package.json in changeset, skipping (use --force-full-reindex to re-scan)`);
+            if (packageJsons.size === 0) {
+              log(`    [vuln] no package.json in changeset, skipping (use --force-full-reindex to re-scan)`);
+            } else {
+              log(`    [vuln] no semver-compatible dependencies found after protocol filtering, skipping`);
+            }
           } else {
             const vulnMatches = matchAdvisories(installed, options.advisories);
             const reachability = checkTransitiveVulnReachability(vulnMatches, depGraph?.edges ?? []);

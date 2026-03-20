@@ -11,6 +11,7 @@
  */
 
 import type { GraphEdge, ParsedFile, ModuleMetrics, RepoMetricsSummary, MetricZone, SarifResult } from "@mma/core";
+import { makeFileId } from "@mma/core";
 
 export function computeModuleMetrics(
   edges: readonly GraphEdge[],
@@ -55,7 +56,8 @@ export function computeModuleMetrics(
   const abstractCountByFile = new Map<string, number>();
   const totalCountByFile = new Map<string, number>();
   for (const pf of parsedFiles) {
-    modules.add(pf.path);
+    const fileId = makeFileId(repo, pf.path);
+    modules.add(fileId);
     let total = 0;
     let count = 0;
     for (const s of pf.symbols) {
@@ -63,8 +65,8 @@ export function computeModuleMetrics(
       total++;
       if (s.kind === "interface" || s.kind === "type" || s.isAbstract) count++; // W7
     }
-    totalCountByFile.set(pf.path, total);
-    abstractCountByFile.set(pf.path, count);
+    totalCountByFile.set(fileId, total);
+    abstractCountByFile.set(fileId, count);
   }
 
   const results: ModuleMetrics[] = [];
@@ -144,6 +146,10 @@ export function detectInstabilityViolations(
     const tgt = metricsByModule.get(edge.target);
     if (!src || !tgt) continue;
 
+    // Skip barrel files (index.ts/js) — they are naturally unstable
+    // (high Ce from re-exports) but that instability is by design, not a defect.
+    if (isBarrelFile(edge.target)) continue;
+
     const delta = tgt.instability - src.instability;
     if (delta > threshold) {
       let list = violationsBySource.get(edge.source);
@@ -181,7 +187,7 @@ export function detectInstabilityViolations(
     // Gate pain-zone notes on ca > 0: orphan files (ca=0, ce=0) satisfy
     // instability < 0.3 && abstractness < 0.3 but have no dependents, so
     // flagging them as "hard to change" is misleading — nobody depends on them.
-    if (m.zone === "pain" && m.ca > 0) {
+    if (m.zone === "pain" && m.ca > 0 && !isBarrelFile(m.module)) {
       results.push({
         ruleId: "structural/pain-zone-module",
         level: "note",
@@ -252,4 +258,9 @@ export function summarizeRepoMetrics(
     painZoneCount: modules.filter((m) => m.zone === "pain").length,
     uselessnessZoneCount: modules.filter((m) => m.zone === "uselessness").length,
   };
+}
+
+const BARREL_RE = /(?:^|[/\\])index\.[jt]sx?$/;
+function isBarrelFile(moduleId: string): boolean {
+  return BARREL_RE.test(moduleId);
 }
