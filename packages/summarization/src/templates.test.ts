@@ -95,7 +95,7 @@ describe("summarizeFromTemplate", () => {
 });
 
 describe("tier1Summarize", () => {
-  it("summarizes functions, methods, and classes", () => {
+  it("summarizes functions, methods, classes, and interfaces", () => {
     const symbols: SymbolInfo[] = [
       sym("getUser", "function"),
       sym("User", "class", 5, 20),
@@ -121,6 +121,10 @@ describe("tier1Summarize", () => {
     // function + class + method + interface = 4 (skips variable)
     expect(summaries).toHaveLength(4);
     expect(summaries.every((s) => s.tier === 1)).toBe(true);
+    expect(summaries.find((s) => s.entityId === "src/user.ts#getUser")).toBeDefined();
+    expect(summaries.find((s) => s.entityId === "src/user.ts#User")).toBeDefined();
+    expect(summaries.find((s) => s.entityId === "src/user.ts#User.save")).toBeDefined();
+    expect(summaries.find((s) => s.entityId === "src/user.ts#IUser")).toBeDefined();
   });
 
   it("returns empty for files with no functions/classes", () => {

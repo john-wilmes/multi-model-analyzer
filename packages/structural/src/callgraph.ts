@@ -233,7 +233,7 @@ function resolveMemberChain(node: TsNode, maxDepth: number): string | null {
   const property = node.childForFieldName("property");
   if (!object || !property) return null;
 
-  if (object.type === "identifier") {
+  if (object.type === "identifier" || object.type === "this" || object.type === "super") {
     return `${object.text}.${property.text}`;
   }
   if (object.type === "member_expression") {

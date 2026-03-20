@@ -47,7 +47,7 @@ export function extractLogStatements(
   // console.warn("timeout")) are never merged into the same cluster.
   const SEVERITY_SEP = "\x00";
   const clusters = drainParse(
-    rawLogs.map((l) => `${l.severity}${SEVERITY_SEP}${l.text}`),
+    rawLogs.map((l) => `${l.severity}${SEVERITY_SEP} ${l.text}`),
     DEFAULT_DRAIN_OPTIONS,
   );
 

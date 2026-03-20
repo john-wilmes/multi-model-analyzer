@@ -51,12 +51,13 @@ export function extractDependencyGraph(
   const seenEdges = new Set<string>();
   for (const [filePath, tree] of files) {
     const imports = extractImports(tree.rootNode);
+    // Hoist makeFileId out of the inner loop — computed once per file.
+    const source = makeFileId(repo, filePath);
     for (const imp of imports) {
       if (opts.ignorePatterns.some((p) => imp.includes(p))) continue;
       const resolved = resolveImportSpecifier(imp, filePath, knownPaths, localRoots);
       // Use canonical ID for local files so source and target share the same
       // namespace (enabling cycle detection). External specifiers stay as-is.
-      const source = makeFileId(repo, filePath);
       const target = knownPaths.has(resolved) ? makeFileId(repo, resolved) : resolved;
       const edgeKey = `${source}\0${target}`;
       if (seenEdges.has(edgeKey)) continue;

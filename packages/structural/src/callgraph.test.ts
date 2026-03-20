@@ -123,6 +123,27 @@ function run() {
     expect(edges[0]!.target).toBe("console.log");
   });
 
+  it("resolves this.client.fetch() chain via resolveMemberChain", () => {
+    const source = `
+class ApiService {
+  fetch() {
+    this.client.fetch("/api/data");
+  }
+}
+`;
+    const tree = parseSource(source, "test.ts");
+    const edges = extractCallEdgesFromTreeSitter(
+      tree.rootNode as unknown as TsNode,
+      "test.ts",
+      "test-repo",
+    );
+
+    expect(edges).toHaveLength(1);
+    // this.client.fetch() should resolve to "this.client.fetch" via resolveMemberChain
+    expect(edges[0]!.target).toBe("this.client.fetch");
+    expect(edges[0]!.source).toBe("test-repo:test.ts#ApiService.fetch");
+  });
+
   it("does not attribute nested function calls to the outer function", () => {
     const source = `
 function outer() {

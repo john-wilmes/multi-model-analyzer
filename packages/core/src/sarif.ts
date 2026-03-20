@@ -182,19 +182,23 @@ export function createSarifResult(
     properties?: Record<string, unknown>;
   },
 ): SarifResult {
-  // Compute a fingerprint from ruleId + first logical location FQN (if any).
+  // Compute a fingerprint from ruleId + first logical location FQN (if any),
+  // falling back to the physical location URI when the FQN is absent.
   // Mirrors the fingerprint() logic in @mma/diagnostics/baseline.ts but uses
   // only the first location to keep the value stable across minor location changes.
+  const firstLocation = options?.locations?.[0];
   const firstFqn =
-    options?.locations?.[0]?.logicalLocations?.[0]?.fullyQualifiedName ?? "";
+    firstLocation?.logicalLocations?.[0]?.fullyQualifiedName ??
+    firstLocation?.physicalLocation?.artifactLocation?.uri ??
+    "";
   const fingerprintValue = djb2Hash(`${ruleId}::${firstFqn}`);
 
   return {
     ruleId,
     level,
     message: { text: messageText },
-    fingerprints: { "primaryLocationLineHash/v1": fingerprintValue },
     ...options,
+    fingerprints: { "primaryLocationLineHash/v1": fingerprintValue },
   };
 }
 
