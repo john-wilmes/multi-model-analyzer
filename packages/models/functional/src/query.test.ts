@@ -14,6 +14,7 @@ function makeCatalogEntry(overrides: Partial<ServiceCatalogEntry> & { name: stri
     apiSurface: [],
     errorHandlingSummary: "No error logging detected",
     ...overrides,
+    rootPath: overrides.rootPath ?? overrides.name,
   };
 }
 

@@ -13,6 +13,7 @@ function makeCatalogEntry(overrides: Partial<ServiceCatalogEntry> & { name: stri
     apiSurface: [],
     errorHandlingSummary: "Returns 500 on error",
     ...overrides,
+    rootPath: overrides.rootPath ?? overrides.name,
   };
 }
 

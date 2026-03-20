@@ -103,7 +103,14 @@ export function extractCallEdgesFromTreeSitter(
     collectCallEdges(fn.node, fn.name, filePath, repo, fn.className, edges);
   }
 
-  return edges;
+  // Deduplicate edges (same source->target pair)
+  const seen = new Set<string>();
+  return edges.filter(e => {
+    const key = `${e.source}\0${e.target}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function findFunctions(rootNode: TsNode): FunctionInfo[] {
@@ -219,6 +226,23 @@ function collectCallEdges(
   walk(functionNode);
 }
 
+/** Recursively resolve a member_expression chain to "a.b.c" form, up to maxDepth. */
+function resolveMemberChain(node: TsNode, maxDepth: number): string | null {
+  if (maxDepth <= 0) return null;
+  const object = node.childForFieldName("object");
+  const property = node.childForFieldName("property");
+  if (!object || !property) return null;
+
+  if (object.type === "identifier") {
+    return `${object.text}.${property.text}`;
+  }
+  if (object.type === "member_expression") {
+    const prefix = resolveMemberChain(object, maxDepth - 1);
+    if (prefix) return `${prefix}.${property.text}`;
+  }
+  return null;
+}
+
 function resolveCallTarget(
   callNode: TsNode,
   filePath: string,
@@ -233,21 +257,28 @@ function resolveCallTarget(
   }
 
   if (fnChild.type === "member_expression") {
-    const object = fnChild.childForFieldName("object");
     const property = fnChild.childForFieldName("property");
-    if (!object || !property) return null;
+    if (!property) return null;
+
+    const object = fnChild.childForFieldName("object");
+    if (!object) return null;
 
     // this.method() -> resolve to ClassName.method
     if (object.type === "this" && enclosingClassName) {
       return makeSymbolId(repo, filePath, `${enclosingClassName}.${property.text}`);
     }
 
-    // obj.method() -> "obj.method" (only for simple identifiers)
-    // Skip complex expressions (new_expression, call chains, etc.) to avoid
-    // garbage targets like "new Foo().bar"
+    // Simple: obj.method()
     if (object.type === "identifier") {
       return `${object.text}.${property.text}`;
     }
+
+    // Chained: a.b.method() -> "a.b.method" (resolve recursively, max 3 levels)
+    if (object.type === "member_expression") {
+      const prefix = resolveMemberChain(object, 3);
+      if (prefix) return `${prefix}.${property.text}`;
+    }
+
     return null;
   }
 

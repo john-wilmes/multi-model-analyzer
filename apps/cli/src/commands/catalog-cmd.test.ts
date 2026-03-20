@@ -28,6 +28,7 @@ const mockWriteFile = vi.mocked(writeFile);
 function makeEntry(overrides: Partial<ServiceCatalogEntry> = {}): ServiceCatalogEntry {
   return {
     name: "auth-service",
+    rootPath: "services/auth-service",
     purpose: "Handles authentication and authorization",
     dependencies: [],
     apiSurface: [],

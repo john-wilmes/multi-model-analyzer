@@ -276,6 +276,7 @@ export type ConstraintKind =
 
 export interface ServiceCatalogEntry {
   readonly name: string;
+  readonly rootPath: string;
   readonly purpose: string;
   readonly dependencies: readonly string[];
   readonly apiSurface: readonly ApiEndpoint[];
@@ -311,6 +312,9 @@ export interface RepoMetricsSummary {
   readonly avgDistance: number;
   readonly painZoneCount: number;
   readonly uselessnessZoneCount: number;
+  readonly internalPainZoneCount?: number;
+  readonly internalUselessnessZoneCount?: number;
+  readonly internalModuleCount?: number;
 }
 
 // -- Architectural Rules --

@@ -255,6 +255,7 @@ describe("enrichCommand", () => {
     const catalog: ServiceCatalogEntry[] = [
       {
         name: "SvcA",
+        rootPath: "src/svc-a",
         purpose: "Provides SvcA functionality",
         dependencies: ["dep-x"],
         apiSurface: [{ method: "GET", path: "/api/svc-a", description: "Get SvcA" }],

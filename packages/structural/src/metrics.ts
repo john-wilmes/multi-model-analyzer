@@ -187,7 +187,7 @@ export function detectInstabilityViolations(
     // Gate pain-zone notes on ca > 0: orphan files (ca=0, ce=0) satisfy
     // instability < 0.3 && abstractness < 0.3 but have no dependents, so
     // flagging them as "hard to change" is misleading — nobody depends on them.
-    if (m.zone === "pain" && m.ca > 0 && !isBarrelFile(m.module)) {
+    if (m.zone === "pain" && m.ca > 0 && !isBarrelFile(m.module) && m.module.includes(":")) {
       results.push({
         ruleId: "structural/pain-zone-module",
         level: "note",
@@ -242,12 +242,18 @@ export function summarizeRepoMetrics(
       avgDistance: 0,
       painZoneCount: 0,
       uselessnessZoneCount: 0,
+      internalPainZoneCount: 0,
+      internalUselessnessZoneCount: 0,
+      internalModuleCount: 0,
     };
   }
 
   const sumI = modules.reduce((s, m) => s + m.instability, 0);
   const sumA = modules.reduce((s, m) => s + m.abstractness, 0);
   const sumD = modules.reduce((s, m) => s + m.distance, 0);
+
+  // Internal modules have repo:path format (makeFileId); external are bare package names
+  const isInternal = (m: ModuleMetrics) => m.module.includes(":");
 
   return {
     repo,
@@ -257,6 +263,9 @@ export function summarizeRepoMetrics(
     avgDistance: sumD / modules.length,
     painZoneCount: modules.filter((m) => m.zone === "pain").length,
     uselessnessZoneCount: modules.filter((m) => m.zone === "uselessness").length,
+    internalPainZoneCount: modules.filter((m) => m.zone === "pain" && isInternal(m)).length,
+    internalUselessnessZoneCount: modules.filter((m) => m.zone === "uselessness" && isInternal(m)).length,
+    internalModuleCount: modules.filter(isInternal).length,
   };
 }
 

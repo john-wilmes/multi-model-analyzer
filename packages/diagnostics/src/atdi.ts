@@ -35,14 +35,17 @@ export interface SystemAtdi {
 /**
  * Compute an ATDI score for a single repo.
  *
- * @param repo                 Repository name.
- * @param moduleCount          Number of modules analysed.
- * @param painZoneCount        Modules in the Zone of Pain (high I, high A).
- * @param uselessnessZoneCount Modules in the Zone of Uselessness (low I, low A).
- * @param avgDistance          Average distance from the Main Sequence (0-1).
- * @param errorCount           SARIF results at level "error".
- * @param warningCount         SARIF results at level "warning".
- * @param noteCount            SARIF results at level "note".
+ * @param repo                      Repository name.
+ * @param moduleCount               Number of modules analysed.
+ * @param painZoneCount             Modules in the Zone of Pain (high I, high A).
+ * @param uselessnessZoneCount      Modules in the Zone of Uselessness (low I, low A).
+ * @param avgDistance               Average distance from the Main Sequence (0-1).
+ * @param errorCount                SARIF results at level "error".
+ * @param warningCount              SARIF results at level "warning".
+ * @param noteCount                 SARIF results at level "note".
+ * @param internalModuleCount       Internal-only module count (excludes npm packages).
+ * @param internalPainZoneCount     Internal modules in pain zone.
+ * @param internalUselessnessZoneCount Internal modules in uselessness zone.
  */
 export function computeRepoAtdi(
   repo: string,
@@ -53,6 +56,9 @@ export function computeRepoAtdi(
   errorCount: number,
   warningCount: number,
   noteCount: number,
+  internalModuleCount?: number,
+  internalPainZoneCount?: number,
+  internalUselessnessZoneCount?: number,
 ): AtdiScore {
   const safeModuleCount = Math.max(moduleCount, 1);
 
@@ -62,7 +68,12 @@ export function computeRepoAtdi(
   const findingsDensity = Math.min(1, findingsPerModule / 10);
 
   // Component 2: zone ratio (weight 0.3)
-  const zoneRatio = (painZoneCount + uselessnessZoneCount) / safeModuleCount;
+  // When internal-only counts are available, use them to avoid penalizing
+  // repos for stable external dependencies (npm packages) in the pain zone
+  const effectivePain = internalPainZoneCount ?? painZoneCount;
+  const effectiveUselessness = internalUselessnessZoneCount ?? uselessnessZoneCount;
+  const effectiveModuleCount = Math.max(internalModuleCount ?? moduleCount, 1);
+  const zoneRatio = (effectivePain + effectiveUselessness) / effectiveModuleCount;
 
   // Component 3: average main-sequence distance (weight 0.2)
   // avgDistance is already 0-1; clamp defensively

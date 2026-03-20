@@ -71,12 +71,26 @@ export function detectBreakingChangeRisk(
  * Detect services that have producers but no cross-repo consumers, or
  * consumers but no cross-repo producers.
  */
+/**
+ * Returns true for endpoints that cannot be meaningfully resolved statically:
+ * template literals, localhost dev URLs, or synthetic placeholders.
+ */
+function isTemplateOrDevEndpoint(endpoint: string): boolean {
+  if (endpoint.includes("${")) return true;
+  if (endpoint.startsWith("http://localhost")) return true;
+  if (endpoint === "external-api") return true;
+  return false;
+}
+
 export function detectOrphanedServices(
   services: ServiceCorrelationResult,
 ): SarifResult[] {
   const results: SarifResult[] = [];
 
   for (const orphan of services.orphanedServices) {
+    // Skip template URLs, localhost dev endpoints, and synthetic placeholders —
+    // these cannot be resolved statically and produce noise.
+    if (isTemplateOrDevEndpoint(orphan.endpoint)) continue;
     const repo = orphan.repos[0] ?? "unknown";
 
     let message: string;

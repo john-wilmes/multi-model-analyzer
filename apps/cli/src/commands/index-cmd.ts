@@ -53,7 +53,7 @@ import {
   vulnReachabilityToSarifWithCodeFlows,
 } from "@mma/heuristics";
 import type { PackageJsonInfo, CommitInfo, Advisory, InstalledPackage } from "@mma/heuristics";
-import { computeBaseline, hotspotFindings, computeRepoAtdi, computeSystemAtdi, annotateDebt, summarizeDebt } from "@mma/diagnostics";
+import { computeBaseline, fingerprint, hotspotFindings, computeRepoAtdi, computeSystemAtdi, annotateDebt, summarizeDebt } from "@mma/diagnostics";
 import { computePageRank, pageRankToSarif, computeReachCounts } from "@mma/query";
 import { runCorrelation, runCrossRepoModels } from "@mma/correlation";
 import type { KVStore, GraphStore, SearchStore } from "@mma/storage";
@@ -374,34 +374,81 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
   // Build cross-repo packageRoots map before Phase 3 so it's available for
   // dependency extraction (Phase 4). Only reads classified package.json files.
   const packageRoots = new Map<string, string>();
-  for (const repo of repos) {
-    const classified = classifiedByRepo.get(repo.name);
-    if (!classified) continue;
-    const packageJsonFiles = classified.filter(
-      (f) => f.kind === "json" && f.path.endsWith("package.json"),
-    );
-    const isBare = await checkBareRepo(repo.localPath);
-    for (const pjFile of packageJsonFiles) {
+  const hasClassifiedFiles = [...classifiedByRepo.values()].some(c => c.length > 0);
+  if (!hasClassifiedFiles) {
+    // Incremental run with 0 changes — restore cached packageRoots from previous run
+    const cached = await kvStore.get("_packageRoots");
+    if (cached) {
       try {
-        const raw = isBare
-          ? await getFileContent(repo.localPath, await resolveCommitForBare(repo.localPath, changeSets, repo.name), pjFile.path)
-          : await readFile(join(repo.localPath, pjFile.path), "utf-8");
-        const parsed = JSON.parse(raw) as Record<string, unknown>;
-        const name = parsed.name as string | undefined;
-        if (name) {
-          const absDir = join(repo.localPath, dirname(pjFile.path));
-          if (packageRoots.has(name)) {
-            log(`    warning: duplicate package name "${name}" (overwriting ${packageRoots.get(name)} with ${absDir})`);
-          }
-          packageRoots.set(name, absDir);
+        const entries = JSON.parse(cached) as [string, string][];
+        for (const [name, dir] of entries) {
+          packageRoots.set(name, dir);
         }
-      } catch {
-        // Skip unreadable package.json files
+        log(`  Restored packageRoots from cache: ${packageRoots.size} packages`);
+      } catch { /* ignore malformed cache entry */ }
+    }
+    // If cache was empty (e.g., first run after upgrade), scan repos via git
+    if (packageRoots.size === 0) {
+      for (const repo of repos) {
+        try {
+          const isBare = await checkBareRepo(repo.localPath);
+          const commit = await resolveCommitForBare(repo.localPath, changeSets, repo.name);
+          const { execSync } = await import("node:child_process");
+          const lsOutput = execSync(
+            `git ls-tree -r --name-only ${commit}`,
+            { cwd: repo.localPath, encoding: "utf-8", timeout: 10000 },
+          );
+          const pjPaths = lsOutput.split("\n").filter(p => p.endsWith("/package.json") || p === "package.json");
+          for (const pjPath of pjPaths) {
+            try {
+              const raw = isBare
+                ? await getFileContent(repo.localPath, commit, pjPath)
+                : await readFile(join(repo.localPath, pjPath), "utf-8");
+              const parsed = JSON.parse(raw) as Record<string, unknown>;
+              const name = parsed.name as string | undefined;
+              if (name) {
+                packageRoots.set(name, join(repo.localPath, dirname(pjPath)));
+              }
+            } catch { /* skip unreadable */ }
+          }
+        } catch { /* skip repos that fail git ls-tree */ }
+      }
+      if (packageRoots.size > 0) {
+        await kvStore.set("_packageRoots", JSON.stringify([...packageRoots.entries()]));
+        log(`  Built packageRoots from git scan: ${packageRoots.size} packages`);
       }
     }
-  }
-  if (packageRoots.size > 0) {
-    log(`  Built packageRoots map: ${packageRoots.size} packages across all repos`);
+  } else {
+    for (const repo of repos) {
+      const classified = classifiedByRepo.get(repo.name);
+      if (!classified) continue;
+      const packageJsonFiles = classified.filter(
+        (f) => f.kind === "json" && f.path.endsWith("package.json"),
+      );
+      const isBare = await checkBareRepo(repo.localPath);
+      for (const pjFile of packageJsonFiles) {
+        try {
+          const raw = isBare
+            ? await getFileContent(repo.localPath, await resolveCommitForBare(repo.localPath, changeSets, repo.name), pjFile.path)
+            : await readFile(join(repo.localPath, pjFile.path), "utf-8");
+          const parsed = JSON.parse(raw) as Record<string, unknown>;
+          const name = parsed.name as string | undefined;
+          if (name) {
+            const absDir = join(repo.localPath, dirname(pjFile.path));
+            if (packageRoots.has(name)) {
+              log(`    warning: duplicate package name "${name}" (overwriting ${packageRoots.get(name)} with ${absDir})`);
+            }
+            packageRoots.set(name, absDir);
+          }
+        } catch {
+          // Skip unreadable package.json files
+        }
+      }
+    }
+    if (packageRoots.size > 0) {
+      await kvStore.set("_packageRoots", JSON.stringify([...packageRoots.entries()]));
+      log(`  Built packageRoots map: ${packageRoots.size} packages across all repos`);
+    }
   }
   tracer.record("packageRoots", packageRoots.size);
   tracer.endPhase();
@@ -1250,7 +1297,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
           const services6b = servicesByRepo.get(repo.name);
           if (services6b && services6b.length > 0) {
             const inputs: ServiceSummaryInput[] = services6b.map((svc) => ({
-              entityId: `service:${repo.name}/${svc.name}`,
+              entityId: `service:${repo.name}/${svc.rootPath}`,
               serviceName: svc.name,
               methodSummaries: [...summaryMap!.values()]
                 .filter((s) => s.entityId.startsWith(svc.rootPath))
@@ -1422,6 +1469,24 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       }
     }
   }
+  // Deduplicate findings with identical fingerprints
+  {
+    const seen = new Set<string>();
+    const deduped: typeof allSarifResults = [];
+    for (const r of allSarifResults) {
+      const fp = fingerprint(r);
+      if (!seen.has(fp)) {
+        seen.add(fp);
+        deduped.push(r);
+      }
+    }
+    if (deduped.length < allSarifResults.length) {
+      log(`  Deduplicated: removed ${allSarifResults.length - deduped.length} duplicate findings`);
+    }
+    allSarifResults.length = 0;
+    allSarifResults.push(...deduped);
+  }
+
   // Compare against previous baseline for incremental adoption
   // (must run even when allSarifResults is empty to track "absent" results)
   let finalResults: import("@mma/core").SarifResult[] = allSarifResults;
@@ -1524,6 +1589,9 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       let painZoneCount = 0;
       let uselessnessZoneCount = 0;
       let avgDistance = 0;
+      let internalModuleCount: number | undefined;
+      let internalPainZoneCount: number | undefined;
+      let internalUselessnessZoneCount: number | undefined;
       if (summaryJson) {
         try {
           const s = JSON.parse(summaryJson) as RepoMetricsSummary;
@@ -1531,6 +1599,9 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
           painZoneCount = s.painZoneCount;
           uselessnessZoneCount = s.uselessnessZoneCount;
           avgDistance = s.avgDistance;
+          internalModuleCount = s.internalModuleCount;
+          internalPainZoneCount = s.internalPainZoneCount;
+          internalUselessnessZoneCount = s.internalUselessnessZoneCount;
         } catch { /* ignore malformed */ }
       }
 
@@ -1553,6 +1624,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       const atdi = computeRepoAtdi(
         repo.name, moduleCount, painZoneCount, uselessnessZoneCount,
         avgDistance, errorCount, warningCount, noteCount,
+        internalModuleCount, internalPainZoneCount, internalUselessnessZoneCount,
       );
       repoAtdiScores.push(atdi);
       await kvStore.set(`atdi:${repo.name}`, JSON.stringify(atdi));
