@@ -800,6 +800,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
               main: parsed.main as string | undefined,
               bin: (parsed.bin as Record<string, string>) ?? undefined,
               dependencies: (parsed.dependencies as Record<string, string>) ?? {},
+              devDependencies: (parsed.devDependencies as Record<string, string>) ?? undefined,
               scripts: (parsed.scripts as Record<string, string>) ?? {},
             });
           } catch {
@@ -953,7 +954,8 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
           const installed: InstalledPackage[] = [];
           const skippedProtocols: string[] = [];
           for (const [, pj] of packageJsons) {
-            for (const [name, version] of Object.entries(pj.dependencies ?? {})) {
+            const allDeps = { ...pj.dependencies, ...pj.devDependencies };
+            for (const [name, version] of Object.entries(allDeps)) {
               // Skip non-semver version protocols (workspace:*, link:, file:, etc.)
               if (/^(?:workspace|link|file|portal|patch):/.test(version)) {
                 skippedProtocols.push(`${name}@${version}`);

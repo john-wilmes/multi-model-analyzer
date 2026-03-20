@@ -63,10 +63,11 @@ export async function auditCommand(options: AuditOptions): Promise<AuditResult> 
       continue;
     }
 
-    // Build match entries: advisories paired with placeholder packages
-    // (npm audit already verified version ranges — we just need reachability)
+    // Build match entries: advisories paired with installed package versions.
+    // npm audit already verified version ranges — use installedVersion when available,
+    // falling back to the vulnerable range start as a display value.
     const matches = advisories.map((a) => ({
-      pkg: { name: a.package, version: "0.0.0" },
+      pkg: { name: a.package, version: a.installedVersion ?? a.vulnerableRange },
       advisory: a,
     }));
 

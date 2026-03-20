@@ -11,6 +11,8 @@ export interface Advisory {
   readonly package: string;
   readonly vulnerableRange: string;
   readonly severity: "low" | "moderate" | "high" | "critical";
+  /** Installed version of the package, if known (from npm audit output). */
+  readonly installedVersion?: string;
 }
 
 export interface InstalledPackage {
@@ -70,11 +72,13 @@ export function parseNpmAudit(jsonString: string): Advisory[] {
         const firstAdvisory = Array.isArray(via)
           ? via.find((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
           : undefined;
+        const installedVersion = (v.installedVersion as string | undefined) ?? undefined;
         return {
           id: String((firstAdvisory?.source as string | undefined) ?? (firstAdvisory?.url as string | undefined) ?? `npm-audit-${name}`),
           package: name,
           vulnerableRange: String((v.range as string | undefined) ?? "*"),
           severity: mapSeverity(String((v.severity as string | undefined) ?? "low")),
+          ...(installedVersion !== undefined && { installedVersion }),
         };
       });
   }

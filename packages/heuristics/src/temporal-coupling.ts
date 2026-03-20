@@ -33,7 +33,7 @@ export const DEFAULT_EXCLUDE_PATTERNS: readonly RegExp[] = [
   /\.test\.[^/]+$/,    // *.test.*
   /\.spec\.[^/]+$/,    // *.spec.*
   /(?:^|\/)package\.json$/,   // package.json (any directory)
-  /(?:^|\/)tsconfig[^/]*$/,   // tsconfig.json, tsconfig.*.json
+  /(?:^|\/)tsconfig[^/]*\.json$/,   // tsconfig.json, tsconfig.*.json
   /(?:^|\/)(?:webpack|rollup|vite|jest|vitest|eslint|prettier|babel|tailwind|postcss)\.config\.[^/]+$/,  // build tool configs only
 ];
 
