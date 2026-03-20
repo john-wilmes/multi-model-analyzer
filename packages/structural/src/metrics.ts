@@ -11,6 +11,7 @@
  */
 
 import type { GraphEdge, ParsedFile, ModuleMetrics, RepoMetricsSummary, MetricZone, SarifResult } from "@mma/core";
+import { makeFileId } from "@mma/core";
 
 export function computeModuleMetrics(
   edges: readonly GraphEdge[],
@@ -55,7 +56,8 @@ export function computeModuleMetrics(
   const abstractCountByFile = new Map<string, number>();
   const totalCountByFile = new Map<string, number>();
   for (const pf of parsedFiles) {
-    modules.add(pf.path);
+    const fileId = makeFileId(repo, pf.path);
+    modules.add(fileId);
     let total = 0;
     let count = 0;
     for (const s of pf.symbols) {
@@ -63,8 +65,8 @@ export function computeModuleMetrics(
       total++;
       if (s.kind === "interface" || s.kind === "type" || s.isAbstract) count++; // W7
     }
-    totalCountByFile.set(pf.path, total);
-    abstractCountByFile.set(pf.path, count);
+    totalCountByFile.set(fileId, total);
+    abstractCountByFile.set(fileId, count);
   }
 
   const results: ModuleMetrics[] = [];

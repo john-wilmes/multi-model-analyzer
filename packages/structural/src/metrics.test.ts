@@ -3,7 +3,7 @@ import { computeModuleMetrics, summarizeRepoMetrics, detectInstabilityViolations
 import type { GraphEdge, ParsedFile, SymbolInfo, ModuleMetrics } from "@mma/core";
 
 function edge(source: string, target: string): GraphEdge {
-  return { source, target, kind: "imports", metadata: { repo: "test" } };
+  return { source: `test:${source}`, target: `test:${target}`, kind: "imports", metadata: { repo: "test" } };
 }
 
 function sym(name: string, kind: SymbolInfo["kind"]): SymbolInfo {
@@ -20,17 +20,17 @@ describe("computeModuleMetrics", () => {
     const files = [pf("a.ts", []), pf("b.ts", []), pf("c.ts", [])];
     const metrics = computeModuleMetrics(edges, files, "test");
 
-    const a = metrics.find((m) => m.module === "a.ts")!;
+    const a = metrics.find((m) => m.module === "test:a.ts")!;
     expect(a.ca).toBe(0);
     expect(a.ce).toBe(1);
     expect(a.instability).toBe(1);
 
-    const b = metrics.find((m) => m.module === "b.ts")!;
+    const b = metrics.find((m) => m.module === "test:b.ts")!;
     expect(b.ca).toBe(1);
     expect(b.ce).toBe(1);
     expect(b.instability).toBe(0.5);
 
-    const c = metrics.find((m) => m.module === "c.ts")!;
+    const c = metrics.find((m) => m.module === "test:c.ts")!;
     expect(c.ca).toBe(1);
     expect(c.ce).toBe(0);
     expect(c.instability).toBe(0);
@@ -41,7 +41,7 @@ describe("computeModuleMetrics", () => {
     const files = [pf("a.ts", []), pf("b.ts", []), pf("c.ts", []), pf("shared.ts", [])];
     const metrics = computeModuleMetrics(edges, files, "test");
 
-    const shared = metrics.find((m) => m.module === "shared.ts")!;
+    const shared = metrics.find((m) => m.module === "test:shared.ts")!;
     expect(shared.ca).toBe(3);
     expect(shared.ce).toBe(0);
     expect(shared.instability).toBe(0);
@@ -55,7 +55,7 @@ describe("computeModuleMetrics", () => {
     ];
     const metrics = computeModuleMetrics(edges, files, "test");
 
-    const types = metrics.find((m) => m.module === "types.ts")!;
+    const types = metrics.find((m) => m.module === "test:types.ts")!;
     expect(types.abstractness).toBe(1);
   });
 
@@ -64,7 +64,7 @@ describe("computeModuleMetrics", () => {
     const files = [pf("impl.ts", [sym("Impl", "class"), sym("Helper", "function")])];
     const metrics = computeModuleMetrics(edges, files, "test");
 
-    const impl = metrics.find((m) => m.module === "impl.ts")!;
+    const impl = metrics.find((m) => m.module === "test:impl.ts")!;
     expect(impl.abstractness).toBe(0);
   });
 
@@ -72,7 +72,7 @@ describe("computeModuleMetrics", () => {
     const files = [pf("mixed.ts", [sym("IFoo", "interface"), sym("Foo", "class")])];
     const metrics = computeModuleMetrics([], files, "test");
 
-    const mixed = metrics.find((m) => m.module === "mixed.ts")!;
+    const mixed = metrics.find((m) => m.module === "test:mixed.ts")!;
     expect(mixed.abstractness).toBe(0.5);
   });
 
@@ -80,7 +80,7 @@ describe("computeModuleMetrics", () => {
     const files = [pf("isolated.ts", [sym("Alone", "class")])];
     const metrics = computeModuleMetrics([], files, "test");
 
-    const isolated = metrics.find((m) => m.module === "isolated.ts")!;
+    const isolated = metrics.find((m) => m.module === "test:isolated.ts")!;
     expect(isolated.instability).toBe(0);
     expect(isolated.ca).toBe(0);
     expect(isolated.ce).toBe(0);
@@ -95,7 +95,7 @@ describe("computeModuleMetrics", () => {
     ];
     const metrics = computeModuleMetrics(edges, files, "test");
 
-    const c = metrics.find((m) => m.module === "c.ts")!;
+    const c = metrics.find((m) => m.module === "test:c.ts")!;
     expect(c.instability).toBe(0);
     expect(c.abstractness).toBe(0);
     expect(c.zone).toBe("pain");
@@ -110,7 +110,7 @@ describe("computeModuleMetrics", () => {
     ];
     const metrics = computeModuleMetrics(edges, files, "test");
 
-    const a = metrics.find((m) => m.module === "a.ts")!;
+    const a = metrics.find((m) => m.module === "test:a.ts")!;
     expect(a.instability).toBe(1);
     expect(a.abstractness).toBe(1);
     expect(a.zone).toBe("uselessness");
@@ -126,7 +126,7 @@ describe("computeModuleMetrics", () => {
     ];
     const metrics = computeModuleMetrics(edges, files, "test");
 
-    const m = metrics.find((m) => m.module === "m.ts")!;
+    const m = metrics.find((m) => m.module === "test:m.ts")!;
     expect(m.instability).toBe(0.5);
     expect(m.abstractness).toBe(0.5);
     expect(m.zone).toBe("main-sequence");
@@ -135,12 +135,12 @@ describe("computeModuleMetrics", () => {
   it("only considers import edges (ignores calls)", () => {
     const edges: GraphEdge[] = [
       edge("a.ts", "b.ts"),
-      { source: "a.ts", target: "b.ts", kind: "calls", metadata: { repo: "test" } },
+      { source: "test:a.ts", target: "test:b.ts", kind: "calls", metadata: { repo: "test" } },
     ];
     const files = [pf("a.ts", []), pf("b.ts", [])];
     const metrics = computeModuleMetrics(edges, files, "test");
 
-    const a = metrics.find((m) => m.module === "a.ts")!;
+    const a = metrics.find((m) => m.module === "test:a.ts")!;
     expect(a.ce).toBe(1); // only import, not calls
   });
 });
@@ -153,8 +153,8 @@ function metric(module: string, instability: number, abstractness: number, zone:
 describe("detectInstabilityViolations", () => {
   it("detects SDP violation when stable module imports unstable module", () => {
     const metrics = [
-      metric("stable.ts", 0.1, 0, "pain", 5, 0),
-      metric("unstable.ts", 0.9, 0, "balanced", 0, 5),
+      metric("test:stable.ts", 0.1, 0, "pain", 5, 0),
+      metric("test:unstable.ts", 0.9, 0, "balanced", 0, 5),
     ];
     const edges = [edge("stable.ts", "unstable.ts")];
     const results = detectInstabilityViolations(metrics, edges, "test");
@@ -166,13 +166,13 @@ describe("detectInstabilityViolations", () => {
     // Source module is the subject; target listed in the dependency list
     expect(sdp[0]!.message.text).toContain("stable.ts");
     expect(sdp[0]!.message.text).toContain("unstable.ts");
-    expect(sdp[0]!.locations?.[0]?.logicalLocations?.[0]?.fullyQualifiedName).toBe("stable.ts");
+    expect(sdp[0]!.locations?.[0]?.logicalLocations?.[0]?.fullyQualifiedName).toBe("test:stable.ts");
   });
 
   it("no violation when instability delta is below threshold", () => {
     const metrics = [
-      metric("a.ts", 0.4, 0, "balanced"),
-      metric("b.ts", 0.5, 0, "balanced"),
+      metric("test:a.ts", 0.4, 0, "balanced"),
+      metric("test:b.ts", 0.5, 0, "balanced"),
     ];
     const edges = [edge("a.ts", "b.ts")];
     const results = detectInstabilityViolations(metrics, edges, "test");
@@ -182,7 +182,7 @@ describe("detectInstabilityViolations", () => {
   });
 
   it("emits pain zone finding", () => {
-    const metrics = [metric("concrete.ts", 0.1, 0.1, "pain", 5, 0)];
+    const metrics = [metric("test:concrete.ts", 0.1, 0.1, "pain", 5, 0)];
     const results = detectInstabilityViolations(metrics, [], "test");
 
     const pain = results.filter((r) => r.ruleId === "structural/pain-zone-module");
@@ -192,7 +192,7 @@ describe("detectInstabilityViolations", () => {
   });
 
   it("emits uselessness zone finding", () => {
-    const metrics = [metric("abstract.ts", 0.9, 0.9, "uselessness", 0, 5)];
+    const metrics = [metric("test:abstract.ts", 0.9, 0.9, "uselessness", 0, 5)];
     const results = detectInstabilityViolations(metrics, [], "test");
 
     const useless = results.filter((r) => r.ruleId === "structural/uselessness-zone-module");
@@ -208,8 +208,8 @@ describe("detectInstabilityViolations", () => {
 
   it("respects custom sdpThreshold", () => {
     const metrics = [
-      metric("a.ts", 0.1, 0, "pain"),
-      metric("b.ts", 0.5, 0, "balanced"),
+      metric("test:a.ts", 0.1, 0, "pain"),
+      metric("test:b.ts", 0.5, 0, "balanced"),
     ];
     const edges = [edge("a.ts", "b.ts")];
 
@@ -249,10 +249,10 @@ describe("summarizeRepoMetrics", () => {
 
   it("counts pain and uselessness zones correctly", () => {
     const modules = [
-      metric("a.ts", 0.1, 0.1, "pain"),
-      metric("b.ts", 0.2, 0.0, "pain"),
-      metric("c.ts", 0.9, 0.9, "uselessness"),
-      metric("d.ts", 0.5, 0.5, "main-sequence"),
+      metric("test:a.ts", 0.1, 0.1, "pain"),
+      metric("test:b.ts", 0.2, 0.0, "pain"),
+      metric("test:c.ts", 0.9, 0.9, "uselessness"),
+      metric("test:d.ts", 0.5, 0.5, "main-sequence"),
     ];
     const summary = summarizeRepoMetrics(modules, "test");
 
@@ -279,7 +279,7 @@ describe("classifyZone boundary conditions", () => {
         .map(n => pf(`${n}.ts`, [])),
     ];
     const metrics = computeModuleMetrics(edges, allFiles, "test");
-    const b = metrics.find(m => m.module === "boundary.ts")!;
+    const b = metrics.find(m => m.module === "test:boundary.ts")!;
 
     expect(b.instability).toBeCloseTo(0.3, 5);
     expect(b.zone).not.toBe("pain");
@@ -299,7 +299,7 @@ describe("classifyZone boundary conditions", () => {
     const allFiles = [files[0]!, ...["a1","a2","a3","a4","a5","a6","a7","a8","b1","b2"]
       .map(n => pf(`${n}.ts`, []))];
     const metrics = computeModuleMetrics(edges, allFiles, "test");
-    const x = metrics.find(m => m.module === "x.ts")!;
+    const x = metrics.find(m => m.module === "test:x.ts")!;
 
     expect(x.instability).toBeCloseTo(0.2, 5);
     expect(x.abstractness).toBe(0);
@@ -319,7 +319,7 @@ describe("classifyZone boundary conditions", () => {
     const allFiles = [files[0]!, ...["x1","x2","y1","y2","y3","y4","y5"]
       .map(n => pf(`${n}.ts`, []))];
     const metrics = computeModuleMetrics(edges, allFiles, "test");
-    const o = metrics.find(m => m.module === "over.ts")!;
+    const o = metrics.find(m => m.module === "test:over.ts")!;
 
     expect(o.instability).toBeGreaterThan(0.7);
     expect(o.abstractness).toBe(1);
@@ -338,7 +338,7 @@ describe("classifyZone boundary conditions", () => {
     const allFiles = [files[0]!, ...["a1","a2","a3","b1","b2","b3","b4","b5","b6","b7"]
       .map(n => pf(`${n}.ts`, []))];
     const metrics = computeModuleMetrics(edges, allFiles, "test");
-    const b = metrics.find(m => m.module === "border.ts")!;
+    const b = metrics.find(m => m.module === "test:border.ts")!;
 
     expect(b.instability).toBeCloseTo(0.7, 5);
     expect(b.zone).not.toBe("uselessness");
@@ -347,7 +347,7 @@ describe("classifyZone boundary conditions", () => {
   it("distance boundary: A+I=0.7 → distance=0.3 → NOT main-sequence", () => {
     // distance = |A + I - 1| = |0.7 - 1| = 0.3
     // classifyZone checks distance < 0.3 for main-sequence, so 0.3 exactly → balanced
-    const m = metric("edge.ts", 0.4, 0.3, "balanced");
+    const m = metric("test:edge.ts", 0.4, 0.3, "balanced");
     expect(m.distance).toBeCloseTo(0.3, 5);
     // Verify via summary it's not main-sequence
     const summary = summarizeRepoMetrics([m], "test");
@@ -358,7 +358,7 @@ describe("classifyZone boundary conditions", () => {
   it("file with no symbols has abstractness=0", () => {
     const files = [pf("empty.ts", [])];
     const metrics = computeModuleMetrics([], files, "test");
-    const e = metrics.find(m => m.module === "empty.ts")!;
+    const e = metrics.find(m => m.module === "test:empty.ts")!;
     expect(e.abstractness).toBe(0);
     expect(e.zone).toBe("pain"); // I=0, A=0 → both < 0.3
   });
@@ -368,7 +368,7 @@ describe("classifyZone boundary conditions", () => {
     const edges = [edge("a.ts", "phantom.ts")];
     const files = [pf("a.ts", [])];
     const metrics = computeModuleMetrics(edges, files, "test");
-    const phantom = metrics.find(m => m.module === "phantom.ts")!;
+    const phantom = metrics.find(m => m.module === "test:phantom.ts")!;
     expect(phantom).toBeDefined();
     expect(phantom.abstractness).toBe(0); // no symbols found
     expect(phantom.ca).toBe(1);
@@ -385,7 +385,7 @@ describe("classifyZone boundary conditions", () => {
       sym("Impl", "class"),
     ])];
     const metrics = computeModuleMetrics([], files, "test");
-    const m = metrics.find(m => m.module === "mixed.ts")!;
+    const m = metrics.find(m => m.module === "test:mixed.ts")!;
     expect(m.abstractness).toBeCloseTo(0.4, 5);
   });
 });
@@ -393,8 +393,8 @@ describe("classifyZone boundary conditions", () => {
 describe("detectInstabilityViolations edge cases", () => {
   it("SDP at exact threshold boundary (delta === threshold) → no violation", () => {
     const metrics = [
-      metric("a.ts", 0.3, 0, "balanced"),
-      metric("b.ts", 0.6, 0, "balanced"),
+      metric("test:a.ts", 0.3, 0, "balanced"),
+      metric("test:b.ts", 0.6, 0, "balanced"),
     ];
     const edges = [edge("a.ts", "b.ts")];
     // delta = 0.6 - 0.3 = 0.3, threshold default = 0.3
@@ -406,8 +406,8 @@ describe("detectInstabilityViolations edge cases", () => {
 
   it("SDP with delta just above threshold → violation", () => {
     const metrics = [
-      metric("a.ts", 0.3, 0, "balanced"),
-      metric("b.ts", 0.61, 0, "balanced"),
+      metric("test:a.ts", 0.3, 0, "balanced"),
+      metric("test:b.ts", 0.61, 0, "balanced"),
     ];
     const edges = [edge("a.ts", "b.ts")];
     const results = detectInstabilityViolations(metrics, edges, "test");
@@ -417,17 +417,17 @@ describe("detectInstabilityViolations edge cases", () => {
 
   it("ignores non-import edges", () => {
     const metrics = [
-      metric("a.ts", 0.1, 0, "pain"),
-      metric("b.ts", 0.9, 0, "balanced"),
+      metric("test:a.ts", 0.1, 0, "pain"),
+      metric("test:b.ts", 0.9, 0, "balanced"),
     ];
-    const callEdge: GraphEdge = { source: "a.ts", target: "b.ts", kind: "calls", metadata: { repo: "test" } };
+    const callEdge: GraphEdge = { source: "test:a.ts", target: "test:b.ts", kind: "calls", metadata: { repo: "test" } };
     const results = detectInstabilityViolations(metrics, [callEdge], "test");
     const sdp = results.filter(r => r.ruleId === "structural/unstable-dependency");
     expect(sdp).toHaveLength(0);
   });
 
   it("skips edges where source or target is missing from metrics", () => {
-    const metrics = [metric("a.ts", 0.1, 0, "pain")];
+    const metrics = [metric("test:a.ts", 0.1, 0, "pain")];
     const edges = [edge("a.ts", "unknown.ts")];
     const results = detectInstabilityViolations(metrics, edges, "test");
     const sdp = results.filter(r => r.ruleId === "structural/unstable-dependency");
@@ -436,8 +436,8 @@ describe("detectInstabilityViolations edge cases", () => {
 
   it("does not emit zone findings for balanced or main-sequence modules", () => {
     const metrics = [
-      metric("a.ts", 0.5, 0.5, "main-sequence"),
-      metric("b.ts", 0.5, 0.0, "balanced"),
+      metric("test:a.ts", 0.5, 0.5, "main-sequence"),
+      metric("test:b.ts", 0.5, 0.0, "balanced"),
     ];
     const results = detectInstabilityViolations(metrics, [], "test");
     expect(results).toHaveLength(0);
