@@ -60,7 +60,8 @@ export async function fetchPatterns(repo: string): Promise<unknown> {
 }
 
 export async function fetchHotspots(): Promise<unknown[]> {
-  return fetchJson(`${BASE}/api/hotspots`);
+  const data = await fetchJson<{ results: unknown[] }>(`${BASE}/api/hotspots`);
+  return data.results ?? [];
 }
 
 export interface ModuleMetric {
