@@ -8,7 +8,7 @@ export default defineConfig({
     pool: "forks",
     poolOptions: { forks: { maxForks: 1 } },
     globals: true,
-    include: ["packages/**/src/**/*.test.ts", "apps/*/src/**/*.test.ts"],
+    include: ["packages/**/src/**/*.test.ts", "apps/*/src/**/*.test.ts", "apps/*/src/**/*.test.tsx"],
     coverage: {
       provider: "v8",
       include: ["packages/**/src/**/*.ts", "apps/*/src/**/*.ts"],
