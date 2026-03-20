@@ -187,7 +187,7 @@ export function detectInstabilityViolations(
     // Gate pain-zone notes on ca > 0: orphan files (ca=0, ce=0) satisfy
     // instability < 0.3 && abstractness < 0.3 but have no dependents, so
     // flagging them as "hard to change" is misleading — nobody depends on them.
-    if (m.zone === "pain" && m.ca > 0 && !isBarrelFile(m.module)) {
+    if (m.zone === "pain" && m.ca > 0 && !isBarrelFile(m.module) && m.module.startsWith(`${repo}:`)) {
       results.push({
         ruleId: "structural/pain-zone-module",
         level: "note",
@@ -205,7 +205,7 @@ export function detectInstabilityViolations(
           }],
         }],
       });
-    } else if (m.zone === "uselessness") {
+    } else if (m.zone === "uselessness" && m.module.startsWith(`${repo}:`)) {
       results.push({
         ruleId: "structural/uselessness-zone-module",
         level: "note",
@@ -242,21 +242,45 @@ export function summarizeRepoMetrics(
       avgDistance: 0,
       painZoneCount: 0,
       uselessnessZoneCount: 0,
+      internalPainZoneCount: 0,
+      internalUselessnessZoneCount: 0,
+      internalModuleCount: 0,
     };
   }
 
-  const sumI = modules.reduce((s, m) => s + m.instability, 0);
-  const sumA = modules.reduce((s, m) => s + m.abstractness, 0);
-  const sumD = modules.reduce((s, m) => s + m.distance, 0);
+  // Internal modules have repo:path format (makeFileId); external are bare package names
+  // or node: builtins. Use startsWith(`${repo}:`) to distinguish precisely.
+  const isInternal = (m: ModuleMetrics) => m.module.startsWith(`${repo}:`);
+
+  // Single-pass reduce to accumulate sums and zone counts simultaneously.
+  const agg = modules.reduce(
+    (acc, m) => {
+      const internal = isInternal(m);
+      return {
+        sumI: acc.sumI + m.instability,
+        sumA: acc.sumA + m.abstractness,
+        sumD: acc.sumD + m.distance,
+        painZone: acc.painZone + (m.zone === "pain" ? 1 : 0),
+        uselessnessZone: acc.uselessnessZone + (m.zone === "uselessness" ? 1 : 0),
+        internalPainZone: acc.internalPainZone + (m.zone === "pain" && internal ? 1 : 0),
+        internalUselessnessZone: acc.internalUselessnessZone + (m.zone === "uselessness" && internal ? 1 : 0),
+        internalCount: acc.internalCount + (internal ? 1 : 0),
+      };
+    },
+    { sumI: 0, sumA: 0, sumD: 0, painZone: 0, uselessnessZone: 0, internalPainZone: 0, internalUselessnessZone: 0, internalCount: 0 },
+  );
 
   return {
     repo,
     moduleCount: modules.length,
-    avgInstability: sumI / modules.length,
-    avgAbstractness: sumA / modules.length,
-    avgDistance: sumD / modules.length,
-    painZoneCount: modules.filter((m) => m.zone === "pain").length,
-    uselessnessZoneCount: modules.filter((m) => m.zone === "uselessness").length,
+    avgInstability: agg.sumI / modules.length,
+    avgAbstractness: agg.sumA / modules.length,
+    avgDistance: agg.sumD / modules.length,
+    painZoneCount: agg.painZone,
+    uselessnessZoneCount: agg.uselessnessZone,
+    internalPainZoneCount: agg.internalPainZone,
+    internalUselessnessZoneCount: agg.internalUselessnessZone,
+    internalModuleCount: agg.internalCount,
   };
 }
 

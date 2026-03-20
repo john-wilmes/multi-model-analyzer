@@ -47,28 +47,33 @@ export function extractLogStatements(
   // console.warn("timeout")) are never merged into the same cluster.
   const SEVERITY_SEP = "\x00";
   const clusters = drainParse(
-    rawLogs.map((l) => `${l.severity}${SEVERITY_SEP}${l.text}`),
+    rawLogs.map((l) => `${l.severity}${SEVERITY_SEP} ${l.text}`),
     DEFAULT_DRAIN_OPTIONS,
   );
 
-  const templates: LogTemplate[] = clusters.map((cluster, i) => {
-    const matchingLogs = cluster.logIds.map(
-      (id) => rawLogs[parseInt(id)]!,
-    );
-    const severity = matchingLogs[0]?.severity ?? "info";
-    const locations = matchingLogs.map((l) => l.location);
+  const templates: LogTemplate[] = clusters
+    .map((cluster, i) => {
+      const matchingLogs = cluster.logIds.map(
+        (id) => rawLogs[parseInt(id)]!,
+      );
+      const severity = matchingLogs[0]?.severity ?? "info";
+      const locations = matchingLogs.map((l) => l.location);
 
-    // Strip the leading severity token that was prepended before clustering.
-    const templateTokens = cluster.template.slice(1);
+      // Strip the leading severity token that was prepended before clustering.
+      const templateTokens = cluster.template.slice(1);
 
-    return {
-      id: `log-template-${i}`,
-      template: templateTokens.join(" "),
-      severity,
-      locations,
-      frequency: matchingLogs.length,
-    };
-  });
+      return {
+        id: `log-template-${i}`,
+        template: templateTokens.join(" "),
+        severity,
+        locations,
+        frequency: matchingLogs.length,
+      };
+    })
+    // Drop clusters where the original log had no string argument (e.g.
+    // `logger.error(variable)`) — after stripping the severity token the
+    // template is an empty string and adds no signal.
+    .filter((t) => t.template !== "");
 
   return { repo, templates };
 }

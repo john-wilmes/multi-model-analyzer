@@ -27,6 +27,7 @@ function makeGraph(): CrossRepoGraph {
 function makeCatalogEntry(name: string): ServiceCatalogEntry {
   return {
     name,
+    rootPath: name,
     purpose: `${name} service`,
     dependencies: [],
     apiSurface: [],

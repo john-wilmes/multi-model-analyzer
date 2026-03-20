@@ -80,6 +80,12 @@ export function scanForFlags(
       mergeFlag(flagMap, flag);
     }
 
+    // Scan for hook-based flags (React)
+    const hookFlags = findHookFlags(tree.rootNode, filePath, repo);
+    for (const flag of hookFlags) {
+      mergeFlag(flagMap, flag);
+    }
+
     // Scan for enum-based feature flags (e.g., FeatureFlagKey.IS_AI_ENABLED)
     const enumFlags = findEnumFlags(tree.rootNode, filePath, repo);
     for (const flag of enumFlags) {
@@ -163,6 +169,42 @@ function findEnvFlags(
           name: envVar,
           locations: [{ repo, module: filePath }],
         });
+      }
+    }
+  });
+
+  return flags;
+}
+
+/** Detect feature flag access via React hooks and config objects. */
+function findHookFlags(
+  node: TreeSitterNode,
+  filePath: string,
+  repo: string,
+): FeatureFlag[] {
+  const flags: FeatureFlag[] = [];
+  const hookPatterns = ["useFeatureFlag", "useFeatureFlags", "useFlag", "useFlags", "useFeatureGate"];
+
+  visitAll(node, (n) => {
+    if (n.type === "call_expression") {
+      const callee = n.namedChildren[0];
+      if (!callee) return;
+
+      const name = callee.type === "identifier" ? callee.text : extractMethodName(callee);
+      if (name && hookPatterns.includes(name)) {
+        // Try to extract the flag name from the first argument
+        const args = n.namedChildren.find((c) => c.type === "arguments");
+        if (args) {
+          const firstArg = args.namedChildren[0];
+          if (firstArg && (firstArg.type === "string" || firstArg.type === "template_string")) {
+            const flagName = extractStringLiteral(firstArg) ?? firstArg.text;
+            flags.push({
+              name: flagName.replace(/['"]/g, ""),
+              locations: [{ repo, module: filePath }],
+              sdk: name,
+            });
+          }
+        }
       }
     }
   });

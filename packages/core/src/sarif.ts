@@ -65,6 +65,7 @@ export interface SarifResult {
   readonly locations?: readonly SarifLocation[];
   readonly codeFlows?: readonly SarifCodeFlow[];
   readonly relatedLocations?: readonly SarifLocation[];
+  readonly fingerprints?: Record<string, string>;
   readonly properties?: Record<string, unknown>;
 }
 
@@ -123,6 +124,19 @@ export interface SarifStatistics {
 
 // -- Factory helpers --
 
+/**
+ * Simple djb2 string hash — returns a compact hex string suitable for use
+ * as a SARIF fingerprint value.  Not cryptographic; used for change detection.
+ */
+function djb2Hash(s: string): string {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) {
+    h = ((h << 5) + h) ^ s.charCodeAt(i);
+    h = h >>> 0; // keep as 32-bit unsigned
+  }
+  return h.toString(16).padStart(8, "0");
+}
+
 export function createSarifLog(runs: readonly SarifRun[]): SarifLog {
   return {
     $schema:
@@ -168,11 +182,23 @@ export function createSarifResult(
     properties?: Record<string, unknown>;
   },
 ): SarifResult {
+  // Compute a fingerprint from ruleId + first logical location FQN (if any),
+  // falling back to the physical location URI when the FQN is absent.
+  // Mirrors the fingerprint() logic in @mma/diagnostics/baseline.ts but uses
+  // only the first location to keep the value stable across minor location changes.
+  const firstLocation = options?.locations?.[0];
+  const firstFqn =
+    firstLocation?.logicalLocations?.[0]?.fullyQualifiedName ??
+    firstLocation?.physicalLocation?.artifactLocation?.uri ??
+    "";
+  const fingerprintValue = djb2Hash(`${ruleId}::${firstFqn}`);
+
   return {
     ruleId,
     level,
     message: { text: messageText },
     ...options,
+    fingerprints: { "primaryLocationLineHash/v1": fingerprintValue },
   };
 }
 

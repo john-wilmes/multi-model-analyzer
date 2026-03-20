@@ -34,6 +34,7 @@ function buildCatalogEntry(
 
   return {
     name: service.name,
+    rootPath: service.rootPath,
     purpose,
     dependencies: [...service.dependencies],
     apiSurface,
@@ -92,9 +93,12 @@ function inferApiSurface(
 
   // Infer from exported function names.
   // Use strict path boundary to avoid matching sibling service paths.
+  // Skip common false positives: serialization helpers, DTO transformers, etc.
+  const FP_PATTERNS = /(?:FromJSON|ToJSON|Response|Request|Schema|Validator|Mock|Test|Spec|Fixture|Factory|Builder|Helper|Util)/i;
+
   const root = service.rootPath;
   for (const [entityId, summary] of summaries) {
-    if (entityId !== root && !entityId.startsWith(root + "/")) continue;
+    if (root !== "" && entityId !== root && !entityId.startsWith(root + "/")) continue;
 
     const name = entityId.split("#").pop() ?? "";
     if (
@@ -104,6 +108,9 @@ function inferApiSurface(
       name.startsWith("delete") ||
       name.startsWith("patch")
     ) {
+      // Skip likely false positives
+      if (FP_PATTERNS.test(name)) continue;
+
       const method = name.match(/^(get|post|put|delete|patch)/i)?.[1]?.toUpperCase() ?? "GET";
       endpoints.push({
         method,

@@ -18,21 +18,22 @@
     "type-check": "tsc --build --noEmit"
   },
   "dependencies": {
-    "@types/better-sqlite3": "^7.6.13",
-    "better-sqlite3": "^12.6.2",
     "@mma/core": "*",
-    "@mma/ingestion": "*",
-    "@mma/parsing": "*",
-    "@mma/structural": "*",
+    "@mma/correlation": "*",
+    "@mma/diagnostics": "*",
     "@mma/heuristics": "*",
-    "@mma/summarization": "*",
-    "@mma/storage": "*",
+    "@mma/ingestion": "*",
+    "@mma/mcp": "*",
     "@mma/model-config": "*",
     "@mma/model-fault": "*",
     "@mma/model-functional": "*",
-    "@mma/diagnostics": "*",
+    "@mma/parsing": "*",
     "@mma/query": "*",
-    "@mma/mcp": "*",
-    "@mma/correlation": "*"
+    "@mma/storage": "*",
+    "@mma/structural": "*",
+    "@mma/summarization": "*",
+    "@types/better-sqlite3": "^7.6.13",
+    "better-sqlite3": "^12.6.2",
+    "dotenv": "^17.3.1"
   }
 }

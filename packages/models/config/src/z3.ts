@@ -107,11 +107,17 @@ export async function validateFeatureModel(
   }
 
   for (const combo of inferredUntestedPairs) {
+    const fqn = [...combo].sort().join("+");
     results.push(
       createSarifResult(
         "config/untested-interaction",
         "note",
         `Flag interaction [${combo.join(", ")}] has no test coverage`,
+        {
+          locations: [{
+            logicalLocations: [createLogicalLocation(repo, fqn)],
+          }],
+        },
       ),
     );
   }

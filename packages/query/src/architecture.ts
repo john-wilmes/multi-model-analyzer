@@ -43,9 +43,21 @@ export interface ServiceLink {
 
 export async function executeArchitectureQuery(
   graphStore: GraphStore,
-  _kvStore: KVStore,
+  kvStore: KVStore,
   repoFilter?: string,
 ): Promise<ArchitectureQueryResult> {
+  // Load known indexed packages for accurate cross-repo counting.
+  // Only imports targeting packages in indexed repos should count as cross-repo;
+  // third-party packages like @nestjs/common or @tanstack/react-query are excluded.
+  const packageRootsJson = await kvStore.get("_packageRoots");
+  const indexedPackages = new Set<string>();
+  if (packageRootsJson) {
+    try {
+      const entries = JSON.parse(packageRootsJson) as [string, string][];
+      for (const [name] of entries) indexedPackages.add(name);
+    } catch { /* ignore malformed cache */ }
+  }
+
   // Get aggregate counts per repo without loading all edges into memory
   const importCounts = await graphStore.getEdgeCountsByKindAndRepo("imports");
   const callCounts = await graphStore.getEdgeCountsByKindAndRepo("calls");
@@ -84,11 +96,15 @@ export async function executeArchitectureQuery(
     const repoImports = await graphStore.getEdgesByKind("imports", repoName);
     for (const edge of repoImports) {
       if (edge.target.startsWith("@") && !edge.target.startsWith("@/")) {
-        entry.crossRepo++;
         const parts = edge.target.split("/");
         const pkg = parts[0]!.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0]!;
-        const key = `${repoName}->${pkg}`;
-        crossEdgeMap.set(key, (crossEdgeMap.get(key) ?? 0) + 1);
+        // Only count as cross-repo if the target package is in an indexed repo.
+        // When indexedPackages is empty (no cache yet), fall back to counting all.
+        if (indexedPackages.size === 0 || indexedPackages.has(pkg)) {
+          entry.crossRepo++;
+          const key = `${repoName}->${pkg}`;
+          crossEdgeMap.set(key, (crossEdgeMap.get(key) ?? 0) + 1);
+        }
       }
     }
 

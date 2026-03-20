@@ -95,7 +95,9 @@ function detectFacadePattern(input: PatternDetectionInput, indexes: Map<string, 
 }
 
 function detectFactoryPattern(input: PatternDetectionInput, indexes: Map<string, FileSymbolIndex>): DetectedPattern[] {
-  return detectByNaming(input, indexes, "factory", /[Ff]actory$/);
+  // Skip interfaces: TypeScript interface names like IChannelFactory are contracts,
+  // not implementations, and should not be flagged as factory pattern instances.
+  return detectByNaming(input, indexes, "factory", /[Ff]actory$/, { skipInterfaces: true });
 }
 
 function detectSingletonPattern(input: PatternDetectionInput, indexes: Map<string, FileSymbolIndex>): DetectedPattern[] {
@@ -236,6 +238,7 @@ function detectByNaming(
   indexes: Map<string, FileSymbolIndex>,
   kind: PatternKind,
   pattern: RegExp,
+  options: { skipInterfaces?: boolean } = {},
 ): DetectedPattern[] {
   const results: DetectedPattern[] = [];
 
@@ -250,14 +253,16 @@ function detectByNaming(
         });
       }
     }
-    for (const sym of index.interfaces) {
-      if (pattern.test(sym.name)) {
-        results.push({
-          name: `${kind}: ${sym.name}`,
-          kind,
-          locations: [makeLocation(input.repo, filePath, sym.name)],
-          confidence: 0.7,
-        });
+    if (!options.skipInterfaces) {
+      for (const sym of index.interfaces) {
+        if (pattern.test(sym.name)) {
+          results.push({
+            name: `${kind}: ${sym.name}`,
+            kind,
+            locations: [makeLocation(input.repo, filePath, sym.name)],
+            confidence: 0.7,
+          });
+        }
       }
     }
   }
