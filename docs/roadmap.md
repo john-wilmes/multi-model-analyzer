@@ -4,7 +4,7 @@ Candidate features informed by analysis of comparable open-source projects: [Roa
 
 ## Landscape Summary
 
-No existing tool combines all of what mma does: tree-sitter + ts-morph dual parsing, cross-repo service topology (queue/HTTP/WebSocket), fault tree generation, pattern detection, 4-tier summarization, SARIF output, and natural language query routing -- all without LLM calls at analysis time. The closest competitors either focus on one slice (dependency-cruiser for dep graphs, Jelly for call graphs) or are broader platforms that don't expose raw analytical models (Sourcegraph, CodeScene). The emerging MCP-server tools (Roam Code, Code Pathfinder, CodeMCP) are the most similar in spirit but are younger and primarily designed as AI-agent context providers rather than standalone analysis pipelines.
+No existing tool combines all of what mma does: tree-sitter + ts-morph dual parsing, cross-repo service topology (queue/HTTP/WebSocket), fault tree generation, pattern detection, 4-tier summarization, SARIF output, and natural language query routing -- all without LLM calls at analysis time. Related tools tend to focus on one slice (dependency-cruiser for dep graphs, Jelly for call graphs) or are broader platforms that don't expose raw analytical models (Sourcegraph, CodeScene). The emerging MCP-server tools (Roam Code, Code Pathfinder, CodeMCP) are the most similar in spirit but are younger and primarily designed as AI-agent context providers rather than standalone analysis pipelines.
 
 ## Completed
 
@@ -48,13 +48,13 @@ Source-to-sink analysis for security vulnerabilities (SQL injection, RCE, etc.).
 
 **Reference:** Code Pathfinder's DFG-based taint tracking with Python SDK rules.
 
-## Features Where mma Already Leads
+## Existing Strengths
 
-For context, areas where mma has comparable or stronger capabilities than the competition:
-- **Dual-engine parsing** -- tree-sitter + ts-morph (type-resolved extraction). Roam Code and Code Pathfinder are tree-sitter only.
-- **Cross-repo analysis** -- packageRoots resolution, repo-scoped edges and queries. Most competitors are single-repo.
-- **Service topology** -- queue producers/consumers, HTTP clients, WebSocket detection. Richer protocol diversity than competitors.
-- **Fault tree generation** -- no competitor offers this.
-- **SARIF output** -- standardized format with logical locations. Roam Code also supports SARIF; most others do not.
+Areas where mma already has strong capabilities:
+- **Dual-engine parsing** -- tree-sitter + ts-morph (type-resolved extraction).
+- **Cross-repo analysis** -- packageRoots resolution, repo-scoped edges and queries.
+- **Service topology** -- queue producers/consumers, HTTP clients, WebSocket detection.
+- **Fault tree generation** -- static fault trees derived from call graphs.
+- **SARIF output** -- standardized format with logical locations.
 - **Pattern detection** -- adapter, facade, observer, factory, singleton, repository, middleware, decorator.
 - **4-tier summarization** -- from free AST templates to optional LLM-powered descriptions.

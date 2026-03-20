@@ -114,7 +114,7 @@ Z3, developed at Microsoft Research, is the most widely used SMT solver. It hand
 
 **Barbosa et al.: ["cvc5: A Versatile and Industrial-Strength SMT Solver"](https://link.springer.com/chapter/10.1007/978-3-030-99524-9_24) (TACAS 2022)**
 
-CVC5 is the latest in the CVC line of SMT solvers, offering competitive performance with Z3 and sometimes outperforming it on specific theories.
+CVC5 is the latest in the CVC line of SMT solvers, offering comparable performance to Z3 and sometimes outperforming it on specific theories.
 
 ### Practical Applicability
 

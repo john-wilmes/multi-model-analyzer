@@ -1,6 +1,24 @@
 [![CI](https://github.com/john-wilmes/multi-model-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/john-wilmes/multi-model-analyzer/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Node: 22+](https://img.shields.io/badge/Node-22%2B-brightgreen.svg)](https://nodejs.org/)
 
 # Multi-Model Analyzer (mma)
+
+> ⚠️ **Status: Beta** — APIs and output formats may change between releases.
+
+## Contents
+- [What It Finds](#what-it-finds)
+- [Key Features](#key-features)
+- [Quick Start](#quick-start)
+- [Commands](#commands)
+- [Examples](#examples)
+- [How It Works](#how-it-works)
+- [Architecture](#architecture)
+- [Prerequisites](#prerequisites)
+- [Data Handling](#data-handling)
+- [Findings Reference](#findings-reference)
+- [Contributing](#contributing)
+- [License](#license)
 
 Point `mma` at your TypeScript repos. Get back a health report with structural problems, fault risks, and dead code -- in seconds, with no LLM required.
 
@@ -37,7 +55,28 @@ That output is real -- [TypeORM](https://github.com/typeorm/typeorm) (3,371 modu
 
 All findings are SARIF v2.1.0 with logical locations only -- no source code leaves your machine.
 
+## Key Features
+
+- Cross-repo analysis across hundreds of TypeScript repositories
+- SARIF v2.1.0 output with built-in anonymization for safe sharing
+- MCP server for IDE/agent integration (`mma serve`)
+- Web dashboard with dependency graphs, blast radius, and service catalog views
+- 4-tier summarization (2 free local tiers + 2 optional LLM tiers)
+- Design pattern detection (adapter, facade, observer, factory, singleton, repository, middleware, decorator)
+- Baseline sharing for incremental reindexing across teams — see [docs/baseline-sharing.md](docs/baseline-sharing.md)
+- No LLM required for core analysis — everything runs locally
+
+See [where MMA fits in the ecosystem](docs/ecosystem-venn.svg) for a capability map across related tools.
+
+### Dashboard
+
+![Dashboard screenshot](docs/dashboard-screenshot.png)
+
+*Web dashboard with dependency graphs, blast radius visualization, and service health overview.*
+
 ## Quick Start
+
+If published to npm, you can skip the clone: `npx multi-model-analyzer index -v`. Otherwise:
 
 ```bash
 # Clone and install
@@ -84,7 +123,9 @@ mma dashboard  Launch the web dashboard UI
 mma compress   Compress/prune the SQLite DB to reduce disk usage
 ```
 
-## Example: Prioritized Practices Report
+## Examples
+
+### Prioritized Practices Report
 
 The `practices` command partitions findings into action tiers:
 
@@ -106,7 +147,7 @@ Each finding includes a concrete action:
 
 Output formats: `--format table` (default), `json`, `markdown`.
 
-## Example: Anonymized SARIF
+### Anonymized SARIF
 
 When sharing results externally, use `--salt` to redact identifiers:
 
@@ -192,24 +233,6 @@ Optional:
 - Built-in redaction hashes all identifiers before sharing
 - No telemetry
 
-## Baseline Sharing
-
-Share an indexed baseline so colleagues skip full reindexing — only changed files are reprocessed.
-
-```bash
-# Export
-mma export --raw -o baseline.db
-
-# Import (option A: config-driven)
-# Add "baselinePath": "baseline.db" to mma.config.json, then:
-mma index -c mma.config.json -v
-
-# Import (option B: CLI flag)
-mma index -c mma.config.json --baseline baseline.db
-```
-
-See [docs/baseline-sharing.md](docs/baseline-sharing.md) for details, troubleshooting, and AI agent instructions.
-
 ## Findings Reference
 
 See [docs/findings-guide.md](docs/findings-guide.md) for all SARIF rule IDs, severity levels, and metrics.
@@ -217,15 +240,6 @@ See [docs/findings-guide.md](docs/findings-guide.md) for all SARIF rule IDs, sev
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
-
-## Development
-
-```bash
-npm run build          # TypeScript compilation
-npm run type-check     # Type checking without emit
-npm run test           # Run all tests
-npm run lint           # ESLint
-```
 
 ## License
 
