@@ -1487,6 +1487,13 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     allSarifResults.push(...deduped);
   }
 
+  // Stamp fingerprints on all results that lack them (SARIF spec compliance)
+  for (const r of allSarifResults) {
+    if (!r.fingerprints || Object.keys(r.fingerprints).length === 0) {
+      (r as { fingerprints?: Record<string, string> }).fingerprints = { "mma/v1": fingerprint(r) };
+    }
+  }
+
   // Compare against previous baseline for incremental adoption
   // (must run even when allSarifResults is empty to track "absent" results)
   let finalResults: import("@mma/core").SarifResult[] = allSarifResults;
