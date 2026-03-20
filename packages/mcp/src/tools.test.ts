@@ -522,7 +522,7 @@ const MINIMAL_ARGS: Record<string, Record<string, unknown>> = {
   get_vulnerability:      {},
 };
 
-function makeSarifStores(count: number) {
+function makeSarifStoresWithRepoMetadata(count: number) {
   const stores = makeStores();
   const results = Array.from({ length: count }, (_, i) => ({
     ruleId: `test/rule-${i}`,
@@ -579,7 +579,7 @@ describe("MCP tool sanity checks", () => {
 
   it("get_diagnostics with populated store returns findings", async () => {
     const server = createMockServer();
-    const stores = makeSarifStores(5);
+    const stores = makeSarifStoresWithRepoMetadata(5);
     register(server, stores);
     const invoker = makeInvoker(server);
 
@@ -591,7 +591,7 @@ describe("MCP tool sanity checks", () => {
 
   it("get_diagnostics pagination: limit=3 offset=0 hasMore=true; offset=9 hasMore=false", async () => {
     const server = createMockServer();
-    const stores = makeSarifStores(10);
+    const stores = makeSarifStoresWithRepoMetadata(10);
     register(server, stores);
     const invoker = makeInvoker(server);
 
@@ -990,7 +990,7 @@ describe("MCP meta-sanity checks", () => {
 
   it("pagination-capable tools respect limit=0 gracefully", async () => {
     const server = createMockServer();
-    const stores = makeSarifStores(5);
+    const stores = makeSarifStoresWithRepoMetadata(5);
     // Seed services data so service_correlation doesn't return an error
     await stores.kvStore.set("correlation:services", makeSerializedServices());
     register(server, stores);
