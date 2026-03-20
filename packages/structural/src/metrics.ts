@@ -260,7 +260,7 @@ export function summarizeRepoMetrics(
   };
 }
 
-const BARREL_RE = /[/\\]index\.[jt]sx?$/;
+const BARREL_RE = /(?:^|[/\\])index\.[jt]sx?$/;
 function isBarrelFile(moduleId: string): boolean {
   return BARREL_RE.test(moduleId);
 }

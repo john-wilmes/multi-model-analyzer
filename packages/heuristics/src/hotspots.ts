@@ -111,7 +111,7 @@ export function computeHotspots(
   return { hotspots, maxChurn, maxSymbolCount };
 }
 
-const TEST_FILE_RE = /(?:\.(?:test|spec|e2e)\.[jt]sx?$|[/\\](?:__tests__|__mocks__|test|tests|e2e)[/\\])/;
+const TEST_FILE_RE = /(?:\.(?:test|spec|e2e)\.(?:[cm]?[jt]sx?)$|(?:^|[/\\])(?:__tests__|__mocks__|test|tests|e2e)(?:[/\\]|$))/;
 
 function isTestFile(filePath: string): boolean {
   return TEST_FILE_RE.test(filePath);

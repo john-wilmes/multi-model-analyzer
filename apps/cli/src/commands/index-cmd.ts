@@ -967,7 +967,11 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
             log(`    [vuln] skipped ${skippedProtocols.length} non-semver deps (${skippedProtocols.slice(0, 3).join(", ")}${skippedProtocols.length > 3 ? "..." : ""})`);
           }
           if (installed.length === 0) {
-            log(`    [vuln] no package.json in changeset, skipping (use --force-full-reindex to re-scan)`);
+            if (packageJsons.size === 0) {
+              log(`    [vuln] no package.json in changeset, skipping (use --force-full-reindex to re-scan)`);
+            } else {
+              log(`    [vuln] no semver-compatible dependencies found after protocol filtering, skipping`);
+            }
           } else {
             const vulnMatches = matchAdvisories(installed, options.advisories);
             const reachability = checkTransitiveVulnReachability(vulnMatches, depGraph?.edges ?? []);

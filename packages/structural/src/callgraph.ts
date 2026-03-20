@@ -205,7 +205,8 @@ function collectCallEdges(
         node.type === "arrow_function" ||
         node.type === "method_definition" ||
         node.type === "class_declaration" ||
-        node.type === "abstract_class_declaration")
+        node.type === "abstract_class_declaration" ||
+        node.type === "class")
     ) {
       return;
     }
