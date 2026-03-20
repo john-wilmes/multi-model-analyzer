@@ -1540,6 +1540,229 @@ export async function checkSanityCallGraphSource(
   }
 }
 
+export async function checkSanityDashboard(
+  kvStore: KVStore,
+  graphStore: GraphStore,
+  reporter: ValidationReporter,
+): Promise<void> {
+  const category = "sanity/dashboard";
+
+  // ── 1. Repo discovery ────────────────────────────────────
+  const metricsSummaryKeys = await kvStore.keys("metricsSummary:");
+  const repos: string[] = metricsSummaryKeys.map((k) => k.slice("metricsSummary:".length));
+  if (repos.length === 0) {
+    reporter.fail(category, "*", "repos discoverable via metricsSummary:*", "no metricsSummary keys found");
+    return;
+  }
+  reporter.pass(category, "*", `repos discoverable via metricsSummary:* (${repos.length})`);
+
+  // ── 2. Metrics per repo ───────────────────────────────────
+  let missingMetrics = 0;
+  for (const repo of repos) {
+    const raw = await kvStore.get(`metrics:${repo}`);
+    if (!raw) { missingMetrics++; continue; }
+    try { JSON.parse(raw); } catch { missingMetrics++; }
+  }
+  if (missingMetrics === 0) {
+    reporter.pass(category, "*", `metrics:<repo> present for all repos (${repos.length})`);
+  } else {
+    reporter.fail(category, "*", "metrics:<repo> present for all repos",
+      `${missingMetrics} of ${repos.length} repos missing metrics`);
+  }
+
+  // ── 3. Hotspots ───────────────────────────────────────────
+  const hotspotKeys = await kvStore.keys("hotspots:");
+  if (hotspotKeys.length === 0) {
+    reporter.skip(category, "*", "hotspots data", "no hotspots:* keys — not computed");
+  } else {
+    let totalHotspots = 0;
+    let badHotspots = 0;
+    for (const key of hotspotKeys) {
+      const raw = await kvStore.get(key);
+      if (!raw) continue;
+      let arr: unknown;
+      try { arr = JSON.parse(raw); } catch { badHotspots++; continue; }
+      if (!Array.isArray(arr)) { badHotspots++; continue; }
+      for (const h of arr) {
+        if (typeof h !== "object" || h === null ||
+            typeof (h as Record<string, unknown>)["hotspotScore"] !== "number") {
+          badHotspots++;
+        }
+      }
+      totalHotspots += arr.length;
+    }
+    if (badHotspots === 0) {
+      reporter.pass(category, "*", `hotspots data valid (${totalHotspots} total)`);
+    } else {
+      reporter.fail(category, "*", "hotspots data valid",
+        `${badHotspots} entries missing hotspotScore`);
+    }
+  }
+
+  // ── 4. Temporal coupling ──────────────────────────────────
+  const tcKeys = await kvStore.keys("temporal-coupling:");
+  if (tcKeys.length === 0) {
+    reporter.skip(category, "*", "temporal-coupling data", "no temporal-coupling:* keys — not computed");
+  } else {
+    let totalPairs = 0;
+    let badTc = 0;
+    for (const key of tcKeys) {
+      const raw = await kvStore.get(key);
+      if (!raw) continue;
+      let parsed: unknown;
+      try { parsed = JSON.parse(raw); } catch { badTc++; continue; }
+      if (typeof parsed !== "object" || parsed === null ||
+          !Array.isArray((parsed as Record<string, unknown>)["pairs"])) {
+        badTc++;
+        continue;
+      }
+      totalPairs += ((parsed as Record<string, unknown>)["pairs"] as unknown[]).length;
+    }
+    if (badTc === 0) {
+      reporter.pass(category, "*", `temporal-coupling data valid (${totalPairs} pairs)`);
+    } else {
+      reporter.fail(category, "*", "temporal-coupling data valid",
+        `${badTc} keys missing pairs array`);
+    }
+  }
+
+  // ── 5. Debt summaries ─────────────────────────────────────
+  const debtSystemRaw = await kvStore.get("debt:system");
+  if (!debtSystemRaw) {
+    reporter.skip(category, "*", "debt:system exists", "not computed");
+  } else {
+    let debtSystemOk = false;
+    try {
+      const parsed = JSON.parse(debtSystemRaw) as Record<string, unknown>;
+      debtSystemOk = typeof parsed["totalMinutes"] === "number";
+    } catch { /* leave false */ }
+    if (debtSystemOk) {
+      reporter.pass(category, "*", "debt:system has numeric totalMinutes");
+    } else {
+      reporter.fail(category, "*", "debt:system has numeric totalMinutes", "field missing or non-numeric");
+    }
+
+    const allDebtKeys = await kvStore.keys("debt:");
+    const perRepoDebtKeys = allDebtKeys.filter((k) => k !== "debt:system");
+    if (perRepoDebtKeys.length > 0) {
+      reporter.pass(category, "*", `per-repo debt:* keys present (${perRepoDebtKeys.length})`);
+    } else {
+      reporter.fail(category, "*", "per-repo debt:* keys present", "no per-repo debt keys");
+    }
+  }
+
+  // ── 6. Blast radius data ──────────────────────────────────
+  const blastKeys = await kvStore.keys("sarif:blastRadius:");
+  if (blastKeys.length === 0) {
+    reporter.skip(category, "*", "blast radius data", "no sarif:blastRadius:* keys — not computed");
+  } else {
+    let badBlast = 0;
+    for (const key of blastKeys) {
+      const raw = await kvStore.get(key);
+      if (!raw) continue;
+      try {
+        const arr = JSON.parse(raw);
+        if (!Array.isArray(arr)) badBlast++;
+      } catch { badBlast++; }
+    }
+    if (badBlast === 0) {
+      reporter.pass(category, "*", `sarif:blastRadius:* parses as arrays (${blastKeys.length} repos)`);
+    } else {
+      reporter.fail(category, "*", "sarif:blastRadius:* parses as arrays",
+        `${badBlast} keys failed to parse as arrays`);
+    }
+
+    // Corresponding reachCounts:* should exist for the same repos
+    const blastRepos = blastKeys.map((k) => k.slice("sarif:blastRadius:".length));
+    let missingReach = 0;
+    for (const repo of blastRepos) {
+      const rc = await kvStore.get(`reachCounts:${repo}`);
+      if (!rc) missingReach++;
+    }
+    if (missingReach === 0) {
+      reporter.pass(category, "*", `reachCounts:* present for all blast-radius repos`);
+    } else {
+      reporter.fail(category, "*", "reachCounts:* present for all blast-radius repos",
+        `${missingReach} repos missing reachCounts`);
+    }
+  }
+
+  // ── 7. Cross-repo graph ───────────────────────────────────
+  const corrGraphRaw = await kvStore.get("correlation:graph");
+  if (!corrGraphRaw) {
+    reporter.skip(category, "*", "correlation:graph exists", "not found — single-repo or cross-repo disabled");
+  } else {
+    let edgeCount = 0;
+    let corrOk = false;
+    try {
+      const parsed = JSON.parse(corrGraphRaw) as Record<string, unknown>;
+      if (Array.isArray(parsed["edges"])) {
+        edgeCount = (parsed["edges"] as unknown[]).length;
+        corrOk = true;
+      }
+    } catch { /* leave false */ }
+    if (corrOk) {
+      reporter.pass(category, "*", `correlation:graph parses with edges array (${edgeCount} edges)`);
+    } else {
+      reporter.fail(category, "*", "correlation:graph parses with edges array",
+        "missing or non-array edges field");
+    }
+  }
+
+  // ── 8. Patterns per repo ──────────────────────────────────
+  const patternKeys = await kvStore.keys("patterns:");
+  if (patternKeys.length === 0) {
+    reporter.skip(category, "*", "patterns:* data", "no patterns:* keys — not computed");
+  } else {
+    let nonEmpty = 0;
+    for (const key of patternKeys) {
+      const raw = await kvStore.get(key);
+      if (!raw) continue;
+      try {
+        const parsed = JSON.parse(raw) as unknown;
+        if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) &&
+            Object.keys(parsed as object).length > 0) {
+          nonEmpty++;
+        } else if (Array.isArray(parsed) && (parsed as unknown[]).length > 0) {
+          nonEmpty++;
+        }
+      } catch { /* skip */ }
+    }
+    reporter.pass(category, "*", `patterns:* keys with non-empty results: ${nonEmpty} of ${patternKeys.length}`);
+  }
+
+  // ── 9. Graph store edges for repos ───────────────────────
+  const reposToCheck = repos.slice(0, 5);
+  let missingEdges = 0;
+  for (const repo of reposToCheck) {
+    const edges = await graphStore.getEdgesByKind("imports", repo, { limit: 1 });
+    if (edges.length === 0) missingEdges++;
+  }
+  if (missingEdges === 0) {
+    reporter.pass(category, "*", `graph store has import edges for sampled repos (${reposToCheck.length} checked)`);
+  } else {
+    reporter.fail(category, "*", "graph store has import edges for sampled repos",
+      `${missingEdges} of ${reposToCheck.length} repos have 0 import edges`);
+  }
+
+  // ── 10. Cross-consistency: metrics repos vs ATDI repos ───
+  const atdiKeys = await kvStore.keys("atdi:");
+  const atdiRepos = new Set(atdiKeys.map((k) => k.slice("atdi:".length)).filter((r) => r !== "system"));
+  if (atdiRepos.size === 0) {
+    reporter.skip(category, "*", "metrics/atdi repo cross-consistency", "ATDI not computed");
+  } else {
+    const metricsRepoSet = new Set(repos);
+    const onlyInMetrics = repos.filter((r) => !atdiRepos.has(r));
+    const onlyInAtdi = [...atdiRepos].filter((r) => !metricsRepoSet.has(r));
+    if (onlyInMetrics.length === 0 && onlyInAtdi.length === 0) {
+      reporter.pass(category, "*", `metrics and atdi repos match (${repos.length} repos)`);
+    } else {
+      reporter.fail(category, "*", "metrics and atdi repos match",
+        `only-in-metrics: [${onlyInMetrics.join(", ")}]; only-in-atdi: [${onlyInAtdi.join(", ")}]`);
+    }
+  }
+}
+
 // ─── Output formatting ────────────────────────────────────
 
 function formatTable(result: ValidateResult): string {
@@ -1659,6 +1882,7 @@ export async function validateCommand(opts: ValidateOptions): Promise<ValidateRe
   await checkSanityPatternRecall(opts.kvStore, opts.graphStore, reporter, sampleSize, rng, opts.mirrorsDir);
   await checkSanityFeatureFlagSource(opts.kvStore, opts.graphStore, reporter, sampleSize, rng, opts.mirrorsDir);
   await checkSanityCallGraphSource(opts.kvStore, opts.graphStore, reporter, sampleSize, rng, opts.mirrorsDir);
+  await checkSanityDashboard(opts.kvStore, opts.graphStore, reporter);
 
   const result = reporter.toJSON();
 
