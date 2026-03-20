@@ -1721,7 +1721,7 @@ export async function checkSanityDashboard(
       try {
         const parsed = JSON.parse(raw) as unknown;
         if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) &&
-            Object.keys(parsed as object).length > 0) {
+            Object.keys(parsed as Record<string, unknown>).length > 0) {
           nonEmpty++;
         } else if (Array.isArray(parsed) && (parsed as unknown[]).length > 0) {
           nonEmpty++;
