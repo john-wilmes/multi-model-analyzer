@@ -20,6 +20,7 @@ export interface PackageJsonInfo {
   readonly main?: string;
   readonly bin?: Record<string, string>;
   readonly dependencies: Record<string, string>;
+  readonly devDependencies?: Record<string, string>;
   readonly scripts: Record<string, string>;
 }
 

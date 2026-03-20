@@ -6,7 +6,7 @@ Static analysis toolchain for large TypeScript/JavaScript codebases. Extracts sy
 
 ## Architecture
 
-Monorepo with npm workspaces, 13 packages:
+Monorepo with npm workspaces, 15 packages:
 
 | Package | Purpose |
 |---------|---------|
@@ -17,7 +17,12 @@ Monorepo with npm workspaces, 13 packages:
 | `packages/heuristics` | Service inference, pattern detection, feature flags |
 | `packages/summarization` | 4-tier summary generation |
 | `packages/storage` | Graph, search (FTS5/BM25), KV stores (SQLite + in-memory) |
-| `packages/models/*` | Config (feature model), fault (fault trees), functional (service catalog) |
+| `packages/storage-kuzu` | Kuzu-backed graph, search, and KV stores |
+| `packages/correlation` | Cross-repo correlation and service grouping |
+| `packages/mcp` | MCP server exposing analysis tools to LLM agents |
+| `packages/models/config` | Feature model (config flag inventory) |
+| `packages/models/fault` | Fault trees (fault detection rules) |
+| `packages/models/functional` | Service catalog (functional service inference) |
 | `packages/diagnostics` | SARIF report generation |
 | `packages/query` | Natural language query routing |
 | `apps/cli` | CLI entry point (`mma index`, `mma query`, `mma practices`) |
@@ -26,7 +31,7 @@ Monorepo with npm workspaces, 13 packages:
 
 ```bash
 npm install                 # Install all workspace deps
-npm run build               # tsc --build (all 13 packages)
+npm run build               # tsc --build (all 15 packages)
 npm run build -w packages/parsing && npm run build:wasm -w packages/parsing
                             # Rebuild parsing + WASM grammars
 npx tsc --build --noEmit    # Type-check without emit
