@@ -187,7 +187,7 @@ export function detectInstabilityViolations(
     // Gate pain-zone notes on ca > 0: orphan files (ca=0, ce=0) satisfy
     // instability < 0.3 && abstractness < 0.3 but have no dependents, so
     // flagging them as "hard to change" is misleading — nobody depends on them.
-    if (m.zone === "pain" && m.ca > 0 && !isBarrelFile(m.module) && m.module.includes(":")) {
+    if (m.zone === "pain" && m.ca > 0 && !isBarrelFile(m.module) && m.module.startsWith(`${repo}:`)) {
       results.push({
         ruleId: "structural/pain-zone-module",
         level: "note",
@@ -205,7 +205,7 @@ export function detectInstabilityViolations(
           }],
         }],
       });
-    } else if (m.zone === "uselessness") {
+    } else if (m.zone === "uselessness" && m.module.startsWith(`${repo}:`)) {
       results.push({
         ruleId: "structural/uselessness-zone-module",
         level: "note",
@@ -253,7 +253,8 @@ export function summarizeRepoMetrics(
   const sumD = modules.reduce((s, m) => s + m.distance, 0);
 
   // Internal modules have repo:path format (makeFileId); external are bare package names
-  const isInternal = (m: ModuleMetrics) => m.module.includes(":");
+  // or node: builtins. Use startsWith(`${repo}:`) to distinguish precisely.
+  const isInternal = (m: ModuleMetrics) => m.module.startsWith(`${repo}:`);
 
   return {
     repo,

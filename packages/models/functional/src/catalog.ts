@@ -98,7 +98,7 @@ function inferApiSurface(
 
   const root = service.rootPath;
   for (const [entityId, summary] of summaries) {
-    if (entityId !== root && !entityId.startsWith(root + "/")) continue;
+    if (root !== "" && entityId !== root && !entityId.startsWith(root + "/")) continue;
 
     const name = entityId.split("#").pop() ?? "";
     if (

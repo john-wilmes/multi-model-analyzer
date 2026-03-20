@@ -114,6 +114,13 @@ export function tier1Summarize(
   sourceText: string,
 ): Summary[] {
   return symbols
-    .filter((s) => s.kind === "function" || s.kind === "method" || s.kind === "class")
+    .filter(
+      (s) =>
+        s.kind === "function" ||
+        s.kind === "method" ||
+        s.kind === "class" ||
+        s.kind === "interface" ||
+        s.kind === "enum",
+    )
     .map((s) => summarizeFromTemplate(s, filePath, sourceText));
 }

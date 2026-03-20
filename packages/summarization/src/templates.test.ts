@@ -100,7 +100,7 @@ describe("tier1Summarize", () => {
       sym("getUser", "function"),
       sym("User", "class", 5, 20),
       sym("save", "method", 10, 15, "User"),
-      sym("IUser", "interface"),      // skipped
+      sym("IUser", "interface"),      // included
       sym("MAX_RETRIES", "variable"), // skipped
     ];
     const source = [
@@ -118,8 +118,8 @@ describe("tier1Summarize", () => {
     ].join("\n");
 
     const summaries = tier1Summarize(symbols, "src/user.ts", source);
-    // function + class + method = 3 (skips interface and variable)
-    expect(summaries).toHaveLength(3);
+    // function + class + method + interface = 4 (skips variable)
+    expect(summaries).toHaveLength(4);
     expect(summaries.every((s) => s.tier === 1)).toBe(true);
   });
 
