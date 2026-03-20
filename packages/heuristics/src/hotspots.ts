@@ -76,6 +76,10 @@ export function computeHotspots(
     // Filter out non-source files (no symbols = config, docs, etc.)
     if (symbolCount === 0) continue;
 
+    // Filter out test/spec/e2e files — high churn on tests is expected and
+    // doesn't indicate a maintenance hotspot in production code.
+    if (isTestFile(filePath)) continue;
+
     entries.push({ filePath, churn, symbolCount });
 
     if (churn > maxChurn) maxChurn = churn;
@@ -105,4 +109,10 @@ export function computeHotspots(
     .slice(0, topN);
 
   return { hotspots, maxChurn, maxSymbolCount };
+}
+
+const TEST_FILE_RE = /(?:\.(?:test|spec|e2e)\.[jt]sx?$|[/\\](?:__tests__|__mocks__|test|tests|e2e)[/\\])/;
+
+function isTestFile(filePath: string): boolean {
+  return TEST_FILE_RE.test(filePath);
 }
