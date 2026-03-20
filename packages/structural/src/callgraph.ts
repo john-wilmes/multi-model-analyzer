@@ -241,8 +241,13 @@ function resolveCallTarget(
       return makeSymbolId(repo, filePath, `${enclosingClassName}.${property.text}`);
     }
 
-    // obj.method() -> "obj.method"
-    return `${object.text}.${property.text}`;
+    // obj.method() -> "obj.method" (only for simple identifiers)
+    // Skip complex expressions (new_expression, call chains, etc.) to avoid
+    // garbage targets like "new Foo().bar"
+    if (object.type === "identifier") {
+      return `${object.text}.${property.text}`;
+    }
+    return null;
   }
 
   // Skip other patterns (new_expression is not a call_expression,
