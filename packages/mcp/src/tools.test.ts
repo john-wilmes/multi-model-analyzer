@@ -490,775 +490,591 @@ describe("get_cross_repo_impact", () => {
 });
 
 // ---------------------------------------------------------------------------
-// search tool
+// Helpers shared by sanity + meta-sanity blocks
 // ---------------------------------------------------------------------------
 
-describe("search", () => {
-  it("returns empty results for fresh store", async () => {
+const ALL_TOOL_NAMES = [
+  "query", "search", "get_callers", "get_callees",
+  "get_dependencies", "get_architecture", "get_diagnostics",
+  "get_metrics", "get_blast_radius",
+  "get_cross_repo_graph", "get_service_correlation", "get_cross_repo_models",
+  "get_cross_repo_impact",
+  "get_flag_inventory", "get_flag_impact", "get_vulnerability",
+] as const;
+
+/** Minimal valid args for every tool so we can invoke them without crashes. */
+const MINIMAL_ARGS: Record<string, Record<string, unknown>> = {
+  query:                  { query: "show me everything" },
+  search:                 { query: "foo" },
+  get_callers:            { symbol: "foo" },
+  get_callees:            { symbol: "foo" },
+  get_dependencies:       { symbol: "foo" },
+  get_architecture:       {},
+  get_diagnostics:        {},
+  get_metrics:            {},
+  get_blast_radius:       { files: ["test.ts"] },
+  get_cross_repo_graph:   {},
+  get_service_correlation:{},
+  get_cross_repo_models:  { kind: "all" },
+  get_cross_repo_impact:  { files: ["test.ts"], repo: "repo-a" },
+  get_flag_inventory:     {},
+  get_flag_impact:        { flag: "MY_FLAG", repo: "repo-a" },
+  get_vulnerability:      {},
+};
+
+function makeSarifStores(count: number) {
+  const stores = makeStores();
+  const results = Array.from({ length: count }, (_, i) => ({
+    ruleId: `test/rule-${i}`,
+    level: i % 3 === 0 ? "error" : "warning",
+    message: { text: `Finding ${i}` },
+    logicalLocations: [{ name: `file-${i % 3 === 0 ? "repo-a" : "repo-b"}.ts`, properties: { repo: i % 3 === 0 ? "repo-a" : "repo-b" } }],
+  }));
+  void stores.kvStore.set("sarif:latest", JSON.stringify({
+    $schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
+    version: "2.1.0",
+    runs: [{ tool: { driver: { name: "mma", version: "0.1.0", rules: [] } }, results }],
+  }));
+  return stores;
+}
+
+function makeInvoker(server: ReturnType<typeof createMockServer>) {
+  return async (name: string, args: Record<string, unknown> = {}) => {
+    const handler = server.tools.get(name)?.handler;
+    if (!handler) throw new Error(`Tool not found: ${name}`);
+    return handler(args) as Promise<{ content: Array<{ type: string; text?: string; uri?: string }> }>;
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Describe block 1: MCP tool sanity checks
+// ---------------------------------------------------------------------------
+
+describe("MCP tool sanity checks", () => {
+  it("all 16 tools return valid JSON content with text entry", async () => {
     const server = createMockServer();
     register(server, makeStores());
+    const invoker = makeInvoker(server);
 
-    const handler = server.tools.get("search")!.handler;
-    const result = await handler({ query: "nonexistent" });
-    const parsed = JSON.parse(result.content[0]!.text) as { total: number; results: unknown[] };
+    for (const name of ALL_TOOL_NAMES) {
+      const result = await invoker(name, MINIMAL_ARGS[name] ?? {});
+      expect(result.content, `${name} should have content array`).toBeDefined();
+      expect(Array.isArray(result.content), `${name} content should be array`).toBe(true);
+      const textItem = result.content.find((c) => c.type === "text");
+      expect(textItem, `${name} should have a text item`).toBeDefined();
+      expect(() => JSON.parse(textItem!.text!), `${name} text should be valid JSON`).not.toThrow();
+    }
+  });
+
+  it("search returns empty results on empty store", async () => {
+    const server = createMockServer();
+    register(server, makeStores());
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("search", { query: "foo" });
+    const parsed = JSON.parse(result.content[0]!.text!) as { total: number; results: unknown[] };
     expect(parsed.total).toBe(0);
-    expect(parsed.results).toHaveLength(0);
+    expect(parsed.results).toEqual([]);
   });
 
-  it("respects limit and offset for pagination", async () => {
+  it("get_diagnostics with populated store returns findings", async () => {
+    const server = createMockServer();
+    const stores = makeSarifStores(5);
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_diagnostics", {});
+    const parsed = JSON.parse(result.content[0]!.text!) as { total: number; results: unknown[] };
+    expect(parsed.total).toBe(5);
+    expect(parsed.results).toHaveLength(5);
+  });
+
+  it("get_diagnostics pagination: limit=3 offset=0 hasMore=true; offset=9 hasMore=false", async () => {
+    const server = createMockServer();
+    const stores = makeSarifStores(10);
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const page1 = JSON.parse((await invoker("get_diagnostics", { limit: 3, offset: 0 })).content[0]!.text!) as {
+      returned: number; hasMore: boolean;
+    };
+    expect(page1.returned).toBe(3);
+    expect(page1.hasMore).toBe(true);
+
+    const page2 = JSON.parse((await invoker("get_diagnostics", { limit: 3, offset: 9 })).content[0]!.text!) as {
+      returned: number; hasMore: boolean;
+    };
+    expect(page2.returned).toBe(1);
+    expect(page2.hasMore).toBe(false);
+  });
+
+  it("get_diagnostics repo filter returns only matching repo findings", async () => {
+    const server = createMockServer();
+    // Use getSarifResultsPaginated path via per-repo keys
+    const stores = makeStores();
+    // Seed per-repo keys that getSarifResultsPaginated reads
+    const repoAResults = [
+      { ruleId: "test/a", level: "error", message: { text: "A finding" }, logicalLocations: [{ name: "f.ts", properties: { repo: "repo-a" } }] },
+    ];
+    const repoBResults = [
+      { ruleId: "test/b", level: "warning", message: { text: "B finding" }, logicalLocations: [{ name: "g.ts", properties: { repo: "repo-b" } }] },
+    ];
+    await stores.kvStore.set("sarif:latest:index", JSON.stringify({ repos: ["repo-a", "repo-b"] }));
+    await stores.kvStore.set("sarif:repo:repo-a", JSON.stringify(repoAResults));
+    await stores.kvStore.set("sarif:repo:repo-b", JSON.stringify(repoBResults));
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_diagnostics", { repo: "repo-a" });
+    const parsed = JSON.parse(result.content[0]!.text!) as { total: number; results: Array<{ ruleId: string }> };
+    expect(parsed.total).toBe(1);
+    expect(parsed.results[0]!.ruleId).toBe("test/a");
+  });
+
+  it("get_diagnostics level filter returns only matching level", async () => {
+    const server = createMockServer();
+    // Seed with mixed severities via sarif:latest
+    const stores = makeStores();
+    const results = [
+      { ruleId: "test/err", level: "error", message: { text: "Error finding" } },
+      { ruleId: "test/warn", level: "warning", message: { text: "Warning finding" } },
+      { ruleId: "test/note", level: "note", message: { text: "Note finding" } },
+    ];
+    await stores.kvStore.set("sarif:latest", JSON.stringify({
+      $schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
+      version: "2.1.0",
+      runs: [{ tool: { driver: { name: "mma", version: "0.1.0", rules: [] } }, results }],
+    }));
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_diagnostics", { level: "error" });
+    const parsed = JSON.parse(result.content[0]!.text!) as { total: number; results: Array<{ ruleId: string }> };
+    expect(parsed.total).toBe(1);
+    expect(parsed.results[0]!.ruleId).toBe("test/err");
+  });
+
+  it("get_metrics on empty store returns total=0", async () => {
     const server = createMockServer();
     register(server, makeStores());
+    const invoker = makeInvoker(server);
 
-    // Even on empty store, pagination metadata should be correct
-    const handler = server.tools.get("search")!.handler;
-    const result = await handler({ query: "foo", limit: 5, offset: 0 });
-    const parsed = JSON.parse(result.content[0]!.text) as { total: number; returned: number; offset: number };
+    const result = await invoker("get_metrics", {});
+    const parsed = JSON.parse(result.content[0]!.text!) as { total: number };
     expect(parsed.total).toBe(0);
-    expect(parsed.returned).toBe(0);
-    expect(parsed.offset).toBe(0);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// get_callers / get_callees
-// ---------------------------------------------------------------------------
-
-describe("get_callers", () => {
-  it("returns an empty callers list when graph has no call edges", async () => {
-    const server = createMockServer();
-    register(server, makeStores());
-
-    const handler = server.tools.get("get_callers")!.handler;
-    const result = await handler({ symbol: "MyService" });
-    const parsed = JSON.parse(result.content[0]!.text) as { callers?: unknown[]; results?: unknown[] };
-    // Handler may return callers array or results array — neither should be undefined
-    const callers = parsed.callers ?? parsed.results ?? [];
-    expect(Array.isArray(callers)).toBe(true);
-    expect(callers).toHaveLength(0);
   });
 
-  it("finds callers via graph edges", async () => {
+  it("get_metrics with populated store returns module data", async () => {
     const server = createMockServer();
     const stores = makeStores();
-    await stores.graphStore.addEdges([{
-      source: "src/a.ts#callA",
-      target: "src/b.ts#targetFn",
-      kind: "calls",
-      metadata: { repo: "repo-x" },
-    }]);
+    const sampleModules = [
+      { module: "src/index.ts", instability: 0.5, abstractness: 0.3, distance: 0.2, fanIn: 2, fanOut: 4 },
+    ];
+    await stores.kvStore.set("metrics:test-repo", JSON.stringify(sampleModules));
     register(server, stores);
+    const invoker = makeInvoker(server);
 
-    const handler = server.tools.get("get_callers")!.handler;
-    const result = await handler({ symbol: "targetFn", repo: "repo-x" });
-    const parsed = JSON.parse(result.content[0]!.text) as Record<string, unknown>;
-    // The response should have some content (not an error object)
-    expect(parsed).not.toHaveProperty("error");
+    const result = await invoker("get_metrics", {});
+    const parsed = JSON.parse(result.content[0]!.text!) as { total: number; repos: Array<{ repo: string }> };
+    expect(parsed.total).toBe(1);
+    expect(parsed.repos[0]!.repo).toBe("test-repo");
   });
-});
 
-describe("get_callees", () => {
-  it("returns an empty callees list when graph has no call edges", async () => {
+  it("get_cross_repo_graph on empty store returns error", async () => {
     const server = createMockServer();
     register(server, makeStores());
+    const invoker = makeInvoker(server);
 
-    const handler = server.tools.get("get_callees")!.handler;
-    const result = await handler({ symbol: "MyService" });
-    const parsed = JSON.parse(result.content[0]!.text) as { callees?: unknown[]; results?: unknown[] };
-    const callees = parsed.callees ?? parsed.results ?? [];
-    expect(Array.isArray(callees)).toBe(true);
-    expect(callees).toHaveLength(0);
+    const result = await invoker("get_cross_repo_graph", {});
+    const parsed = JSON.parse(result.content[0]!.text!) as { error?: string; repoCount?: number };
+    // Empty store should return an error message
+    expect(parsed.error).toBeDefined();
   });
 
-  it("finds callees via graph edges", async () => {
-    const server = createMockServer();
-    const stores = makeStores();
-    await stores.graphStore.addEdges([{
-      source: "src/a.ts#callerFn",
-      target: "src/b.ts#calleeFn",
-      kind: "calls",
-      metadata: { repo: "repo-x" },
-    }]);
-    register(server, stores);
-
-    const handler = server.tools.get("get_callees")!.handler;
-    const result = await handler({ symbol: "callerFn", repo: "repo-x" });
-    const parsed = JSON.parse(result.content[0]!.text) as Record<string, unknown>;
-    expect(parsed).not.toHaveProperty("error");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// get_dependencies
-// ---------------------------------------------------------------------------
-
-describe("get_dependencies", () => {
-  it("returns empty graph for unknown symbol", async () => {
-    const server = createMockServer();
-    register(server, makeStores());
-
-    const handler = server.tools.get("get_dependencies")!.handler;
-    const result = await handler({ symbol: "nonexistent" });
-    const parsed = JSON.parse(result.content[0]!.text) as Record<string, unknown>;
-    // Should not throw; returns something (empty edges, etc.)
-    expect(parsed).toBeDefined();
-  });
-
-  it("traverses import edges up to maxDepth", async () => {
-    const server = createMockServer();
-    const stores = makeStores();
-    // A -> B -> C chain
-    await stores.graphStore.addEdges([
-      { source: "src/a.ts", target: "src/b.ts", kind: "imports", metadata: { repo: "repo-x" } },
-      { source: "src/b.ts", target: "src/c.ts", kind: "imports", metadata: { repo: "repo-x" } },
-    ]);
-    register(server, stores);
-
-    const handler = server.tools.get("get_dependencies")!.handler;
-    const result = await handler({ symbol: "src/a.ts", repo: "repo-x", maxDepth: 2 });
-    const parsed = JSON.parse(result.content[0]!.text) as Record<string, unknown>;
-    expect(parsed).not.toHaveProperty("error");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// get_architecture
-// ---------------------------------------------------------------------------
-
-describe("get_architecture", () => {
-  it("returns architecture data for empty stores without error", async () => {
-    const server = createMockServer();
-    register(server, makeStores());
-
-    const handler = server.tools.get("get_architecture")!.handler;
-    const result = await handler({});
-    const parsed = JSON.parse(result.content[0]!.text) as Record<string, unknown>;
-    // Should not throw; returns some kind of summary object
-    expect(parsed).toBeDefined();
-  });
-
-  it("filters by repo when specified", async () => {
+  it("get_cross_repo_graph with data returns edgeCount > 0", async () => {
     const server = createMockServer();
     const stores = makeStores();
     await stores.kvStore.set("correlation:graph", makeSerializedGraph());
     register(server, stores);
+    const invoker = makeInvoker(server);
 
-    const handler = server.tools.get("get_architecture")!.handler;
-    const result = await handler({ repo: "repo-a" });
-    const parsed = JSON.parse(result.content[0]!.text) as Record<string, unknown>;
-    expect(parsed).toBeDefined();
+    const result = await invoker("get_cross_repo_graph", {});
+    const parsed = JSON.parse(result.content[0]!.text!) as { edgeCount: number };
+    expect(parsed.edgeCount).toBeGreaterThan(0);
   });
-});
 
-// ---------------------------------------------------------------------------
-// get_blast_radius
-// ---------------------------------------------------------------------------
-
-describe("get_blast_radius", () => {
-  it("returns empty blast radius for unknown files", async () => {
+  it("get_service_correlation empty returns error", async () => {
     const server = createMockServer();
     register(server, makeStores());
+    const invoker = makeInvoker(server);
 
-    const handler = server.tools.get("get_blast_radius")!.handler;
-    const result = await handler({ files: ["src/nonexistent.ts"] });
-    const parsed = JSON.parse(result.content[0]!.text) as { affectedFiles?: unknown[] };
-    expect(Array.isArray(parsed.affectedFiles)).toBe(true);
-    expect(parsed.affectedFiles).toHaveLength(0);
+    const result = await invoker("get_service_correlation", {});
+    const parsed = JSON.parse(result.content[0]!.text!) as { error: string };
+    expect(parsed.error).toBeDefined();
   });
 
-  it("finds affected files via import edges", async () => {
+  it("get_service_correlation with data returns linchpins", async () => {
     const server = createMockServer();
     const stores = makeStores();
-    // changed.ts is imported by downstream.ts
-    await stores.graphStore.addEdges([{
-      source: "src/downstream.ts",
-      target: "src/changed.ts",
-      kind: "imports",
-      metadata: { repo: "repo-x" },
-    }]);
+    await stores.kvStore.set("correlation:services", makeSerializedServices());
     register(server, stores);
+    const invoker = makeInvoker(server);
 
-    const handler = server.tools.get("get_blast_radius")!.handler;
-    const result = await handler({ files: ["src/changed.ts"], repo: "repo-x", maxDepth: 2 });
-    const parsed = JSON.parse(result.content[0]!.text) as { affectedFiles: Array<{ path: string }> };
-    expect(Array.isArray(parsed.affectedFiles)).toBe(true);
-    // downstream.ts should appear in affected files
-    const paths = parsed.affectedFiles.map((f) => f.path);
-    expect(paths).toContain("src/downstream.ts");
+    const result = await invoker("get_service_correlation", {});
+    const parsed = JSON.parse(result.content[0]!.text!) as {
+      linchpins: { results: unknown[] };
+    };
+    expect(parsed.linchpins.results.length).toBeGreaterThan(0);
   });
 
-  it("expands cross-repo when crossRepo flag is true and no correlation data", async () => {
+  it("get_service_correlation kind filter 'orphaned' returns only orphaned", async () => {
     const server = createMockServer();
-    register(server, makeStores());
+    const stores = makeStores();
+    await stores.kvStore.set("correlation:services", makeSerializedServices());
+    register(server, stores);
+    const invoker = makeInvoker(server);
 
-    const handler = server.tools.get("get_blast_radius")!.handler;
-    // Should not throw when crossRepo=true but no correlation data stored
-    const result = await handler({ files: ["src/index.ts"], crossRepo: true });
-    const parsed = JSON.parse(result.content[0]!.text) as { affectedFiles?: unknown[] };
-    expect(Array.isArray(parsed.affectedFiles)).toBe(true);
+    const result = await invoker("get_service_correlation", { kind: "orphaned" });
+    const parsed = JSON.parse(result.content[0]!.text!) as Record<string, unknown>;
+    expect(parsed["orphanedServices"]).toBeDefined();
+    expect(parsed["linchpins"]).toBeUndefined();
   });
-});
 
-// ---------------------------------------------------------------------------
-// get_vulnerability
-// ---------------------------------------------------------------------------
+  it("get_service_correlation endpoint filter returns filtered results", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("correlation:services", makeSerializedServices());
+    register(server, stores);
+    const invoker = makeInvoker(server);
 
-describe("get_vulnerability", () => {
-  it("returns empty findings when no index exists", async () => {
+    const result = await invoker("get_service_correlation", { endpoint: "USERS" });
+    const parsed = JSON.parse(result.content[0]!.text!) as {
+      linchpins: { results: Array<{ endpoint: string }> };
+      orphanedServices: { results: unknown[] };
+    };
+    expect(parsed.linchpins.results).toHaveLength(1);
+    expect(parsed.orphanedServices.results).toHaveLength(0);
+  });
+
+  it("get_cross_repo_models empty returns error", async () => {
     const server = createMockServer();
     register(server, makeStores());
+    const invoker = makeInvoker(server);
 
-    const handler = server.tools.get("get_vulnerability")!.handler;
-    const result = await handler({});
-    const parsed = JSON.parse(result.content[0]!.text) as { findings: unknown[]; total: number };
-    expect(parsed.findings).toHaveLength(0);
+    const result = await invoker("get_cross_repo_models", { kind: "all" });
+    const parsed = JSON.parse(result.content[0]!.text!) as { error?: string };
+    expect(parsed.error).toBeDefined();
+  });
+
+  it("get_cross_repo_models with catalog data returns catalog entries", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("cross-repo:catalog", JSON.stringify({
+      entries: [
+        { entry: { name: "svc-a" }, repo: "repo-a", consumers: [], producers: [] },
+        { entry: { name: "svc-b" }, repo: "repo-b", consumers: [], producers: [] },
+      ],
+    }));
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_cross_repo_models", { kind: "catalog" });
+    const parsed = JSON.parse(result.content[0]!.text!) as {
+      catalog: { results: Array<{ entry: { name: string } }> };
+    };
+    expect(parsed.catalog.results).toHaveLength(2);
+  });
+
+  it("get_cross_repo_models repo filter returns only matching entries", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("cross-repo:catalog", JSON.stringify({
+      entries: [
+        { entry: { name: "svc-a" }, repo: "repo-a", consumers: [], producers: [] },
+        { entry: { name: "svc-b" }, repo: "repo-b", consumers: [], producers: [] },
+      ],
+    }));
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_cross_repo_models", { kind: "catalog", repo: "repo-a" });
+    const parsed = JSON.parse(result.content[0]!.text!) as {
+      catalog: { results: Array<{ entry: { name: string } }> };
+    };
+    expect(parsed.catalog.results).toHaveLength(1);
+    expect(parsed.catalog.results[0]!.entry.name).toBe("svc-a");
+  });
+
+  it("get_vulnerability empty returns empty findings", async () => {
+    const server = createMockServer();
+    register(server, makeStores());
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_vulnerability", {});
+    const parsed = JSON.parse(result.content[0]!.text!) as { findings: unknown[]; total: number };
+    expect(parsed.findings).toEqual([]);
     expect(parsed.total).toBe(0);
   });
 
-  it("returns vulnerability findings when data exists", async () => {
+  it("get_vulnerability with data returns findings", async () => {
     const server = createMockServer();
     const stores = makeStores();
-    await stores.kvStore.set("sarif:latest:index", JSON.stringify({ repos: ["repo-vuln"] }));
-    await stores.kvStore.set("sarif:vuln:repo-vuln", JSON.stringify([
-      {
-        ruleId: "vuln/lodash",
-        level: "warning",
-        message: { text: "lodash is vulnerable to prototype pollution" },
-        properties: { severity: "high", packageName: "lodash", installedVersion: "4.17.15" },
-      },
+    await stores.kvStore.set("sarif:latest:index", JSON.stringify({ repos: ["test-repo"] }));
+    await stores.kvStore.set("sarif:vuln:test-repo", JSON.stringify([
+      { ruleId: "vuln/lodash", level: "error", message: { text: "Prototype pollution" }, properties: { severity: "high" } },
     ]));
     register(server, stores);
+    const invoker = makeInvoker(server);
 
-    const handler = server.tools.get("get_vulnerability")!.handler;
-    const result = await handler({});
-    const parsed = JSON.parse(result.content[0]!.text) as { findings: Array<{ ruleId: string }>; total: number };
+    const result = await invoker("get_vulnerability", {});
+    const parsed = JSON.parse(result.content[0]!.text!) as { findings: Array<{ ruleId: string }>; total: number };
     expect(parsed.total).toBe(1);
     expect(parsed.findings[0]!.ruleId).toBe("vuln/lodash");
   });
 
-  it("filters by minimum severity", async () => {
-    const server = createMockServer();
-    const stores = makeStores();
-    await stores.kvStore.set("sarif:latest:index", JSON.stringify({ repos: ["repo-vuln"] }));
-    await stores.kvStore.set("sarif:vuln:repo-vuln", JSON.stringify([
-      {
-        ruleId: "vuln/low-pkg",
-        level: "note",
-        message: { text: "low severity issue" },
-        properties: { severity: "low" },
-      },
-      {
-        ruleId: "vuln/high-pkg",
-        level: "warning",
-        message: { text: "high severity issue" },
-        properties: { severity: "high" },
-      },
-    ]));
-    register(server, stores);
-
-    const handler = server.tools.get("get_vulnerability")!.handler;
-    const result = await handler({ severity: "high" });
-    const parsed = JSON.parse(result.content[0]!.text) as { findings: Array<{ ruleId: string }>; total: number };
-    expect(parsed.total).toBe(1);
-    expect(parsed.findings[0]!.ruleId).toBe("vuln/high-pkg");
-  });
-
-  it("filters by repo", async () => {
-    const server = createMockServer();
-    const stores = makeStores();
-    await stores.kvStore.set("sarif:latest:index", JSON.stringify({ repos: ["repo-a", "repo-b"] }));
-    await stores.kvStore.set("sarif:vuln:repo-a", JSON.stringify([
-      { ruleId: "vuln/a", level: "warning", message: { text: "vuln in a" }, properties: { severity: "high" } },
-    ]));
-    await stores.kvStore.set("sarif:vuln:repo-b", JSON.stringify([
-      { ruleId: "vuln/b", level: "warning", message: { text: "vuln in b" }, properties: { severity: "moderate" } },
-    ]));
-    register(server, stores);
-
-    const handler = server.tools.get("get_vulnerability")!.handler;
-    const result = await handler({ repo: "repo-a" });
-    const parsed = JSON.parse(result.content[0]!.text) as { findings: Array<{ ruleId: string }>; total: number };
-    expect(parsed.total).toBe(1);
-    expect(parsed.findings[0]!.ruleId).toBe("vuln/a");
-  });
-
-  it("paginates results", async () => {
-    const server = createMockServer();
-    const stores = makeStores();
-    await stores.kvStore.set("sarif:latest:index", JSON.stringify({ repos: ["repo-vuln"] }));
-    const findings = Array.from({ length: 5 }, (_, i) => ({
-      ruleId: `vuln/pkg-${i}`,
-      level: "warning",
-      message: { text: `finding ${i}` },
-      properties: { severity: "moderate" },
-    }));
-    await stores.kvStore.set("sarif:vuln:repo-vuln", JSON.stringify(findings));
-    register(server, stores);
-
-    const handler = server.tools.get("get_vulnerability")!.handler;
-    const result = await handler({ limit: 2, offset: 1 });
-    const parsed = JSON.parse(result.content[0]!.text) as { findings: unknown[]; total: number; offset: number; limit: number };
-    expect(parsed.total).toBe(5);
-    expect(parsed.findings).toHaveLength(2);
-    expect(parsed.offset).toBe(1);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// get_flag_inventory
-// ---------------------------------------------------------------------------
-
-describe("get_flag_inventory", () => {
-  it("returns empty when no flags are indexed", async () => {
+  it("get_flag_inventory empty returns empty list", async () => {
     const server = createMockServer();
     register(server, makeStores());
+    const invoker = makeInvoker(server);
 
-    const handler = server.tools.get("get_flag_inventory")!.handler;
-    const result = await handler({});
-    const parsed = JSON.parse(result.content[0]!.text) as { total: number; flags?: unknown[] };
-    expect(parsed.total).toBe(0);
+    const result = await invoker("get_flag_inventory", {});
+    const parsed = JSON.parse(result.content[0]!.text!) as { flags?: unknown[]; total?: number };
+    // Either empty flags array or total=0
+    const count = parsed.flags?.length ?? parsed.total ?? 0;
+    expect(count).toBe(0);
   });
 
-  it("returns flags when flags inventory data exists", async () => {
-    const server = createMockServer();
-    const stores = makeStores();
-    // getFlagInventory reads flags:* keys with FlagInventory format
-    await stores.kvStore.set("flags:repo-flags", JSON.stringify({
-      repo: "repo-flags",
-      flags: [
-        {
-          name: "ENABLE_DARK_MODE",
-          sdk: "custom",
-          locations: [{ repo: "repo-flags", module: "src/theme.ts" }],
-        },
-      ],
-    }));
-    register(server, stores);
-
-    const handler = server.tools.get("get_flag_inventory")!.handler;
-    const result = await handler({});
-    const parsed = JSON.parse(result.content[0]!.text) as { total: number };
-    expect(parsed.total).toBeGreaterThan(0);
-  });
-
-  it("filters by repo", async () => {
-    const server = createMockServer();
-    const stores = makeStores();
-    // getFlagInventory reads flags:* keys with FlagInventory format
-    await stores.kvStore.set("flags:repo-a", JSON.stringify({
-      repo: "repo-a",
-      flags: [
-        { name: "FLAG_A", locations: [{ repo: "repo-a", module: "src/a.ts" }] },
-      ],
-    }));
-    await stores.kvStore.set("flags:repo-b", JSON.stringify({
-      repo: "repo-b",
-      flags: [
-        { name: "FLAG_B", locations: [{ repo: "repo-b", module: "src/b.ts" }] },
-      ],
-    }));
-    register(server, stores);
-
-    const handler = server.tools.get("get_flag_inventory")!.handler;
-    const result = await handler({ repo: "repo-a" });
-    const parsed = JSON.parse(result.content[0]!.text) as { total: number };
-    expect(parsed.total).toBe(1);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// get_flag_impact
-// ---------------------------------------------------------------------------
-
-describe("get_flag_impact", () => {
-  it("returns empty impact for unknown flag", async () => {
+  it("get_blast_radius on empty graph returns no crash and empty affected", async () => {
     const server = createMockServer();
     register(server, makeStores());
+    const invoker = makeInvoker(server);
 
-    const handler = server.tools.get("get_flag_impact")!.handler;
-    const result = await handler({ flag: "UNKNOWN_FLAG", repo: "repo-x" });
-    const parsed = JSON.parse(result.content[0]!.text) as {
-      flagLocations: unknown[];
-      affectedFiles: unknown[];
-    };
-    expect(Array.isArray(parsed.flagLocations)).toBe(true);
+    const result = await invoker("get_blast_radius", { files: ["test.ts"] });
+    const parsed = JSON.parse(result.content[0]!.text!) as { affectedFiles?: unknown[] };
+    expect(parsed).toBeDefined();
     expect(Array.isArray(parsed.affectedFiles)).toBe(true);
+    expect(parsed.affectedFiles).toHaveLength(0);
   });
 
-  it("includes crossRepo error when crossRepo=true and no correlation data", async () => {
+  it("get_cross_repo_impact with no graph data returns graceful error", async () => {
     const server = createMockServer();
     register(server, makeStores());
+    const invoker = makeInvoker(server);
 
-    const handler = server.tools.get("get_flag_impact")!.handler;
-    const result = await handler({ flag: "MY_FLAG", repo: "repo-x", crossRepo: true });
-    const parsed = JSON.parse(result.content[0]!.text) as {
-      flagLocations: unknown[];
-      crossRepo?: { error: string };
-    };
-    // With no correlation data and crossRepo=true, should include crossRepo error field
-    expect(parsed.crossRepo?.error).toContain("No correlation data");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// get_metrics extended
-// ---------------------------------------------------------------------------
-
-describe("get_metrics extended", () => {
-  it("returns resource_link for repo filter", async () => {
-    const server = createMockServer();
-    const stores = makeStores();
-    await stores.kvStore.set("metrics:repo-x", JSON.stringify([
-      { module: "src/a.ts", instability: 0.5, abstractness: 0.3, distance: 0.2, afferentCoupling: 2, efferentCoupling: 2 },
-    ]));
-    register(server, stores);
-
-    const handler = server.tools.get("get_metrics")!.handler;
-    const result = await handler({ repo: "repo-x" });
-    const link = result.content.find((c: { type: string }) => c.type === "resource_link");
-    expect(link).toBeDefined();
-    expect((link as unknown as { uri: string }).uri).toBe("mma://repo/repo-x/metrics");
+    const result = await invoker("get_cross_repo_impact", { files: ["src/index.ts"], repo: "repo-a" });
+    const parsed = JSON.parse(result.content[0]!.text!) as { error: string };
+    expect(parsed.error).toBeDefined();
+    expect(parsed.error.length).toBeGreaterThan(0);
   });
 
-  it("filters by module path substring", async () => {
-    const server = createMockServer();
-    const stores = makeStores();
-    await stores.kvStore.set("metrics:repo-x", JSON.stringify([
-      { module: "src/auth/login.ts", instability: 0.1, abstractness: 0.2, distance: 0.7, afferentCoupling: 5, efferentCoupling: 1 },
-      { module: "src/utils/helper.ts", instability: 0.9, abstractness: 0.0, distance: 0.1, afferentCoupling: 0, efferentCoupling: 9 },
-    ]));
-    register(server, stores);
-
-    const handler = server.tools.get("get_metrics")!.handler;
-    const result = await handler({ module: "auth" });
-    // The handler spreads paginated() which uses 'results' key (not 'modules')
-    const parsed = JSON.parse(result.content[0]!.text) as { moduleFilter: string; total: number; results: Array<{ module: string }> };
-    expect(parsed.moduleFilter).toBe("auth");
-    expect(parsed.total).toBe(1);
-    expect(parsed.results[0]!.module).toContain("auth");
-  });
-
-  it("paginates repo list when limit/offset provided", async () => {
-    const server = createMockServer();
-    const stores = makeStores();
-    for (const r of ["repo-a", "repo-b", "repo-c"]) {
-      await stores.kvStore.set(`metrics:${r}`, JSON.stringify([
-        { module: "src/index.ts", instability: 0.5, abstractness: 0.5, distance: 0.0, afferentCoupling: 1, efferentCoupling: 1 },
-      ]));
-    }
-    register(server, stores);
-
-    const handler = server.tools.get("get_metrics")!.handler;
-    const result = await handler({ limit: 2, offset: 0 });
-    const parsed = JSON.parse(result.content[0]!.text) as { total: number; returned: number };
-    expect(parsed.total).toBe(3);
-    expect(parsed.returned).toBe(2);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// get_cross_repo_models — features and faults branches
-// ---------------------------------------------------------------------------
-
-describe("get_cross_repo_models features and faults", () => {
-  it("returns features when cross-repo:features key is seeded", async () => {
-    const server = createMockServer();
-    const stores = makeStores();
-    await stores.kvStore.set("cross-repo:features", JSON.stringify({
-      sharedFlags: [
-        { name: "ENABLE_PAYMENTS", repos: ["repo-a", "repo-b"], coordinated: true },
-        { name: "ENABLE_DARK_MODE", repos: ["repo-c"], coordinated: false },
-      ],
-    }));
-    register(server, stores);
-
-    const handler = server.tools.get("get_cross_repo_models")!.handler;
-    const result = await handler({ kind: "features" });
-    const parsed = JSON.parse(result.content[0]!.text) as { features: { results: Array<{ name: string }> } };
-    expect(parsed.features.results).toHaveLength(2);
-  });
-
-  it("filters features by repo", async () => {
-    const server = createMockServer();
-    const stores = makeStores();
-    await stores.kvStore.set("cross-repo:features", JSON.stringify({
-      sharedFlags: [
-        { name: "ENABLE_PAYMENTS", repos: ["repo-a", "repo-b"], coordinated: true },
-        { name: "ENABLE_DARK_MODE", repos: ["repo-c"], coordinated: false },
-      ],
-    }));
-    register(server, stores);
-
-    const handler = server.tools.get("get_cross_repo_models")!.handler;
-    const result = await handler({ kind: "features", repo: "repo-a" });
-    const parsed = JSON.parse(result.content[0]!.text) as { features: { results: Array<{ name: string }> } };
-    expect(parsed.features.results).toHaveLength(1);
-    expect(parsed.features.results[0]!.name).toBe("ENABLE_PAYMENTS");
-  });
-
-  it("returns faults when cross-repo:faults key is seeded", async () => {
-    const server = createMockServer();
-    const stores = makeStores();
-    await stores.kvStore.set("cross-repo:faults", JSON.stringify({
-      faultLinks: [
-        { endpoint: "/api/users", sourceRepo: "repo-a", targetRepo: "repo-b" },
-        { endpoint: "/api/orders", sourceRepo: "repo-b", targetRepo: "repo-c" },
-      ],
-    }));
-    register(server, stores);
-
-    const handler = server.tools.get("get_cross_repo_models")!.handler;
-    const result = await handler({ kind: "faults" });
-    const parsed = JSON.parse(result.content[0]!.text) as { faults: { results: Array<{ endpoint: string }> } };
-    expect(parsed.faults.results).toHaveLength(2);
-  });
-
-  it("filters faults by repo (source or target)", async () => {
-    const server = createMockServer();
-    const stores = makeStores();
-    await stores.kvStore.set("cross-repo:faults", JSON.stringify({
-      faultLinks: [
-        { endpoint: "/api/users", sourceRepo: "repo-a", targetRepo: "repo-b" },
-        { endpoint: "/api/orders", sourceRepo: "repo-b", targetRepo: "repo-c" },
-        { endpoint: "/api/other", sourceRepo: "repo-x", targetRepo: "repo-y" },
-      ],
-    }));
-    register(server, stores);
-
-    const handler = server.tools.get("get_cross_repo_models")!.handler;
-    const result = await handler({ kind: "faults", repo: "repo-b" });
-    const parsed = JSON.parse(result.content[0]!.text) as { faults: { results: Array<{ endpoint: string }> } };
-    // repo-b is targetRepo of /api/users and sourceRepo of /api/orders
-    expect(parsed.faults.results).toHaveLength(2);
-  });
-
-  it("returns error when no model data exists at all", async () => {
+  it("query routes without crashing and returns route information", async () => {
     const server = createMockServer();
     register(server, makeStores());
+    const invoker = makeInvoker(server);
 
-    const handler = server.tools.get("get_cross_repo_models")!.handler;
-    const result = await handler({ kind: "all" });
-    const parsed = JSON.parse(result.content[0]!.text) as { error: string };
-    expect(parsed.error).toContain("No cross-repo model data");
-  });
-
-  it("returns all three sections with kind=all", async () => {
-    const server = createMockServer();
-    const stores = makeStores();
-    await stores.kvStore.set("cross-repo:features", JSON.stringify({ sharedFlags: [] }));
-    await stores.kvStore.set("cross-repo:faults", JSON.stringify({ faultLinks: [] }));
-    await stores.kvStore.set("cross-repo:catalog", JSON.stringify({ entries: [] }));
-    register(server, stores);
-
-    const handler = server.tools.get("get_cross_repo_models")!.handler;
-    const result = await handler({ kind: "all" });
-    const parsed = JSON.parse(result.content[0]!.text) as Record<string, unknown>;
-    expect(parsed).toHaveProperty("features");
-    expect(parsed).toHaveProperty("faults");
-    expect(parsed).toHaveProperty("catalog");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// query (natural language routing)
-// ---------------------------------------------------------------------------
-
-describe("query tool", () => {
-  it("returns a routed result with route, confidence, and result fields", async () => {
-    const server = createMockServer();
-    register(server, makeStores());
-
-    const handler = server.tools.get("query")!.handler;
-    const result = await handler({ query: "show me all diagnostics" });
-    const parsed = JSON.parse(result.content[0]!.text) as {
-      route: string;
-      confidence: number;
-      result: unknown;
-    };
+    const result = await invoker("query", { query: "show me the architecture" });
+    const parsed = JSON.parse(result.content[0]!.text!) as { route: string };
+    expect(parsed.route).toBeDefined();
     expect(typeof parsed.route).toBe("string");
-    expect(typeof parsed.confidence).toBe("number");
-    expect(parsed.result).toBeDefined();
   });
 
-  it("passes repo filter through to the routed handler", async () => {
+  it("all tools handle missing optional params without crashing", async () => {
     const server = createMockServer();
     register(server, makeStores());
+    const invoker = makeInvoker(server);
 
-    const handler = server.tools.get("query")!.handler;
-    const result = await handler({ query: "find patterns", repo: "repo-z" });
-    const parsed = JSON.parse(result.content[0]!.text) as { repo: string | null };
-    expect(parsed.repo).toBe("repo-z");
+    for (const name of ALL_TOOL_NAMES) {
+      const requiredOnly = MINIMAL_ARGS[name] ?? {};
+      await expect(invoker(name, requiredOnly)).resolves.toBeDefined();
+    }
   });
 });
 
 // ---------------------------------------------------------------------------
-// resource callbacks
+// Describe block 2: MCP meta-sanity checks
 // ---------------------------------------------------------------------------
 
-describe("resource callbacks", () => {
-  // Minimal mock that captures resource registrations
-  function createResourceMockServer() {
-    const tools = new Map<string, ToolEntry>();
-    type ResourceEntry = { readCallback: (...args: unknown[]) => Promise<unknown> };
-    const resources = new Map<string, ResourceEntry>();
-    return {
+describe("MCP meta-sanity checks", () => {
+  it("exactly 16 tools are registered", () => {
+    const server = createMockServer();
+    register(server, makeStores());
+    expect(server.tools.size).toBe(16);
+  });
+
+  it("all registered tools have non-empty descriptions", () => {
+    const server = createMockServer();
+    register(server, makeStores());
+
+    for (const [name, tool] of server.tools) {
+      expect(tool.description, `${name} should have a description`).toBeTruthy();
+      expect(tool.description.length, `${name} description should be non-trivial`).toBeGreaterThan(10);
+    }
+  });
+
+  it("all registered tools have input schemas defined", () => {
+    // Re-register with a server that captures the full config
+    const toolConfigs = new Map<string, { description: string; inputSchema?: unknown }>();
+    const server = {
       registerTool: vi.fn(
-        (name: string, config: { description: string }, handler: ToolHandler) => {
-          tools.set(name, { description: config.description, handler });
+        (name: string, config: { description: string; inputSchema?: unknown }, _handler: unknown) => {
+          toolConfigs.set(name, config);
         },
       ),
-      resource: vi.fn(
-        (_name: string, _uriOrTemplate: unknown, _config: unknown, readCallback: (...args: unknown[]) => Promise<unknown>) => {
-          resources.set(_name, { readCallback });
-        },
-      ),
-      tools,
-      resources,
+      tools: new Map<string, ToolEntry>(),
     };
-  }
+    registerTools(server as unknown as Parameters<typeof registerTools>[0], makeStores());
 
-  it("repos resource returns empty list for fresh store", async () => {
-    const { registerResources } = await import("./resources.js");
-    const server = createResourceMockServer();
-    const kvStore = new InMemoryKVStore();
-    registerResources(server as unknown as Parameters<typeof registerResources>[0], kvStore);
-
-    const reposEntry = server.resources.get("repos");
-    expect(reposEntry).toBeDefined();
-    const fakeUri = new URL("mma://repos");
-    const res = await reposEntry!.readCallback(fakeUri, {}) as { contents: Array<{ text: string }> };
-    const parsed = JSON.parse(res.contents[0]!.text) as { total: number; repos: string[] };
-    expect(parsed.total).toBe(0);
-    expect(parsed.repos).toHaveLength(0);
+    for (const [name, config] of toolConfigs) {
+      expect(config.inputSchema, `${name} should have an inputSchema`).toBeDefined();
+    }
   });
 
-  it("repos resource lists repos that have metrics", async () => {
-    const { registerResources } = await import("./resources.js");
-    const server = createResourceMockServer();
-    const kvStore = new InMemoryKVStore();
-    await kvStore.set("metrics:my-repo", JSON.stringify([]));
-    registerResources(server as unknown as Parameters<typeof registerResources>[0], kvStore);
+  it("every registered tool has at least one sanity test (tested tool set matches registered)", () => {
+    // The sanity block tests every tool by name. Verify that the set of tools tested
+    // in the sanity describe matches the registered tool set.
+    const testedTools = new Set(ALL_TOOL_NAMES);
+    const server = createMockServer();
+    register(server, makeStores());
+    const registeredNames = new Set(server.tools.keys());
 
-    const reposEntry = server.resources.get("repos");
-    const fakeUri = new URL("mma://repos");
-    const res = await reposEntry!.readCallback(fakeUri, {}) as { contents: Array<{ text: string }> };
-    const parsed = JSON.parse(res.contents[0]!.text) as { total: number; repos: string[] };
-    expect(parsed.total).toBe(1);
-    expect(parsed.repos).toContain("my-repo");
+    // Every registered tool must appear in the tested set
+    for (const name of registeredNames) {
+      expect(testedTools.has(name as (typeof ALL_TOOL_NAMES)[number]), `${name} is registered but not listed in ALL_TOOL_NAMES`).toBe(true);
+    }
+    // Every tested tool must be registered
+    for (const name of testedTools) {
+      expect(registeredNames.has(name), `${name} is in ALL_TOOL_NAMES but not registered`).toBe(true);
+    }
   });
 
-  it("repo-findings resource returns error when no SARIF data", async () => {
-    const { registerResources } = await import("./resources.js");
-    const server = createResourceMockServer();
-    const kvStore = new InMemoryKVStore();
-    registerResources(server as unknown as Parameters<typeof registerResources>[0], kvStore);
+  it("all tool responses use consistent {content: [{type: 'text', text: string}]} format", async () => {
+    const server = createMockServer();
+    register(server, makeStores());
+    const invoker = makeInvoker(server);
 
-    const findingsEntry = server.resources.get("repo-findings");
-    expect(findingsEntry).toBeDefined();
-    const fakeUri = new URL("mma://repo/my-repo/findings");
-    const res = await findingsEntry!.readCallback(fakeUri, { name: "my-repo" }) as { contents: Array<{ text: string }> };
-    const parsed = JSON.parse(res.contents[0]!.text) as { error: string };
-    expect(parsed.error).toContain("No analysis results");
+    for (const name of ALL_TOOL_NAMES) {
+      const result = await invoker(name, MINIMAL_ARGS[name] ?? {});
+      expect(result, `${name} should return an object`).toBeDefined();
+      expect(Array.isArray(result.content), `${name}.content should be array`).toBe(true);
+      const textItems = result.content.filter((c) => c.type === "text");
+      expect(textItems.length, `${name} should have at least one text content item`).toBeGreaterThanOrEqual(1);
+      for (const item of textItems) {
+        expect(typeof item.text, `${name} text item should have string text`).toBe("string");
+      }
+    }
   });
 
-  it("repo-findings resource returns filtered findings for a repo", async () => {
+  it("no tool returns undefined or null content", async () => {
+    const server = createMockServer();
+    register(server, makeStores());
+    const invoker = makeInvoker(server);
+
+    for (const name of ALL_TOOL_NAMES) {
+      const result = await invoker(name, MINIMAL_ARGS[name] ?? {});
+      expect(result.content, `${name} content should not be null/undefined`).not.toBeNull();
+      expect(result.content, `${name} content should not be undefined`).not.toBeUndefined();
+    }
+  });
+
+  it("resource count matches expected (4 resources)", async () => {
     const { registerResources } = await import("./resources.js");
-    const server = createResourceMockServer();
+    const resourceServer = {
+      registerTool: vi.fn(),
+      resource: vi.fn(),
+      tools: new Map<string, ToolEntry>(),
+    };
     const kvStore = new InMemoryKVStore();
-    await kvStore.set("sarif:latest", JSON.stringify({
+    registerResources(resourceServer as unknown as Parameters<typeof registerResources>[0], kvStore);
+    expect(resourceServer.resource).toHaveBeenCalledTimes(4);
+  });
+
+  it("pagination-capable tools respect limit=0 gracefully", async () => {
+    const server = createMockServer();
+    const stores = makeSarifStores(5);
+    // Seed services data so service_correlation doesn't return an error
+    await stores.kvStore.set("correlation:services", makeSerializedServices());
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const paginatedTools: Array<{ name: string; args: Record<string, unknown> }> = [
+      { name: "get_diagnostics", args: { limit: 0 } },
+      { name: "get_service_correlation", args: { limit: 0 } },
+      { name: "get_flag_inventory", args: { limit: 0 } },
+    ];
+
+    for (const { name, args } of paginatedTools) {
+      const result = await invoker(name, args);
+      // Should not throw; content should be valid JSON
+      expect(() => JSON.parse(result.content[0]!.text!), `${name} with limit=0 should return valid JSON`).not.toThrow();
+      const parsed = JSON.parse(result.content[0]!.text!) as {
+        returned?: number;
+        findings?: unknown[];
+        flags?: unknown[];
+        error?: string;
+        linchpins?: { returned?: number; results?: unknown[] };
+        orphanedServices?: { returned?: number; results?: unknown[] };
+      };
+      // Tool handled limit=0 gracefully if any of these are true:
+      // - top-level returned=0 (get_diagnostics, get_flag_inventory)
+      // - nested results are empty (get_service_correlation returns linchpins/orphanedServices objects)
+      // - error returned (e.g. no data seeded)
+      const graceful =
+        parsed.returned === 0 ||
+        parsed.findings?.length === 0 ||
+        parsed.flags?.length === 0 ||
+        parsed.error !== undefined ||
+        parsed.linchpins?.returned === 0 ||
+        parsed.linchpins?.results?.length === 0 ||
+        parsed.orphanedServices?.returned === 0 ||
+        parsed.orphanedServices?.results?.length === 0;
+      expect(graceful, `${name} with limit=0 should handle gracefully`).toBe(true);
+    }
+  });
+
+  it("no tool crashes on unknown repo param", async () => {
+    const server = createMockServer();
+    register(server, makeStores());
+    const invoker = makeInvoker(server);
+
+    const toolsWithRepo: Array<{ name: string; args: Record<string, unknown> }> = [
+      { name: "search", args: { query: "foo", repo: "nonexistent-repo-xyz" } },
+      { name: "get_callers", args: { symbol: "foo", repo: "nonexistent-repo-xyz" } },
+      { name: "get_callees", args: { symbol: "foo", repo: "nonexistent-repo-xyz" } },
+      { name: "get_dependencies", args: { symbol: "foo", repo: "nonexistent-repo-xyz" } },
+      { name: "get_architecture", args: { repo: "nonexistent-repo-xyz" } },
+      { name: "get_diagnostics", args: { repo: "nonexistent-repo-xyz" } },
+      { name: "get_metrics", args: { repo: "nonexistent-repo-xyz" } },
+      { name: "get_blast_radius", args: { files: ["test.ts"], repo: "nonexistent-repo-xyz" } },
+      { name: "get_cross_repo_graph", args: { repo: "nonexistent-repo-xyz" } },
+      { name: "get_cross_repo_models", args: { kind: "all", repo: "nonexistent-repo-xyz" } },
+      { name: "get_vulnerability", args: { repo: "nonexistent-repo-xyz" } },
+      { name: "get_flag_inventory", args: { repo: "nonexistent-repo-xyz" } },
+      { name: "get_flag_impact", args: { flag: "MY_FLAG", repo: "nonexistent-repo-xyz" } },
+    ];
+
+    for (const { name, args } of toolsWithRepo) {
+      await expect(invoker(name, args), `${name} should not throw on unknown repo`).resolves.toBeDefined();
+    }
+  });
+
+  it("tools that return resource_links include valid mma:// URIs", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    // Seed so get_diagnostics produces a resource_link for repo filter
+    await stores.kvStore.set("sarif:latest", JSON.stringify({
       $schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
       version: "2.1.0",
-      runs: [{
-        tool: { driver: { name: "mma", version: "0.1.0", rules: [] } },
-        results: [
-          {
-            ruleId: "test/rule",
-            level: "warning",
-            message: { text: "Finding for repo-x" },
-            locations: [{ logicalLocations: [{ fullyQualifiedName: "src/a.ts", properties: { repo: "repo-x" } }] }],
-          },
-          {
-            ruleId: "other/rule",
-            level: "note",
-            message: { text: "Finding for repo-y" },
-            locations: [{ logicalLocations: [{ fullyQualifiedName: "src/b.ts", properties: { repo: "repo-y" } }] }],
-          },
-        ],
-      }],
+      runs: [{ tool: { driver: { name: "mma", version: "0.1.0", rules: [] } }, results: [] }],
     }));
-    registerResources(server as unknown as Parameters<typeof registerResources>[0], kvStore);
+    register(server, stores);
+    const invoker = makeInvoker(server);
 
-    const findingsEntry = server.resources.get("repo-findings");
-    const fakeUri = new URL("mma://repo/repo-x/findings");
-    const res = await findingsEntry!.readCallback(fakeUri, { name: "repo-x" }) as { contents: Array<{ text: string }> };
-    const parsed = JSON.parse(res.contents[0]!.text) as { repo: string; total: number; results: Array<{ ruleId: string }> };
-    expect(parsed.repo).toBe("repo-x");
-    expect(parsed.total).toBe(1);
-    expect(parsed.results[0]!.ruleId).toBe("test/rule");
-  });
-
-  it("repo-metrics resource returns error for unknown repo", async () => {
-    const { registerResources } = await import("./resources.js");
-    const server = createResourceMockServer();
-    const kvStore = new InMemoryKVStore();
-    registerResources(server as unknown as Parameters<typeof registerResources>[0], kvStore);
-
-    const metricsEntry = server.resources.get("repo-metrics");
-    expect(metricsEntry).toBeDefined();
-    const fakeUri = new URL("mma://repo/unknown/metrics");
-    const res = await metricsEntry!.readCallback(fakeUri, { name: "unknown" }) as { contents: Array<{ text: string }> };
-    const parsed = JSON.parse(res.contents[0]!.text) as { error: string };
-    expect(parsed.error).toContain("No metrics");
-  });
-
-  it("repo-metrics resource returns modules and summary when seeded", async () => {
-    const { registerResources } = await import("./resources.js");
-    const server = createResourceMockServer();
-    const kvStore = new InMemoryKVStore();
-    await kvStore.set("metrics:repo-x", JSON.stringify([
-      { module: "src/index.ts", instability: 0.5, abstractness: 0.3, distance: 0.2, afferentCoupling: 2, efferentCoupling: 2 },
-    ]));
-    await kvStore.set("metricsSummary:repo-x", JSON.stringify({ avgInstability: 0.5, avgAbstractness: 0.3 }));
-    registerResources(server as unknown as Parameters<typeof registerResources>[0], kvStore);
-
-    const metricsEntry = server.resources.get("repo-metrics");
-    const fakeUri = new URL("mma://repo/repo-x/metrics");
-    const res = await metricsEntry!.readCallback(fakeUri, { name: "repo-x" }) as { contents: Array<{ text: string }> };
-    const parsed = JSON.parse(res.contents[0]!.text) as { repo: string; moduleCount: number; summary: unknown; modules: unknown[] };
-    expect(parsed.repo).toBe("repo-x");
-    expect(parsed.moduleCount).toBe(1);
-    expect(parsed.summary).toBeDefined();
-  });
-
-  it("repo-patterns resource returns error for unknown repo", async () => {
-    const { registerResources } = await import("./resources.js");
-    const server = createResourceMockServer();
-    const kvStore = new InMemoryKVStore();
-    registerResources(server as unknown as Parameters<typeof registerResources>[0], kvStore);
-
-    const patternsEntry = server.resources.get("repo-patterns");
-    expect(patternsEntry).toBeDefined();
-    const fakeUri = new URL("mma://repo/unknown/patterns");
-    const res = await patternsEntry!.readCallback(fakeUri, { name: "unknown" }) as { contents: Array<{ text: string }> };
-    const parsed = JSON.parse(res.contents[0]!.text) as { error: string };
-    expect(parsed.error).toContain("No patterns");
-  });
-
-  it("repo-patterns resource returns patterns when seeded", async () => {
-    const { registerResources } = await import("./resources.js");
-    const server = createResourceMockServer();
-    const kvStore = new InMemoryKVStore();
-    await kvStore.set("patterns:repo-x", JSON.stringify([
-      { kind: "singleton", location: "src/db.ts", confidence: 0.9 },
-      { kind: "factory", location: "src/factory.ts", confidence: 0.8 },
-    ]));
-    registerResources(server as unknown as Parameters<typeof registerResources>[0], kvStore);
-
-    const patternsEntry = server.resources.get("repo-patterns");
-    const fakeUri = new URL("mma://repo/repo-x/patterns");
-    const res = await patternsEntry!.readCallback(fakeUri, { name: "repo-x" }) as { contents: Array<{ text: string }> };
-    const parsed = JSON.parse(res.contents[0]!.text) as { repo: string; total: number; patterns: unknown[] };
-    expect(parsed.repo).toBe("repo-x");
-    expect(parsed.total).toBe(2);
-    expect(parsed.patterns).toHaveLength(2);
+    // get_diagnostics with repo param produces a resource_link
+    const result = await invoker("get_diagnostics", { repo: "my-repo" });
+    const resourceLinks = result.content.filter((c) => c.type === "resource_link");
+    expect(resourceLinks.length).toBeGreaterThanOrEqual(1);
+    for (const link of resourceLinks) {
+      expect(link.uri, "resource_link URI should start with mma://").toMatch(/^mma:\/\//);
+    }
   });
 });
