@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { fetchFindings, fetchDependencies } from '../api/client.ts';
+import { SkeletonCard, Skeleton } from './shared/Skeleton.tsx';
+import { SeverityBadge as SharedSeverityBadge } from './shared/SeverityBadge.tsx';
 
 interface LogicalLocation {
   fullyQualifiedName?: string;
@@ -33,20 +35,6 @@ interface ModuleMetricsData {
   efferentCoupling?: number;
 }
 
-const BADGE_CLASSES: Record<string, string> = {
-  error: 'bg-red-100 text-red-700',
-  warning: 'bg-yellow-100 text-yellow-700',
-  note: 'bg-blue-100 text-blue-700',
-};
-
-function SeverityBadge({ level }: { level?: string }) {
-  const cls = BADGE_CLASSES[level ?? ''] ?? 'bg-slate-100 text-slate-600';
-  return (
-    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${cls}`}>
-      {level ?? 'note'}
-    </span>
-  );
-}
 
 export default function ModuleDetail() {
   const { name, '*': modulePath } = useParams<{ name: string; '*': string }>();
@@ -107,7 +95,28 @@ export default function ModuleDetail() {
     return () => { cancelled = true; };
   }, [repo, module]);
 
-  if (loading) return <p className="text-slate-500">Loading...</p>;
+  if (loading) return (
+    <div className="space-y-6">
+      <Skeleton variant="text" className="w-1/4 h-4" />
+      <Skeleton variant="text" className="w-1/2 h-7 mt-1" />
+      <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 p-4 animate-pulse">
+        <Skeleton variant="text" className="mb-3 w-1/4" />
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i}>
+              <Skeleton variant="text" className="mb-1 w-3/4" />
+              <Skeleton variant="text" className="h-6 w-1/2" />
+            </div>
+          ))}
+        </div>
+      </div>
+      <SkeletonCard />
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <SkeletonCard />
+        <SkeletonCard />
+      </div>
+    </div>
+  );
 
   const distance =
     metricsData?.instability !== undefined &&
@@ -121,19 +130,19 @@ export default function ModuleDetail() {
       <div>
         <Link
           to={`/repo/${encodeURIComponent(repo)}`}
-          className="text-sm text-blue-600 hover:underline"
+          className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
         >
           &larr; {repo}
         </Link>
-        <h2 className="text-xl font-semibold text-slate-800 mt-1 truncate">
+        <h2 className="text-xl font-semibold text-slate-800 dark:text-slate-100 mt-1 truncate">
           {module}
         </h2>
       </div>
 
       {/* Metrics card */}
       {metricsData && (
-        <div className="bg-white rounded-lg shadow-sm border p-4">
-          <h3 className="text-base font-semibold text-slate-700 mb-3">
+        <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 p-4">
+          <h3 className="text-base font-semibold text-slate-700 dark:text-slate-200 mb-3">
             Metrics
           </h3>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
@@ -154,8 +163,8 @@ export default function ModuleDetail() {
               },
             ].map(({ label, value }) => (
               <div key={label}>
-                <p className="text-xs text-slate-500 mb-0.5">{label}</p>
-                <p className="text-lg font-semibold text-slate-800">
+                <p className="text-xs text-slate-500 dark:text-slate-400 mb-0.5">{label}</p>
+                <p className="text-lg font-semibold text-slate-800 dark:text-slate-100">
                   {value ?? '-'}
                 </p>
               </div>
@@ -165,22 +174,22 @@ export default function ModuleDetail() {
       )}
 
       {/* Findings */}
-      <div className="bg-white rounded-lg shadow-sm border p-4">
-        <h3 className="text-base font-semibold text-slate-700 mb-3">
+      <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 p-4">
+        <h3 className="text-base font-semibold text-slate-700 dark:text-slate-200 mb-3">
           Findings
         </h3>
         {findings.length === 0 ? (
-          <p className="text-slate-500 text-sm">No findings for this module.</p>
+          <p className="text-slate-500 dark:text-slate-400 text-sm">No findings for this module — it looks clean.</p>
         ) : (
           <ul className="space-y-2">
             {findings.map((f, i) => (
               <li key={i} className="flex gap-3 items-start text-sm">
-                <SeverityBadge level={f.level} />
+                <SharedSeverityBadge severity={f.level ?? 'note'} />
                 <div>
-                  <span className="font-mono text-xs text-slate-500 mr-2">
+                  <span className="font-mono text-xs text-slate-500 dark:text-slate-400 mr-2">
                     {f.ruleId}
                   </span>
-                  <span className="text-slate-700">{typeof f.message === 'object' && f.message !== null ? (f.message as { text?: string }).text ?? '-' : f.message ?? '-'}</span>
+                  <span className="text-slate-700 dark:text-slate-300">{typeof f.message === 'object' && f.message !== null ? (f.message as { text?: string }).text ?? '-' : f.message ?? '-'}</span>
                 </div>
               </li>
             ))}
@@ -190,19 +199,19 @@ export default function ModuleDetail() {
 
       {/* Dependencies */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <div className="bg-white rounded-lg shadow-sm border p-4">
-          <h3 className="text-base font-semibold text-slate-700 mb-3">
+        <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 p-4">
+          <h3 className="text-base font-semibold text-slate-700 dark:text-slate-200 mb-3">
             Depends on ({outgoing.length})
           </h3>
           {outgoing.length === 0 ? (
-            <p className="text-slate-500 text-sm">No outgoing dependencies.</p>
+            <p className="text-slate-500 dark:text-slate-400 text-sm">No outgoing dependencies — this is a leaf module.</p>
           ) : (
             <ul className="space-y-1">
               {outgoing.map((d, i) => (
                 <li key={i} className="text-sm">
                   <Link
                     to={`/repo/${encodeURIComponent(repo)}/module/${encodeURIComponent(d.path)}`}
-                    className="text-blue-600 hover:underline font-mono text-xs"
+                    className="text-blue-600 dark:text-blue-400 hover:underline font-mono text-xs"
                   >
                     {d.path}
                   </Link>
@@ -212,19 +221,19 @@ export default function ModuleDetail() {
           )}
         </div>
 
-        <div className="bg-white rounded-lg shadow-sm border p-4">
-          <h3 className="text-base font-semibold text-slate-700 mb-3">
+        <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 p-4">
+          <h3 className="text-base font-semibold text-slate-700 dark:text-slate-200 mb-3">
             Depended on by ({incoming.length})
           </h3>
           {incoming.length === 0 ? (
-            <p className="text-slate-500 text-sm">No incoming dependencies.</p>
+            <p className="text-slate-500 dark:text-slate-400 text-sm">Nothing depends on this module.</p>
           ) : (
             <ul className="space-y-1">
               {incoming.map((d, i) => (
                 <li key={i} className="text-sm">
                   <Link
                     to={`/repo/${encodeURIComponent(repo)}/module/${encodeURIComponent(d.path)}`}
-                    className="text-blue-600 hover:underline font-mono text-xs"
+                    className="text-blue-600 dark:text-blue-400 hover:underline font-mono text-xs"
                   >
                     {d.path}
                   </Link>

@@ -6,6 +6,8 @@ import MainSequenceChart from './MainSequenceChart.tsx';
 import AtdiGauge from './AtdiGauge.tsx';
 import AtdiByRepoChart from './AtdiByRepoChart.tsx';
 import DebtBreakdownChart from './DebtBreakdownChart.tsx';
+import { SkeletonCard, Skeleton } from './shared/Skeleton.tsx';
+import { EmptyState } from './shared/EmptyState.tsx';
 
 interface RepoSummary {
   name: string;
@@ -166,28 +168,41 @@ export default function Overview() {
   }, []);
 
   if (loading) {
-    return <p className="text-slate-500">Loading...</p>;
+    return (
+      <div className="space-y-6">
+        <SkeletonCard />
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+        </div>
+        <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 p-4 animate-pulse">
+          <Skeleton variant="text" className="mb-3 w-1/4" />
+          <Skeleton variant="chart" />
+        </div>
+      </div>
+    );
   }
 
   return (
     <div className="space-y-6">
       {/* Executive summary */}
       {practices && (
-        <div className="bg-white rounded-lg shadow-sm border p-4">
+        <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 p-4">
           <div className="flex items-center gap-4">
             {practices.executive?.grade && (
               <span
-                className={`text-5xl font-bold ${GRADE_COLORS[practices.executive.grade] ?? 'text-slate-700'}`}
+                className={`text-5xl font-bold ${GRADE_COLORS[practices.executive.grade] ?? 'text-slate-700 dark:text-slate-300'}`}
               >
                 {practices.executive.grade}
               </span>
             )}
             <div>
-              <p className="text-lg font-semibold text-slate-800">
+              <p className="text-lg font-semibold text-slate-800 dark:text-slate-100">
                 {practices.executive?.headline ?? 'Code Health Summary'}
               </p>
               {practices.executive?.score !== undefined && (
-                <p className="text-sm text-slate-500">
+                <p className="text-sm text-slate-500 dark:text-slate-400">
                   Score: {practices.executive.score}
                 </p>
               )}
@@ -198,40 +213,50 @@ export default function Overview() {
 
       {/* ATDI panel */}
       {practices?.atdi && (
-        <div className="bg-white rounded-lg shadow-sm border p-4">
-          <h2 className="text-lg font-semibold text-slate-800 mb-3">Technical Debt Index</h2>
+        <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 p-4">
+          <h2 className="text-lg font-semibold text-slate-800 dark:text-slate-100 mb-3">Technical Debt Index</h2>
           <div className="flex flex-col items-center mb-3">
             <AtdiGauge score={practices.atdi.score} size={200} />
             <div className="flex items-center gap-3 mt-2">
               <span
                 className={`px-2 py-0.5 rounded-full text-xs font-medium ${
                   practices.atdi.trend === 'improving'
-                    ? 'bg-green-100 text-green-700'
+                    ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
                     : practices.atdi.trend === 'worsening'
-                    ? 'bg-red-100 text-red-700'
-                    : 'bg-slate-100 text-slate-600'
+                    ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
+                    : 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300'
                 }`}
               >
                 {practices.atdi.trend}
               </span>
-              <span className="text-sm text-slate-500">
+              <span className="text-sm text-slate-500 dark:text-slate-400">
                 {practices.atdi.newFindingCount} new / {practices.atdi.totalFindingCount} total findings
               </span>
             </div>
           </div>
           {atdiData && atdiData.repoScores.length > 0 && (
             <>
-              <h3 className="text-sm font-medium text-slate-600 mb-2">Per-Repo Scores</h3>
+              <h3 className="text-sm font-medium text-slate-600 dark:text-slate-300 mb-2">Per-Repo Scores</h3>
               <AtdiByRepoChart repos={atdiData.repoScores.map((r) => ({ repo: r.repo, score: r.score }))} />
             </>
           )}
         </div>
       )}
 
+      {/* Health Trend */}
+      <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 p-4">
+        <h2 className="text-lg font-semibold text-slate-800 dark:text-slate-100 mb-1">Health Trend (Last 30 Days)</h2>
+        <EmptyState
+          icon="chart"
+          title="No trend history yet"
+          description="Trend data requires multiple index runs. Run mma index periodically to build history."
+        />
+      </div>
+
       {/* Debt Estimate panel */}
       {practices?.debt && practices.debt.totalDebtMinutes > 0 && (
-        <div className="bg-white rounded-lg shadow-sm border p-4">
-          <h2 className="text-lg font-semibold text-slate-800 mb-3">Estimated Remediation Cost</h2>
+        <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 p-4">
+          <h2 className="text-lg font-semibold text-slate-800 dark:text-slate-100 mb-3">Estimated Remediation Cost</h2>
           <div className="flex items-center gap-4 mb-4">
             <span
               className={`text-4xl font-bold ${
@@ -243,9 +268,9 @@ export default function Overview() {
               }`}
             >
               {practices.debt.totalDebtHours}
-              <span className="text-lg font-normal text-slate-500">h</span>
+              <span className="text-lg font-normal text-slate-500 dark:text-slate-400">h</span>
             </span>
-            <span className="text-sm text-slate-500">
+            <span className="text-sm text-slate-500 dark:text-slate-400">
               {(Math.round((practices.debt.totalDebtHours / 6) * 10) / 10).toFixed(1)} days at 6h/day
             </span>
           </div>
@@ -257,9 +282,9 @@ export default function Overview() {
 
       {/* Hotspot Analysis panel */}
       {hotspots.length > 0 && (
-        <div className="bg-white rounded-lg shadow-sm border p-4">
-          <h2 className="text-lg font-semibold text-slate-800 mb-3">Hotspot Analysis</h2>
-          <p className="text-xs text-slate-500 mb-3">
+        <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 p-4">
+          <h2 className="text-lg font-semibold text-slate-800 dark:text-slate-100 mb-3">Hotspot Analysis</h2>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">
             Files with high git churn and high complexity. Top 10 shown.
           </p>
           <div className="space-y-2">
@@ -274,20 +299,20 @@ export default function Overview() {
               return (
                 <div key={`${h.repo}/${h.filePath}`} className="flex flex-col gap-0.5">
                   <div className="flex items-center gap-2">
-                    <span className="w-48 text-xs text-slate-700 truncate" title={`[${h.repo}] ${h.filePath}`}>
+                    <span className="w-48 text-xs text-slate-700 dark:text-slate-300 truncate" title={`[${h.repo}] ${h.filePath}`}>
                       {shortPath}
                     </span>
-                    <div className="flex-1 bg-slate-100 rounded h-3">
+                    <div className="flex-1 bg-slate-100 dark:bg-slate-700 rounded h-3">
                       <div
                         className={`${barColor} h-3 rounded transition-all`}
                         style={{ width: `${h.hotspotScore}%` }}
                       />
                     </div>
-                    <span className="w-8 text-right text-xs font-medium text-slate-700">
+                    <span className="w-8 text-right text-xs font-medium text-slate-700 dark:text-slate-300">
                       {h.hotspotScore}
                     </span>
                   </div>
-                  <span className="text-xs text-slate-400 pl-48">
+                  <span className="text-xs text-slate-400 dark:text-slate-500 pl-48">
                     {h.churn} commits · {h.symbolCount} symbols · {h.repo}
                   </span>
                 </div>
@@ -299,11 +324,11 @@ export default function Overview() {
 
       {/* Module-level main sequence */}
       {moduleMetrics.length > 0 && (
-        <div className="bg-white rounded-lg shadow-sm border p-4">
-          <h2 className="text-lg font-semibold text-slate-800 mb-2">
+        <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 p-4">
+          <h2 className="text-lg font-semibold text-slate-800 dark:text-slate-100 mb-2">
             Main Sequence — All Modules
           </h2>
-          <p className="text-xs text-slate-500 mb-3">
+          <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">
             Each point is a module. Color indicates zone classification. Distance from the diagonal measures architectural balance.
           </p>
           <MainSequenceChart modules={moduleMetrics} />
@@ -312,11 +337,11 @@ export default function Overview() {
 
       {/* Cross-repo main sequence chart */}
       {repoPoints.length > 0 && (
-        <div className="bg-white rounded-lg shadow-sm border p-4">
-          <h2 className="text-lg font-semibold text-slate-800 mb-2">
+        <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 p-4">
+          <h2 className="text-lg font-semibold text-slate-800 dark:text-slate-100 mb-2">
             Architecture Health
           </h2>
-          <p className="text-xs text-slate-500 mb-3">
+          <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">
             Each point is a repository. Size reflects module count. Click to drill down.
           </p>
           <CrossRepoChart repos={repoPoints} />
@@ -325,11 +350,11 @@ export default function Overview() {
 
       {/* Repo cards */}
       <div>
-        <h2 className="text-lg font-semibold text-slate-800 mb-3">
+        <h2 className="text-lg font-semibold text-slate-800 dark:text-slate-100 mb-3">
           Repositories
         </h2>
         {repoSummaries.length === 0 ? (
-          <p className="text-slate-500 text-sm">No repositories indexed.</p>
+          <p className="text-slate-500 dark:text-slate-400 text-sm">No repositories indexed. Run <code className="font-mono text-xs bg-slate-100 dark:bg-slate-700 px-1 rounded">mma index</code> to get started.</p>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {repoSummaries.map((repo) => (
@@ -338,15 +363,15 @@ export default function Overview() {
                 onClick={() =>
                   navigate(`/repo/${encodeURIComponent(repo.name)}`)
                 }
-                className="bg-white rounded-lg shadow-sm border p-4 text-left hover:shadow-md transition-shadow"
+                className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 p-4 text-left hover:shadow-md dark:hover:bg-slate-700 transition-shadow"
               >
                 <div className="flex items-center justify-between mb-2">
-                  <span className="font-medium text-slate-800 truncate">
+                  <span className="font-medium text-slate-800 dark:text-slate-100 truncate">
                     {repo.name}
                   </span>
                   {repo.grade && (
                     <span
-                      className={`text-xl font-bold ${GRADE_COLORS[repo.grade] ?? 'text-slate-700'}`}
+                      className={`text-xl font-bold ${GRADE_COLORS[repo.grade] ?? 'text-slate-700 dark:text-slate-300'}`}
                     >
                       {repo.grade}
                     </span>
@@ -356,27 +381,27 @@ export default function Overview() {
                 {/* Zone badges */}
                 <div className="flex gap-2 mb-3">
                   {(repo.errorCount ?? 0) > 0 && (
-                    <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
+                    <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400">
                       {repo.errorCount} pain zone
                     </span>
                   )}
                   {(repo.warningCount ?? 0) > 0 && (
-                    <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700">
+                    <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400">
                       {repo.warningCount} useless zone
                     </span>
                   )}
                   {(repo.noteCount ?? 0) > 0 && (
-                    <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
+                    <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
                       {repo.noteCount} modules
                     </span>
                   )}
                 </div>
 
                 {/* Metrics */}
-                <div className="grid grid-cols-2 gap-2 text-xs text-slate-500">
+                <div className="grid grid-cols-2 gap-2 text-xs text-slate-500 dark:text-slate-400">
                   {repo.avgInstability !== undefined && (
                     <div>
-                      <span className="block font-medium text-slate-700">
+                      <span className="block font-medium text-slate-700 dark:text-slate-300">
                         Instability
                       </span>
                       {repo.avgInstability.toFixed(2)}
@@ -384,7 +409,7 @@ export default function Overview() {
                   )}
                   {repo.avgAbstractness !== undefined && (
                     <div>
-                      <span className="block font-medium text-slate-700">
+                      <span className="block font-medium text-slate-700 dark:text-slate-300">
                         Abstractness
                       </span>
                       {repo.avgAbstractness.toFixed(2)}

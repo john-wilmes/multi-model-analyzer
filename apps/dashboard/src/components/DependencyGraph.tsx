@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import cytoscape from 'cytoscape';
 import cytoscapeDagre from 'cytoscape-dagre';
 import { fetchGraph } from '../api/client.ts';
+import { GraphControls } from './shared/GraphControls.tsx';
 
 cytoscapeDagre(cytoscape);
 
@@ -174,9 +175,9 @@ export default function DependencyGraph() {
     };
   }, [edges, navigate, name]);
 
-  if (loading) return <p className="text-slate-500">Loading dependency graph...</p>;
+  if (loading) return <p className="text-slate-500 dark:text-slate-400">Loading dependency graph...</p>;
   if (error) return (
-    <div className="bg-white rounded-lg shadow-sm border p-8 text-center">
+    <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 p-8 text-center">
       <p className="text-red-500">{error}</p>
     </div>
   );
@@ -191,17 +192,17 @@ export default function DependencyGraph() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold text-slate-800">
+        <h2 className="text-xl font-semibold text-slate-800 dark:text-slate-100">
           Dependency Graph — {name}
         </h2>
         <div className="flex items-center gap-4">
-          <span className="text-sm text-slate-500">
+          <span className="text-sm text-slate-500 dark:text-slate-400">
             {nodeIds.size} nodes · {edges.length} edges
           </span>
           <select
             value={selectedKind}
             onChange={(e) => setSelectedKind(e.target.value)}
-            className="text-sm border border-slate-300 rounded px-2 py-1 bg-white text-slate-700"
+            className="text-sm border border-slate-300 dark:border-slate-600 rounded px-2 py-1 bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-300"
           >
             {EDGE_KINDS.map((k) => (
               <option key={k} value={k}>{k}</option>
@@ -211,12 +212,15 @@ export default function DependencyGraph() {
       </div>
 
       {edges.length === 0 ? (
-        <div className="bg-white rounded-lg shadow-sm border p-8 text-center text-slate-400">
+        <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 p-8 text-center text-slate-400 dark:text-slate-500">
           No {selectedKind} edges found for this repository.
         </div>
       ) : (
-        <div className="bg-white rounded-lg shadow-sm border" style={{ minHeight: 500 }}>
+        <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 relative" style={{ minHeight: 500 }}>
           <div ref={cyRef} style={{ width: '100%', height: 600 }} />
+          <div className="absolute bottom-4 right-4">
+            <GraphControls cyInstanceRef={cyInstanceRef} />
+          </div>
         </div>
       )}
     </div>

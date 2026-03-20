@@ -56,18 +56,23 @@ export default function ServiceCatalogTable({ repo }: Props) {
 
   const withCrossRepoConsumers = entries.filter((e) => e.consumers.length > 0).length;
 
-  if (loading) return <div className="p-8 text-center text-slate-500">Loading service catalog...</div>;
+  if (loading) return (
+    <div className="p-8 text-center animate-pulse">
+      <div className="h-4 bg-slate-200 dark:bg-slate-700 rounded w-48 mx-auto mb-2" />
+      <div className="h-3 bg-slate-200 dark:bg-slate-700 rounded w-32 mx-auto" />
+    </div>
+  );
 
   if (entries.length === 0) {
-    return <p className="text-slate-500 text-center py-12">No service catalog entries found.</p>;
+    return <p className="text-slate-500 dark:text-slate-400 text-center py-12">No service catalog entries found. Services are inferred from cross-repo dependency patterns.</p>;
   }
 
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h2 className="text-xl font-semibold text-slate-800">Service Catalog</h2>
-          <p className="text-sm text-slate-500 mt-0.5">
+          <h2 className="text-xl font-semibold text-slate-800 dark:text-slate-100">Service Catalog</h2>
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
             {entries.length} services ({withCrossRepoConsumers} with cross-repo consumers)
           </p>
         </div>
@@ -76,33 +81,33 @@ export default function ServiceCatalogTable({ repo }: Props) {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search services..."
-          className="border border-slate-300 rounded px-3 py-1.5 text-sm bg-white w-64"
+          className="border border-slate-300 dark:border-slate-600 rounded px-3 py-1.5 text-sm bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 w-64"
         />
       </div>
-      <div className="overflow-x-auto rounded border border-slate-200 bg-white">
+      <div className="overflow-x-auto rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800">
         <table className="w-full text-sm">
-          <thead className="bg-slate-50 border-b border-slate-200">
+          <thead className="bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-700">
             <tr>
               <th
-                className="text-left px-3 py-2 cursor-pointer select-none hover:bg-slate-100"
+                className="text-left px-3 py-2 cursor-pointer select-none hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300"
                 onClick={() => toggleSort('name')}
               >
                 Service<SortIndicator k="name" />
               </th>
               <th
-                className="text-left px-3 py-2 cursor-pointer select-none hover:bg-slate-100"
+                className="text-left px-3 py-2 cursor-pointer select-none hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300"
                 onClick={() => toggleSort('repo')}
               >
                 Owner Repo<SortIndicator k="repo" />
               </th>
               <th
-                className="text-left px-3 py-2 cursor-pointer select-none hover:bg-slate-100"
+                className="text-left px-3 py-2 cursor-pointer select-none hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300"
                 onClick={() => toggleSort('consumers')}
               >
                 Consumers<SortIndicator k="consumers" />
               </th>
               <th
-                className="text-left px-3 py-2 cursor-pointer select-none hover:bg-slate-100"
+                className="text-left px-3 py-2 cursor-pointer select-none hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300"
                 onClick={() => toggleSort('producers')}
               >
                 Producers<SortIndicator k="producers" />
@@ -111,28 +116,28 @@ export default function ServiceCatalogTable({ repo }: Props) {
           </thead>
           <tbody>
             {sorted.map((e, i) => (
-              <tr key={`${e.repo}-${e.entry.name}`} className={i % 2 === 0 ? 'bg-white' : 'bg-slate-50'}>
+              <tr key={`${e.repo}-${e.entry.name}`} className={i % 2 === 0 ? 'bg-white dark:bg-slate-800' : 'bg-slate-50 dark:bg-slate-900/50'}>
                 <td className="px-3 py-1.5">
-                  <div className="font-medium text-slate-800">{e.entry.name}</div>
+                  <div className="font-medium text-slate-800 dark:text-slate-200">{e.entry.name}</div>
                   {e.entry.purpose && (
-                    <div className="text-xs text-slate-400 truncate max-w-xs" title={e.entry.purpose}>{e.entry.purpose}</div>
+                    <div className="text-xs text-slate-400 dark:text-slate-500 truncate max-w-xs" title={e.entry.purpose}>{e.entry.purpose}</div>
                   )}
                 </td>
                 <td className="px-3 py-1.5">
-                  <span className="inline-block px-2 py-0.5 rounded text-xs font-medium bg-slate-100 text-slate-700">{e.repo}</span>
+                  <span className="inline-block px-2 py-0.5 rounded text-xs font-medium bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300">{e.repo}</span>
                 </td>
                 <td className="px-3 py-1.5">
                   <div className="flex flex-wrap gap-1">
                     {e.consumers.length > 0 ? e.consumers.map((c) => (
-                      <span key={c} className="inline-block px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-800">{c}</span>
-                    )) : <span className="text-xs text-slate-400">-</span>}
+                      <span key={c} className="inline-block px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400">{c}</span>
+                    )) : <span className="text-xs text-slate-400 dark:text-slate-500">-</span>}
                   </div>
                 </td>
                 <td className="px-3 py-1.5">
                   <div className="flex flex-wrap gap-1">
                     {e.producers.length > 0 ? e.producers.map((p) => (
-                      <span key={p} className="inline-block px-2 py-0.5 rounded text-xs font-medium bg-emerald-100 text-emerald-800">{p}</span>
-                    )) : <span className="text-xs text-slate-400">-</span>}
+                      <span key={p} className="inline-block px-2 py-0.5 rounded text-xs font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400">{p}</span>
+                    )) : <span className="text-xs text-slate-400 dark:text-slate-500">-</span>}
                   </div>
                 </td>
               </tr>
@@ -140,7 +145,7 @@ export default function ServiceCatalogTable({ repo }: Props) {
           </tbody>
         </table>
       </div>
-      <p className="mt-4 text-xs text-slate-400">
+      <p className="mt-4 text-xs text-slate-400 dark:text-slate-500">
         Services discovered across repos with cross-repo consumer/producer relationships.
       </p>
     </div>
