@@ -212,11 +212,18 @@ export default function CrossRepoGraphView() {
     return () => { cy.destroy(); cyInstanceRef.current = null; };
   }, [data, navigate]);
 
-  if (loading) return <p className="text-slate-500">Loading cross-repo graph...</p>;
+  if (loading) return (
+    <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 p-8 animate-pulse flex items-center justify-center" style={{ minHeight: 400 }}>
+      <div className="text-center">
+        <div className="h-4 bg-slate-200 dark:bg-slate-700 rounded w-48 mx-auto mb-3" />
+        <div className="h-3 bg-slate-200 dark:bg-slate-700 rounded w-32 mx-auto" />
+      </div>
+    </div>
+  );
   if (error) return (
-    <div className="bg-white rounded-lg shadow-sm border p-8 text-center">
-      <p className="text-slate-500">{error}</p>
-      <p className="text-xs text-slate-400 mt-1">Run &lsquo;mma index&rsquo; with 2+ repos to generate correlation data.</p>
+    <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 p-8 text-center">
+      <p className="text-slate-500 dark:text-slate-400">{error}</p>
+      <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">Run &lsquo;mma index&rsquo; with 2+ repos to generate correlation data.</p>
     </div>
   );
 
@@ -228,14 +235,14 @@ export default function CrossRepoGraphView() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold text-slate-800">
+        <h2 className="text-xl font-semibold text-slate-800 dark:text-slate-100">
           Cross-Repo Dependency Graph
-          {repoFilter && <span className="text-sm font-normal text-slate-500 ml-2">(filtered: {repoFilter})</span>}
+          {repoFilter && <span className="text-sm font-normal text-slate-500 dark:text-slate-400 ml-2">(filtered: {repoFilter})</span>}
         </h2>
         {repoFilter && (
           <button
             onClick={() => navigate('/cross-repo')}
-            className="text-sm text-blue-600 hover:underline"
+            className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
           >
             Show all
           </button>
@@ -243,13 +250,13 @@ export default function CrossRepoGraphView() {
       </div>
 
       {!data || data.edges.length === 0 ? (
-        <div className="bg-white rounded-lg shadow-sm border p-8 text-center text-slate-400">
-          No cross-repo dependency data available.
+        <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 p-8 text-center text-slate-400 dark:text-slate-500">
+          No cross-repo dependency data available. Run <code className="font-mono text-xs bg-slate-100 dark:bg-slate-700 px-1 rounded">mma index</code> with 2+ repos to generate correlation data.
         </div>
       ) : (
         <div className="flex gap-4">
           {/* Graph */}
-          <div className="flex-1 bg-white rounded-lg shadow-sm border relative" style={{ minHeight: 500 }}>
+          <div className="flex-1 bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 relative" style={{ minHeight: 500 }}>
             <div ref={cyRef} style={{ width: '100%', height: 500 }} />
             {hoveredEdge && (
               <div
@@ -281,26 +288,26 @@ export default function CrossRepoGraphView() {
 
           {/* Sidebar */}
           <div className="w-64 space-y-4">
-            <div className="bg-white rounded-lg shadow-sm border p-4">
-              <h3 className="text-sm font-semibold text-slate-700 mb-2">Summary</h3>
-              <div className="space-y-1 text-sm text-slate-600">
-                <div><span className="font-medium">{repos.size}</span> repos</div>
-                <div><span className="font-medium">{pairs.length}</span> dependency pairs</div>
-                <div><span className="font-medium">{data.edges.length}</span> total edges</div>
+            <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 p-4">
+              <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-2">Summary</h3>
+              <div className="space-y-1 text-sm text-slate-600 dark:text-slate-400">
+                <div><span className="font-medium text-slate-800 dark:text-slate-200">{repos.size}</span> repos</div>
+                <div><span className="font-medium text-slate-800 dark:text-slate-200">{pairs.length}</span> dependency pairs</div>
+                <div><span className="font-medium text-slate-800 dark:text-slate-200">{data.edges.length}</span> total edges</div>
               </div>
             </div>
 
-            <div className="bg-white rounded-lg shadow-sm border p-4">
-              <h3 className="text-sm font-semibold text-slate-700 mb-2">Top Dependencies (by fan-in)</h3>
+            <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 p-4">
+              <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-2">Top Dependencies (by fan-in)</h3>
               <div className="space-y-2">
                 {topLinchpins.map(([name, stats]) => (
                   <button
                     key={name}
                     onClick={() => navigate(`/repo/${encodeURIComponent(name)}`)}
-                    className="block w-full text-left hover:bg-slate-50 rounded px-2 py-1 -mx-2"
+                    className="block w-full text-left hover:bg-slate-50 dark:hover:bg-slate-700 rounded px-2 py-1 -mx-2"
                   >
-                    <div className="text-sm font-medium text-slate-700 truncate">{name}</div>
-                    <div className="text-xs text-slate-400">
+                    <div className="text-sm font-medium text-slate-700 dark:text-slate-300 truncate">{name}</div>
+                    <div className="text-xs text-slate-400 dark:text-slate-500">
                       {stats.fanIn} in / {stats.fanOut} out
                     </div>
                   </button>

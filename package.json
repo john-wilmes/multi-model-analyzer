@@ -47,7 +47,7 @@
     "build:dashboard": "npm run build -w apps/dashboard",
     "type-check": "tsc --build --noEmit",
     "lint": "eslint packages/ apps/",
-    "test": "vitest run",
+    "test": "vitest run && cd apps/dashboard && npx vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
     "validate:models": "vitest run --config validation/vitest.validation.ts",

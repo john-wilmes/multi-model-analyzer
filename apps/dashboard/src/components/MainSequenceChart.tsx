@@ -41,26 +41,26 @@ function CustomTooltip({
   if (!d) return null;
   const shortModule = d.module.length > 50 ? '…' + d.module.slice(-50) : d.module;
   return (
-    <div className="bg-white border rounded shadow-md p-3 text-xs max-w-xs">
-      <p className="font-semibold text-slate-800 truncate mb-1" title={d.module}>
+    <div className="bg-white dark:bg-slate-800 border dark:border-slate-700 rounded shadow-md p-3 text-xs max-w-xs">
+      <p className="font-semibold text-slate-800 dark:text-slate-100 truncate mb-1" title={d.module}>
         {shortModule}
       </p>
-      <p className="text-slate-500 truncate mb-1">{d.repo}</p>
-      <p className="text-slate-600">Instability: {d.instability.toFixed(3)}</p>
-      <p className="text-slate-600">Abstractness: {d.abstractness.toFixed(3)}</p>
-      <p className="text-slate-600">Distance: {d.distance.toFixed(3)}</p>
-      <div className="mt-1 pt-1 border-t border-slate-100">
-        <p className="text-slate-500">Ca (afferent): {d.ca}</p>
-        <p className="text-slate-500">Ce (efferent): {d.ce}</p>
+      <p className="text-slate-500 dark:text-slate-400 truncate mb-1">{d.repo}</p>
+      <p className="text-slate-600 dark:text-slate-400">Instability: {d.instability.toFixed(3)}</p>
+      <p className="text-slate-600 dark:text-slate-400">Abstractness: {d.abstractness.toFixed(3)}</p>
+      <p className="text-slate-600 dark:text-slate-400">Distance: {d.distance.toFixed(3)}</p>
+      <div className="mt-1 pt-1 border-t border-slate-100 dark:border-slate-700">
+        <p className="text-slate-500 dark:text-slate-400">Ca (afferent): {d.ca}</p>
+        <p className="text-slate-500 dark:text-slate-400">Ce (efferent): {d.ce}</p>
         <p
           className={
             d.zone === 'pain'
-              ? 'text-red-600'
+              ? 'text-red-600 dark:text-red-400'
               : d.zone === 'uselessness'
-              ? 'text-yellow-600'
+              ? 'text-yellow-600 dark:text-yellow-400'
               : d.zone === 'balanced'
-              ? 'text-blue-600'
-              : 'text-green-600'
+              ? 'text-blue-600 dark:text-blue-400'
+              : 'text-green-600 dark:text-green-400'
           }
         >
           Zone: {d.zone}

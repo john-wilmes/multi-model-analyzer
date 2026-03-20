@@ -49,12 +49,12 @@ beforeEach(() => {
 
 describe('TemporalCouplingView', () => {
   it('renders loading state initially', () => {
-    render(
+    const { container } = render(
       <MemoryRouter>
         <TemporalCouplingView />
       </MemoryRouter>,
     );
-    expect(screen.getByText('Loading temporal coupling data...')).toBeInTheDocument();
+    expect(container.querySelector('.animate-pulse')).toBeInTheDocument();
   });
 
   it('renders the heading', async () => {

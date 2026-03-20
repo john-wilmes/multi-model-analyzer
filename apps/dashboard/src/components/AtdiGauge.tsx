@@ -56,9 +56,9 @@ export default function AtdiGauge({ score, size = 200 }: AtdiGaugeProps) {
       <div className="flex flex-col items-center -mt-2">
         <span className="text-3xl font-bold" style={{ color }}>
           {score}
-          <span className="text-base font-normal text-slate-400">/100</span>
+          <span className="text-base font-normal text-slate-400 dark:text-slate-500">/100</span>
         </span>
-        <span className="text-xs text-slate-500 mt-0.5">{label}</span>
+        <span className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{label}</span>
       </div>
     </div>
   );

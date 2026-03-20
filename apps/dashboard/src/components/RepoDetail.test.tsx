@@ -87,8 +87,8 @@ beforeEach(() => {
 
 describe('RepoDetail', () => {
   it('renders loading state initially', () => {
-    renderWithRoute();
-    expect(screen.getByText('Loading...')).toBeInTheDocument();
+    const { container } = renderWithRoute();
+    expect(container.querySelector('.animate-pulse')).toBeInTheDocument();
   });
 
   it('renders repo name as heading', async () => {

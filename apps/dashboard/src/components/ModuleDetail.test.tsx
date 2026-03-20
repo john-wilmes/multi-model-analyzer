@@ -65,8 +65,8 @@ beforeEach(() => {
 
 describe('ModuleDetail', () => {
   it('renders loading state initially', () => {
-    renderWithRoute();
-    expect(screen.getByText('Loading...')).toBeInTheDocument();
+    const { container } = renderWithRoute();
+    expect(container.querySelector('.animate-pulse')).toBeInTheDocument();
   });
 
   it('renders module path as heading', async () => {

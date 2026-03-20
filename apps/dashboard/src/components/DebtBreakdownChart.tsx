@@ -34,10 +34,10 @@ function CustomTooltip({
   const d = payload[0].payload;
   if (!d) return null;
   return (
-    <div className="bg-white border rounded shadow-md p-3 text-xs">
-      <p className="font-semibold text-slate-800 mb-1">{d.category}</p>
-      <p className="text-slate-600">{d.debtHours}h remediation</p>
-      <p className="text-slate-500">{d.findingCount} findings</p>
+    <div className="bg-white dark:bg-slate-800 border dark:border-slate-700 rounded shadow-md p-3 text-xs">
+      <p className="font-semibold text-slate-800 dark:text-slate-100 mb-1">{d.category}</p>
+      <p className="text-slate-600 dark:text-slate-400">{d.debtHours}h remediation</p>
+      <p className="text-slate-500 dark:text-slate-400">{d.findingCount} findings</p>
     </div>
   );
 }

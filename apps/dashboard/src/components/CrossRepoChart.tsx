@@ -48,18 +48,18 @@ function CustomTooltip({
   const distance =
     Math.abs(d.instability + d.abstractness - 1) / Math.sqrt(2);
   return (
-    <div className="bg-white border rounded shadow-md p-3 text-xs max-w-xs">
-      <p className="font-semibold text-slate-800 truncate mb-1">{d.name}</p>
-      <p className="text-slate-600">Avg Instability: {d.instability.toFixed(3)}</p>
-      <p className="text-slate-600">Avg Abstractness: {d.abstractness.toFixed(3)}</p>
-      <p className="text-slate-600">Distance from main seq: {distance.toFixed(3)}</p>
-      <div className="mt-1 pt-1 border-t border-slate-100">
-        <p className="text-slate-500">{d.moduleCount} modules</p>
+    <div className="bg-white dark:bg-slate-800 border dark:border-slate-700 rounded shadow-md p-3 text-xs max-w-xs">
+      <p className="font-semibold text-slate-800 dark:text-slate-100 truncate mb-1">{d.name}</p>
+      <p className="text-slate-600 dark:text-slate-400">Avg Instability: {d.instability.toFixed(3)}</p>
+      <p className="text-slate-600 dark:text-slate-400">Avg Abstractness: {d.abstractness.toFixed(3)}</p>
+      <p className="text-slate-600 dark:text-slate-400">Distance from main seq: {distance.toFixed(3)}</p>
+      <div className="mt-1 pt-1 border-t border-slate-100 dark:border-slate-700">
+        <p className="text-slate-500 dark:text-slate-400">{d.moduleCount} modules</p>
         {d.painZoneCount > 0 && (
-          <p className="text-red-600">{d.painZoneCount} in pain zone</p>
+          <p className="text-red-600 dark:text-red-400">{d.painZoneCount} in pain zone</p>
         )}
         {d.uselessnessZoneCount > 0 && (
-          <p className="text-yellow-600">{d.uselessnessZoneCount} in uselessness zone</p>
+          <p className="text-yellow-600 dark:text-yellow-400">{d.uselessnessZoneCount} in uselessness zone</p>
         )}
       </div>
     </div>

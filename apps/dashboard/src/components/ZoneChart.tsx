@@ -46,13 +46,13 @@ function CustomTooltip({
   const distance =
     Math.abs(d.instability + d.abstractness - 1) / Math.sqrt(2);
   return (
-    <div className="bg-white border rounded shadow-md p-3 text-xs max-w-xs">
-      <p className="font-semibold text-slate-800 truncate mb-1">{d.name}</p>
-      <p className="text-slate-600">Instability: {d.instability.toFixed(3)}</p>
-      <p className="text-slate-600">
+    <div className="bg-white dark:bg-slate-800 border dark:border-slate-700 rounded shadow-md p-3 text-xs max-w-xs">
+      <p className="font-semibold text-slate-800 dark:text-slate-100 truncate mb-1">{d.name}</p>
+      <p className="text-slate-600 dark:text-slate-400">Instability: {d.instability.toFixed(3)}</p>
+      <p className="text-slate-600 dark:text-slate-400">
         Abstractness: {d.abstractness.toFixed(3)}
       </p>
-      <p className="text-slate-600">
+      <p className="text-slate-600 dark:text-slate-400">
         Distance from main seq: {distance.toFixed(3)}
       </p>
     </div>

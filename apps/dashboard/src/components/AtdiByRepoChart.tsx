@@ -47,14 +47,14 @@ function CustomTooltip({
   const label =
     d.score <= 20 ? 'Healthy' : d.score <= 60 ? 'Moderate' : 'Unhealthy';
   return (
-    <div className="bg-white border rounded shadow-md p-3 text-xs">
-      <p className="font-semibold text-slate-800 mb-1 max-w-[200px] break-all">
+    <div className="bg-white dark:bg-slate-800 border dark:border-slate-700 rounded shadow-md p-3 text-xs">
+      <p className="font-semibold text-slate-800 dark:text-slate-100 mb-1 max-w-[200px] break-all">
         {d.repo}
       </p>
-      <p className="text-slate-600">
+      <p className="text-slate-600 dark:text-slate-400">
         ATDI: <span className="font-medium">{d.score}</span>/100
       </p>
-      <p className="text-slate-500">{label}</p>
+      <p className="text-slate-500 dark:text-slate-400">{label}</p>
     </div>
   );
 }

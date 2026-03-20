@@ -1,13 +1,20 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import type { DsmData } from '../api/client.ts';
 
-function cellColor(value: number, maxVal: number): string {
-  if (value === 0) return '#f8fafc'; // slate-50
+function cellColor(value: number, maxVal: number, dark = false): string {
+  if (value === 0) return dark ? '#1e293b' : '#f8fafc'; // slate-800 / slate-50
   const t = Math.min(value / maxVal, 1);
-  // white → blue gradient
-  const r = Math.round(241 - t * 181); // 241 → 60
-  const g = Math.round(245 - t * 175); // 245 → 70
-  const b = Math.round(249 - t * 19);  // 249 → 230
+  if (dark) {
+    // dark mode: slate-800 → blue gradient
+    const r = Math.round(30 + t * 30);   // 30 → 60
+    const g = Math.round(41 + t * 29);   // 41 → 70
+    const b = Math.round(59 + t * 171);  // 59 → 230
+    return `rgb(${r},${g},${b})`;
+  }
+  // light: white → blue gradient
+  const r = Math.round(241 - t * 181);
+  const g = Math.round(245 - t * 175);
+  const b = Math.round(249 - t * 19);
   return `rgb(${r},${g},${b})`;
 }
 
@@ -25,6 +32,14 @@ interface HoverState {
 
 export default function DsmChart({ data }: { data: DsmData }) {
   const [hover, setHover] = useState<HoverState | null>(null);
+  const [dark, setDark] = useState(() => document.documentElement.classList.contains('dark'));
+  useEffect(() => {
+    const observer = new MutationObserver(() => {
+      setDark(document.documentElement.classList.contains('dark'));
+    });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+    return () => observer.disconnect();
+  }, []);
 
   const { modules, matrix } = data;
   const n = modules.length;
@@ -60,7 +75,7 @@ export default function DsmChart({ data }: { data: DsmData }) {
             textAnchor="end"
             dominantBaseline="middle"
             fontSize={Math.max(7, cellSize - 2)}
-            fill="#475569"
+            fill={dark ? '#94a3b8' : '#475569'}
           >
             {shortLabel(mod)}
           </text>
@@ -75,7 +90,7 @@ export default function DsmChart({ data }: { data: DsmData }) {
             textAnchor="start"
             dominantBaseline="auto"
             fontSize={Math.max(7, cellSize - 2)}
-            fill="#475569"
+            fill={dark ? '#94a3b8' : '#475569'}
             transform={`rotate(-45, ${margin.left + c * cellSize + cellSize / 2}, ${margin.top - 4})`}
           >
             {shortLabel(mod)}
@@ -87,7 +102,7 @@ export default function DsmChart({ data }: { data: DsmData }) {
           Array.from({ length: n }, (__, c) => {
             const value = matrix[r]?.[c] ?? 0;
             const isDiag = r === c;
-            const fill = isDiag ? '#e2e8f0' : cellColor(value, maxVal);
+            const fill = isDiag ? (dark ? '#334155' : '#e2e8f0') : cellColor(value, maxVal, dark);
             const x = margin.left + c * cellSize;
             const y = margin.top + r * cellSize;
             return (
@@ -98,7 +113,7 @@ export default function DsmChart({ data }: { data: DsmData }) {
                 width={cellSize}
                 height={cellSize}
                 fill={fill}
-                stroke="#e2e8f0"
+                stroke={dark ? '#334155' : '#e2e8f0'}
                 strokeWidth={0.5}
                 onMouseEnter={(e) =>
                   setHover({ row: r, col: c, x: e.clientX, y: e.clientY })
