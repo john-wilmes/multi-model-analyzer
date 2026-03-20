@@ -23,9 +23,9 @@
 
   <!-- Unique capabilities callout (between title and diagram) -->
   <rect x="15" y="72" width="970" height="55" rx="8" fill="#faf5ff" stroke="#805ad5" stroke-width="1.5"/>
-  <text x="30" y="90" class="legend-head" fill="#553c9a">Capabilities unique to MMA (not found in other tools surveyed):</text>
-  <text x="30" y="107" class="unique-text">1. I/A/D metrics + SARIF for TS    2. Static fault trees from call graphs    3. Cross-repo source-level structural dep graph    4. TS service topology from static analysis    5. Multi-model combination at fleet scale</text>
-  <text x="30" y="120" class="note">Partial overlap: Cross-repo pkg-level (Nx Polygraph) · Reachability analysis (Endor Labs AURI)</text>
+  <text x="500" y="90" text-anchor="middle" class="legend-head" fill="#553c9a">Capabilities unique to MMA (not found in other tools surveyed):</text>
+  <text x="500" y="107" text-anchor="middle" class="unique-text">1. I/A/D metrics + SARIF for TS    2. Static fault trees from call graphs    3. Cross-repo source-level structural dep graph    4. TS service topology from static analysis    5. Multi-model combination at fleet scale</text>
+  <text x="500" y="120" text-anchor="middle" class="note">Partial overlap: Cross-repo pkg-level (Nx Polygraph) · Reachability analysis (Endor Labs AURI)</text>
 
   <!-- Three main circles (shifted down 65px) -->
   <!-- Circle 1: TypeScript Structural Analysis (left) -->
