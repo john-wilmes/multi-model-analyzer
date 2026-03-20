@@ -144,7 +144,7 @@ function findFunctions(rootNode: TsNode): FunctionInfo[] {
 
     // When entering a class_declaration/class, propagate class name to children
     const nextClass =
-      node.type === "class_declaration" || node.type === "class"
+      node.type === "class_declaration" || node.type === "abstract_class_declaration" || node.type === "class"
         ? (node.namedChildren.find((c) => c.type === "type_identifier" || c.type === "identifier")?.text ?? className)
         : className;
 
@@ -160,7 +160,7 @@ function findFunctions(rootNode: TsNode): FunctionInfo[] {
 function findEnclosingClassName(node: TsNode): string | undefined {
   let current = node.parent;
   while (current) {
-    if (current.type === "class_declaration" || current.type === "class") {
+    if (current.type === "class_declaration" || current.type === "abstract_class_declaration" || current.type === "class") {
       const nameNode = current.namedChildren.find(
         (c) => c.type === "type_identifier" || c.type === "identifier",
       );
@@ -204,7 +204,8 @@ function collectCallEdges(
         node.type === "function_expression" ||
         node.type === "arrow_function" ||
         node.type === "method_definition" ||
-        node.type === "class_declaration")
+        node.type === "class_declaration" ||
+        node.type === "abstract_class_declaration")
     ) {
       return;
     }
