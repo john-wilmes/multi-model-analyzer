@@ -6,7 +6,7 @@ Static analysis toolchain for large TypeScript/JavaScript codebases. Extracts sy
 
 ## Architecture
 
-Monorepo with npm workspaces, 15 packages:
+Monorepo with npm workspaces — 15 `packages/*` workspaces + `apps/cli`:
 
 | Package | Purpose |
 |---------|---------|
@@ -31,7 +31,7 @@ Monorepo with npm workspaces, 15 packages:
 
 ```bash
 npm install                 # Install all workspace deps
-npm run build               # tsc --build (all 15 packages)
+npm run build               # tsc --build (all workspaces)
 npm run build -w packages/parsing && npm run build:wasm -w packages/parsing
                             # Rebuild parsing + WASM grammars
 npx tsc --build --noEmit    # Type-check without emit
