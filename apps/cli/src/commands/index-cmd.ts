@@ -1487,13 +1487,6 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     allSarifResults.push(...deduped);
   }
 
-  // Stamp fingerprints on all results that lack them (SARIF spec compliance)
-  for (const r of allSarifResults) {
-    if (!r.fingerprints || Object.keys(r.fingerprints).length === 0) {
-      (r as { fingerprints?: Record<string, string> }).fingerprints = { "mma/v1": fingerprint(r) };
-    }
-  }
-
   // Compare against previous baseline for incremental adoption
   // (must run even when allSarifResults is empty to track "absent" results)
   let finalResults: import("@mma/core").SarifResult[] = allSarifResults;
@@ -1510,6 +1503,14 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       log(`  Baseline: ${counts.new} new, ${counts.unchanged} unchanged, ${counts.updated} updated, ${counts.absent} absent`);
     } catch {
       log(`  warning: could not parse previous sarif:latest for baseline comparison`);
+    }
+  }
+
+  // Stamp fingerprints on all results that lack them (SARIF spec compliance).
+  // Runs after computeBaseline so "absent" results also get fingerprints.
+  for (const r of finalResults) {
+    if (!r.fingerprints || Object.keys(r.fingerprints).length === 0) {
+      (r as { fingerprints?: Record<string, string> }).fingerprints = { "mma/v1": fingerprint(r) };
     }
   }
 
