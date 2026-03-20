@@ -1506,6 +1506,16 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     }
   }
 
+  // Stamp fingerprints on all results that lack them (SARIF spec compliance).
+  // Runs after computeBaseline so "absent" results also get fingerprints.
+  for (const r of finalResults) {
+    if (!r.fingerprints) {
+      (r as { fingerprints?: Record<string, string> }).fingerprints = { "mma/v1": fingerprint(r) };
+    } else if (!r.fingerprints["mma/v1"]) {
+      r.fingerprints["mma/v1"] = fingerprint(r);
+    }
+  }
+
   // Annotate all results with debtMinutes before writing
   const annotatedResults = annotateDebt(finalResults);
 

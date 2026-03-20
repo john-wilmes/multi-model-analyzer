@@ -1,6 +1,24 @@
 [![CI](https://github.com/john-wilmes/multi-model-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/john-wilmes/multi-model-analyzer/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Node: 22+](https://img.shields.io/badge/Node-22%2B-brightgreen.svg)](https://nodejs.org/)
 
 # Multi-Model Analyzer (mma)
+
+> ⚠️ **Status: Beta** — APIs and output formats may change between releases.
+
+## Contents
+- [What It Finds](#what-it-finds)
+- [Key Features](#key-features)
+- [Quick Start](#quick-start)
+- [Commands](#commands)
+- [Examples](#examples)
+- [How It Works](#how-it-works)
+- [Architecture](#architecture)
+- [Prerequisites](#prerequisites)
+- [Data Handling](#data-handling)
+- [Findings Reference](#findings-reference)
+- [Contributing](#contributing)
+- [License](#license)
 
 Point `mma` at your TypeScript repos. Get back a health report with structural problems, fault risks, and dead code -- in seconds, with no LLM required.
 
@@ -37,7 +55,28 @@ That output is real -- [TypeORM](https://github.com/typeorm/typeorm) (3,371 modu
 
 All findings are SARIF v2.1.0 with logical locations only -- no source code leaves your machine.
 
+## Key Features
+
+- Cross-repo analysis across hundreds of TypeScript repositories
+- SARIF v2.1.0 output with built-in anonymization for safe sharing
+- MCP server for IDE/agent integration (`mma serve`)
+- Web dashboard with dependency graphs, blast radius, and service catalog views
+- 4-tier summarization (2 free local tiers + 2 optional LLM tiers)
+- Design pattern detection (adapter, facade, observer, factory, singleton, repository, middleware, decorator)
+- Baseline sharing for incremental reindexing across teams — see [docs/baseline-sharing.md](docs/baseline-sharing.md)
+- No LLM required for core analysis — everything runs locally
+
+See [where MMA fits in the ecosystem](docs/ecosystem-venn.svg) for a capability map across related tools.
+
+### Dashboard
+
+![Dashboard screenshot](docs/dashboard-screenshot.png)
+
+*Web dashboard with dependency graphs, blast radius visualization, and service health overview.*
+
 ## Quick Start
+
+If published to npm, you can skip the clone: `npx multi-model-analyzer index -v`. Otherwise:
 
 ```bash
 # Clone and install
@@ -76,14 +115,17 @@ mma merge      Combine multiple anonymized export DBs
 mma validate   Statistical validation of SARIF findings quality
 mma affected   Blast radius for a rev range
 mma serve      MCP server for IDE integration (stdio)
-mma baseline   Manage baseline snapshots for incremental indexing
+mma baseline create  Snapshot findings as known-violations baseline
+mma baseline check   Check for new violations against baseline (exit 1 if found)
 mma delta      Show diff of findings between two runs
 mma catalog    Inspect the inferred service catalog
 mma dashboard  Launch the web dashboard UI
 mma compress   Compress/prune the SQLite DB to reduce disk usage
 ```
 
-## Example: Prioritized Practices Report
+## Examples
+
+### Prioritized Practices Report
 
 The `practices` command partitions findings into action tiers:
 
@@ -105,7 +147,7 @@ Each finding includes a concrete action:
 
 Output formats: `--format table` (default), `json`, `markdown`.
 
-## Example: Anonymized SARIF
+### Anonymized SARIF
 
 When sharing results externally, use `--salt` to redact identifiers:
 
@@ -173,7 +215,7 @@ Monorepo with npm workspaces:
 | `packages/query` | Natural language query routing |
 | `packages/mcp` | MCP server for IDE integration |
 | `apps/cli` | CLI entry point |
-| `apps/dashboard` | Web dashboard (React) |
+| `apps/dashboard` | Web dashboard (React 19, Recharts, Cytoscape) |
 
 ## Prerequisites
 
@@ -191,69 +233,6 @@ Optional:
 - Built-in redaction hashes all identifiers before sharing
 - No telemetry
 
-## Baseline Sharing
-
-Share an indexed baseline so colleagues (or their agents) skip full reindexing -- only changed files are reprocessed.
-
-### Setup (one-time, by the person who indexed)
-
-```bash
-# Export raw baseline (includes all internal keys needed for incremental indexing)
-mma export --raw -o baseline.db
-```
-
-Share `baseline.db` via shared drive, S3, artifact store, etc.
-
-### Usage (by colleagues)
-
-**Option A: Config-driven (recommended)**
-
-Add `baselinePath` to your `mma.config.json`:
-
-```jsonc
-{
-  "baselinePath": "baseline.db",   // relative to config file, or absolute
-  "mirrorDir": "./data/mirrors",
-  "repos": [...]
-}
-```
-
-Then just run:
-
-```bash
-mma index -c mma.config.json -v
-```
-
-On a fresh database, the baseline is auto-imported before indexing. On subsequent runs it's skipped.
-
-**Option B: CLI flag**
-
-```bash
-mma index -c mma.config.json --baseline baseline.db
-```
-
-The `--baseline` flag overrides `baselinePath` from config.
-
-**Option C: Manual import**
-
-```bash
-mma import baseline.db --db my.db
-mma index -c mma.config.json --db my.db
-```
-
-### How it works
-
-The incremental engine checks stored commit hashes (`commit:<repo>`) against current HEAD. If a repo's hash matches, it's skipped entirely. If it differs, only changed files are reprocessed. The baseline seeds these hashes plus cached symbols and pipeline state, so the first incremental run only processes the delta.
-
-### For AI agents
-
-If you're an AI coding agent working with MMA:
-
-1. Check if `baselinePath` exists in `mma.config.json` -- if so, `mma index` handles everything automatically
-2. If you have a baseline file but no config field, use `--baseline path/to/baseline.db`
-3. The import is idempotent on fresh DBs and no-op on populated DBs -- safe to always include `--baseline` if unsure
-4. Errors during baseline import are non-fatal: indexing falls back to full processing with a warning
-
 ## Findings Reference
 
 See [docs/findings-guide.md](docs/findings-guide.md) for all SARIF rule IDs, severity levels, and metrics.
@@ -261,15 +240,6 @@ See [docs/findings-guide.md](docs/findings-guide.md) for all SARIF rule IDs, sev
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
-
-## Development
-
-```bash
-npm run build          # TypeScript compilation
-npm run type-check     # Type checking without emit
-npm run test           # Run all tests
-npm run lint           # ESLint
-```
 
 ## License
 

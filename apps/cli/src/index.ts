@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
-import "dotenv/config";
+import { config } from "dotenv";
+config({ override: true });
 
 /**
  * Multi-Model Analyzer CLI

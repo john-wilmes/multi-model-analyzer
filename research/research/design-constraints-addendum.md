@@ -77,7 +77,7 @@ Custom rule taxonomies go in the `tool.driver.rules` array with `id`, `shortDesc
 |-------|------|---------|-------|
 | qwen2.5-coder:1.5b | 986 MB | Good for code tasks | Recommended starting point |
 | qwen2.5-coder:3b | 1.93 GB | Better quality | If machine has 32GB+ |
-| deepseek-coder:1.3b | ~800 MB | Competitive | Smaller alternative |
+| deepseek-coder:1.3b | ~800 MB | Comparable | Smaller alternative |
 
 ### Integration Pattern
 

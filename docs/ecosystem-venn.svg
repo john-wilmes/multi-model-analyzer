@@ -1,0 +1,137 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 820" font-family="system-ui, -apple-system, sans-serif">
+  <defs>
+    <style>
+      .circle-label { font-size: 15px; font-weight: 700; fill: #1a1a2e; }
+      .tool-label { font-size: 11.5px; fill: #2d3748; }
+      .tool-label-bold { font-size: 12px; font-weight: 700; fill: #1a1a2e; }
+      .mma-label { font-size: 16px; font-weight: 800; fill: #fff; }
+      .mma-sub { font-size: 10px; fill: #e2e8f0; }
+      .title { font-size: 22px; font-weight: 800; fill: #1a1a2e; }
+      .subtitle { font-size: 13px; fill: #4a5568; }
+      .legend-head { font-size: 12px; font-weight: 700; fill: #1a1a2e; }
+      .unique-text { font-size: 10px; fill: #553c9a; font-style: italic; }
+      .note { font-size: 9.5px; fill: #718096; }
+    </style>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1000" height="820" fill="#f7fafc" rx="12"/>
+
+  <!-- Title -->
+  <text x="500" y="38" text-anchor="middle" class="title">TypeScript Architecture Analysis Ecosystem</text>
+  <text x="500" y="58" text-anchor="middle" class="subtitle">Capability domains and tool coverage (March 2026)</text>
+
+  <!-- Unique capabilities callout (between title and diagram) -->
+  <rect x="15" y="72" width="970" height="55" rx="8" fill="#faf5ff" stroke="#805ad5" stroke-width="1.5"/>
+  <text x="500" y="90" text-anchor="middle" class="legend-head" fill="#553c9a">Capabilities unique to MMA (not found in other tools surveyed):</text>
+  <text x="500" y="107" text-anchor="middle" class="unique-text">1. I/A/D metrics + SARIF for TS    2. Static fault trees from call graphs    3. Cross-repo source-level structural dep graph    4. TS service topology from static analysis    5. Multi-model combination at fleet scale</text>
+  <text x="500" y="120" text-anchor="middle" class="note">Partial overlap: Cross-repo pkg-level (Nx Polygraph) · Reachability analysis (Endor Labs AURI)</text>
+
+  <!-- Three main circles (shifted down 65px) -->
+  <!-- Circle 1: TypeScript Structural Analysis (left) -->
+  <circle cx="370" cy="425" r="220" fill="#3182ce" opacity="0.12" stroke="#3182ce" stroke-width="2.5"/>
+  <text x="210" y="255" class="circle-label" fill="#2b6cb0">TypeScript</text>
+  <text x="210" y="273" class="circle-label" fill="#2b6cb0">Structural Analysis</text>
+  <text x="210" y="289" style="font-size:10px; fill:#4a90d9">(dep graphs, call graphs,</text>
+  <text x="210" y="301" style="font-size:10px; fill:#4a90d9">metrics, CFG, symbols)</text>
+
+  <!-- Circle 2: Fleet / Multi-Repo Scale (right) -->
+  <circle cx="630" cy="425" r="220" fill="#e53e3e" opacity="0.12" stroke="#e53e3e" stroke-width="2.5"/>
+  <text x="720" y="255" class="circle-label" fill="#c53030">Fleet Scale</text>
+  <text x="720" y="273" class="circle-label" fill="#c53030">Multi-Repo</text>
+  <text x="720" y="289" style="font-size:10px; fill:#e06060">(cross-repo resolution,</text>
+  <text x="720" y="301" style="font-size:10px; fill:#e06060">fleet-wide queries)</text>
+
+  <!-- Circle 3: Architecture Models + SARIF (bottom) -->
+  <circle cx="500" cy="585" r="220" fill="#38a169" opacity="0.12" stroke="#38a169" stroke-width="2.5"/>
+  <text x="500" y="775" text-anchor="middle" class="circle-label" fill="#276749">Architecture Models + SARIF</text>
+  <text x="500" y="793" style="font-size:10px; fill:#48bb78; text-anchor:middle">(service catalog, fault trees, diagnostics, quality findings)</text>
+
+  <!-- === TOOLS PLACEMENT === -->
+
+  <!-- STRUCTURAL ONLY (left outer) -->
+  <!-- dependency-cruiser -->
+  <rect x="175" y="375" width="142" height="56" rx="8" fill="#ebf4ff" stroke="#3182ce" stroke-width="1.5"/>
+  <text x="246" y="393" text-anchor="middle" class="tool-label-bold">dependency-cruiser</text>
+  <text x="246" y="407" text-anchor="middle" class="tool-label">TS import graphs, I metric</text>
+  <text x="246" y="420" text-anchor="middle" class="note">open source, widely adopted</text>
+
+  <!-- Madge / Skott -->
+  <text x="210" y="453" text-anchor="middle" class="tool-label">Madge · Skott</text>
+  <text x="210" y="466" text-anchor="middle" class="note">import graphs, circulars</text>
+
+  <!-- ArchUnitTS -->
+  <rect x="170" y="485" width="120" height="44" rx="8" fill="#ebf4ff" stroke="#3182ce" stroke-width="1.5"/>
+  <text x="230" y="503" text-anchor="middle" class="tool-label-bold">ArchUnitTS</text>
+  <text x="230" y="517" text-anchor="middle" class="note">I/A/D, LCOM metrics</text>
+
+  <!-- Jelly -->
+  <text x="215" y="553" text-anchor="middle" class="tool-label">Jelly (call graphs, academic)</text>
+
+  <!-- FLEET ONLY (right outer) -->
+  <!-- CodeScene -->
+  <rect x="700" y="375" width="130" height="56" rx="8" fill="#fff5f5" stroke="#e53e3e" stroke-width="1.5"/>
+  <text x="765" y="393" text-anchor="middle" class="tool-label-bold">CodeScene</text>
+  <text x="765" y="407" text-anchor="middle" class="tool-label">hotspots, temporal coupling</text>
+  <text x="765" y="420" text-anchor="middle" class="note">multi-repo, git behavioral</text>
+
+  <!-- LinearB -->
+  <text x="760" y="453" text-anchor="middle" class="tool-label">LinearB (DORA, cycle time)</text>
+
+  <!-- MODELS ONLY (bottom outer) -->
+  <!-- EMFTA -->
+  <text x="380" y="745" text-anchor="middle" class="tool-label">EMFTA (manual fault trees)</text>
+
+  <!-- === OVERLAPS === -->
+
+  <!-- STRUCTURAL ∩ FLEET (top center) -->
+  <!-- Sourcegraph SCIP -->
+  <rect x="440" y="313" width="130" height="52" rx="8" fill="#fef3f2" stroke="#9b59b6" stroke-width="1.5"/>
+  <text x="505" y="331" text-anchor="middle" class="tool-label-bold">Sourcegraph SCIP</text>
+  <text x="505" y="345" text-anchor="middle" class="tool-label">cross-repo TS navigation</text>
+  <text x="505" y="357" text-anchor="middle" class="note">commercial, source-closed</text>
+
+  <!-- Nx Polygraph -->
+  <text x="505" y="380" text-anchor="middle" class="tool-label">Nx Polygraph (pkg-level, enterprise)</text>
+
+  <!-- STRUCTURAL ∩ MODELS (bottom left) -->
+  <!-- SonarQube -->
+  <rect x="295" y="573" width="140" height="60" rx="8" fill="#f0fff4" stroke="#38a169" stroke-width="1.5"/>
+  <text x="365" y="591" text-anchor="middle" class="tool-label-bold">SonarQube</text>
+  <text x="365" y="605" text-anchor="middle" class="tool-label">TS quality, complexity,</text>
+  <text x="365" y="618" text-anchor="middle" class="tool-label">arch rules (Java only)</text>
+  <text x="365" y="629" text-anchor="middle" class="note">.NET SARIF export available</text>
+
+  <!-- NDepend -->
+  <text x="310" y="660" text-anchor="middle" class="tool-label">NDepend (I/A/D + SARIF, C# only)</text>
+  <!-- Lattix -->
+  <text x="315" y="677" text-anchor="middle" class="tool-label">Lattix (DSM + metrics, no TS)</text>
+  <!-- Arcan -->
+  <text x="300" y="694" text-anchor="middle" class="tool-label">Arcan (ATDI, no TS)</text>
+
+  <!-- FLEET ∩ MODELS (bottom right) -->
+  <!-- CodeQL -->
+  <rect x="575" y="573" width="135" height="52" rx="8" fill="#fff5f5" stroke="#e53e3e" stroke-width="1.5"/>
+  <text x="642" y="591" text-anchor="middle" class="tool-label-bold">CodeQL MRVA</text>
+  <text x="642" y="605" text-anchor="middle" class="tool-label">fleet SARIF, 1000 repos</text>
+  <text x="642" y="619" text-anchor="middle" class="note">~95 TS queries, all security</text>
+
+  <!-- Backstage -->
+  <rect x="600" y="637" width="126" height="44" rx="8" fill="#f0fff4" stroke="#38a169" stroke-width="1.5"/>
+  <text x="663" y="655" text-anchor="middle" class="tool-label-bold">Backstage</text>
+  <text x="663" y="669" text-anchor="middle" class="tool-label">manual service catalog</text>
+
+  <!-- Semgrep -->
+  <text x="665" y="697" text-anchor="middle" class="tool-label">Semgrep (fleet SARIF, security)</text>
+  <!-- Snyk -->
+  <text x="660" y="714" text-anchor="middle" class="tool-label">Snyk Code (fleet SARIF, security)</text>
+  <!-- Endor Labs -->
+  <text x="670" y="731" text-anchor="middle" class="tool-label">Endor Labs (AURI, reachability)</text>
+
+  <!-- === MMA AT CENTER === -->
+  <circle cx="500" cy="485" r="52" fill="#553c9a" stroke="#44337a" stroke-width="3"/>
+  <text x="500" y="479" text-anchor="middle" class="mma-label">MMA</text>
+  <text x="500" y="495" text-anchor="middle" class="mma-sub">all three domains</text>
+  <text x="500" y="509" text-anchor="middle" class="mma-sub">for TypeScript</text>
+
+</svg>

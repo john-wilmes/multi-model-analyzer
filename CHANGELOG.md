@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+- Sanity check framework (`mma validate`) with 12 corpus-agnostic checks
+- Architectural Technical Debt Index (ATDI) per-repo and system-wide scoring
+- Cross-repo model analysis (breaking-change-risk, orphaned-service, shared-flag, cascading-fault, undocumented-consumer)
+- Hotspot analysis (high churn + complexity detection)
+- Web dashboard (`mma dashboard`) with React 19, Recharts, Cytoscape
+- Baseline sharing via `mma export --raw` and `mma import`
+- LLM narration layer (optional, gated behind API key)
+- `mma delta` command for PR-level finding diffs
+- `mma catalog` command for service catalog inspection
+- `mma compress` command for DB pruning
+
+### Fixed
+- SARIF fingerprint stamping now covers all rule categories (was missing config, fault, cross-repo)
+- Drain sanity check correctly unwraps `{repo, templates}` format
+- dotenv override so `.env` takes precedence over shell env vars
+- Fingerprint stamping runs after baseline comparison (so "absent" results get stamped)
+- 19 bugs from Novu corpus dogfood audit
+
 ## [1.0.0] - 2026-03-17
 
 ### Added

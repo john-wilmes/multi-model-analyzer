@@ -181,6 +181,191 @@ beforeAll(async () => {
     JSON.stringify([["src/app.ts", 3], ["src/index.ts", 1], ["src/utils.ts", 0]]),
   );
 
+  // Seed DSM graph edges (calls kind) for repo-a
+  await graph.addEdges([
+    {
+      source: "src/index.ts",
+      target: "src/app.ts",
+      kind: "calls",
+      metadata: { repo: "repo-a" },
+    },
+    {
+      source: "src/app.ts",
+      target: "src/utils.ts",
+      kind: "calls",
+      metadata: { repo: "repo-a" },
+    },
+  ]);
+
+  // Seed patterns
+  await kv.set(
+    "patterns:repo-a",
+    JSON.stringify({ singleton: ["src/config.ts"], factory: ["src/factory.ts"] }),
+  );
+
+  // Seed temporal coupling
+  await kv.set(
+    "temporal-coupling:repo-a",
+    JSON.stringify({
+      pairs: [
+        { fileA: "src/index.ts", fileB: "src/app.ts", coChangeCount: 8, totalCommits: 20, coupling: 0.4 },
+        { fileA: "src/app.ts", fileB: "src/utils.ts", coChangeCount: 3, totalCommits: 20, coupling: 0.15 },
+      ],
+      commitsAnalyzed: 20,
+      commitsSkipped: 2,
+    }),
+  );
+  await kv.set(
+    "temporal-coupling:repo-b",
+    JSON.stringify({
+      pairs: [
+        { fileA: "src/main.ts", fileB: "src/lib.ts", coChangeCount: 5, totalCommits: 15, coupling: 0.33 },
+      ],
+      commitsAnalyzed: 15,
+      commitsSkipped: 0,
+    }),
+  );
+
+  // Seed ATDI
+  await kv.set("atdi:system", JSON.stringify({ score: 84, moduleCount: 100 }));
+  await kv.set("atdi:repo-a", JSON.stringify({ score: 72, moduleCount: 40 }));
+
+  // Seed debt
+  await kv.set("debt:system", JSON.stringify({ totalMinutes: 1000, totalHours: 16.7 }));
+  await kv.set("debt:repo-a", JSON.stringify({ totalMinutes: 400, totalHours: 6.7 }));
+
+  // Seed cross-repo-graph (correlation:graph)
+  await kv.set(
+    "correlation:graph",
+    JSON.stringify({
+      edges: [
+        {
+          edge: { source: "src/client.ts", target: "src/server.ts", kind: "service-call", metadata: {} },
+          sourceRepo: "repo-a",
+          targetRepo: "repo-b",
+        },
+      ],
+      repoPairs: ["repo-a|repo-b"],
+      downstreamMap: [["repo-a", ["repo-b"]]],
+      upstreamMap: [["repo-b", ["repo-a"]]],
+    }),
+  );
+
+  // Seed cross-repo service-call graph edges for cross-repo-impact
+  await graph.addEdges([
+    {
+      source: "src/foo.ts",
+      target: "src/bar.ts",
+      kind: "imports",
+      metadata: { repo: "repo-a" },
+    },
+  ]);
+
+  // Seed cross-repo features
+  await kv.set(
+    "cross-repo:features",
+    JSON.stringify([
+      { name: "FEATURE_X", repos: ["repo-a", "repo-b"], coordinated: true },
+      { name: "FEATURE_Y", repos: ["repo-b"], coordinated: false },
+    ]),
+  );
+
+  // Seed cross-repo faults
+  await kv.set(
+    "cross-repo:faults",
+    JSON.stringify([
+      {
+        endpoint: "/api/data",
+        sourceRepo: "repo-a",
+        targetRepo: "repo-b",
+        sourceFaultTreeCount: 2,
+        targetFaultTreeCount: 1,
+      },
+    ]),
+  );
+
+  // Seed cross-repo catalog
+  await kv.set(
+    "cross-repo:catalog",
+    JSON.stringify([
+      {
+        entry: {
+          name: "DataService",
+          purpose: "Handles data processing",
+          dependencies: [],
+          apiSurface: [{ method: "GET", path: "/data" }],
+          errorHandlingSummary: "Returns 500 on failure",
+        },
+        repo: "repo-a",
+        consumers: ["repo-b"],
+        producers: [],
+      },
+      {
+        entry: {
+          name: "AuthService",
+          purpose: "Handles authentication",
+          dependencies: [],
+          apiSurface: [{ method: "POST", path: "/auth" }],
+          errorHandlingSummary: "Returns 401 on failure",
+        },
+        repo: "repo-b",
+        consumers: [],
+        producers: ["repo-a"],
+      },
+    ]),
+  );
+
+  // Seed additional SARIF findings with specific ruleIds for /api/findings/:ruleId tests
+  const sarifWithMultipleRules = {
+    $schema:
+      "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
+    version: "2.1.0",
+    runs: [
+      {
+        tool: { driver: { name: "mma", version: "0.1.0", rules: [] } },
+        results: [
+          {
+            ruleId: "MMA001",
+            level: "warning",
+            message: { text: "High instability" },
+            locations: [
+              {
+                logicalLocations: [
+                  { name: "src/index.ts", properties: { repo: "repo-a" } },
+                ],
+              },
+            ],
+          },
+          {
+            ruleId: "MMA002",
+            level: "error",
+            message: { text: "Pain zone violation" },
+            locations: [
+              {
+                logicalLocations: [
+                  { name: "src/app.ts", properties: { repo: "repo-a" } },
+                ],
+              },
+            ],
+          },
+          {
+            ruleId: "MMA002",
+            level: "error",
+            message: { text: "Pain zone violation" },
+            locations: [
+              {
+                logicalLocations: [
+                  { name: "src/main.ts", properties: { repo: "repo-b" } },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  await kv.set("sarif:latest", JSON.stringify(sarifWithMultipleRules));
+
   server = await startTestServer(kv, graph);
   baseUrl = `http://127.0.0.1:${server.port}`;
 });
@@ -513,5 +698,362 @@ describe("Large body rejection (PR #48)", () => {
       status = 0;
     }
     expect(status).not.toBe(200);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// New endpoint tests
+// ---------------------------------------------------------------------------
+
+describe("GET /api/dsm/:repo", () => {
+  it("returns modules, matrix, and edgeKind for default kind (imports)", async () => {
+    const res = await get("/api/dsm/repo-a");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { modules: string[]; matrix: number[][]; edgeKind: string };
+    expect(Array.isArray(body.modules)).toBe(true);
+    expect(body.modules.length).toBeGreaterThan(0);
+    expect(Array.isArray(body.matrix)).toBe(true);
+    expect(body.matrix.length).toBe(body.modules.length);
+    expect(body.edgeKind).toBe("imports");
+  });
+
+  it("returns correct matrix dimensions for ?kind=calls", async () => {
+    const res = await get("/api/dsm/repo-a?kind=calls");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { modules: string[]; matrix: number[][]; edgeKind: string };
+    expect(body.edgeKind).toBe("calls");
+    expect(body.modules.length).toBeGreaterThan(0);
+    // Each row must have the same length as the modules array
+    for (const row of body.matrix) {
+      expect(row.length).toBe(body.modules.length);
+    }
+  });
+
+  it("returns 400 for invalid kind", async () => {
+    const res = await get("/api/dsm/repo-a?kind=not-valid");
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/Invalid edgeKind/i);
+  });
+
+  it("returns empty modules for a repo with no edges", async () => {
+    const res = await get("/api/dsm/repo-unknown");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { modules: string[]; matrix: number[][] };
+    expect(body.modules).toEqual([]);
+    expect(body.matrix).toEqual([]);
+  });
+});
+
+describe("GET /api/patterns/:repo", () => {
+  it("returns parsed JSON pattern data for a seeded repo", async () => {
+    const res = await get("/api/patterns/repo-a");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { singleton: string[]; factory: string[] };
+    expect(Array.isArray(body.singleton)).toBe(true);
+    expect(body.singleton).toContain("src/config.ts");
+    expect(Array.isArray(body.factory)).toBe(true);
+  });
+
+  it("returns empty object for repo with no patterns data", async () => {
+    const res = await get("/api/patterns/repo-unknown");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body).toEqual({});
+  });
+});
+
+describe("GET /api/temporal-coupling", () => {
+  it("returns flat array sorted by coChangeCount descending", async () => {
+    const res = await get("/api/temporal-coupling");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Array<{ coChangeCount: number; repo: string }>;
+    expect(Array.isArray(body)).toBe(true);
+    expect(body.length).toBeGreaterThan(0);
+    // Verify sorted descending
+    for (let i = 1; i < body.length; i++) {
+      expect(body[i - 1]!.coChangeCount).toBeGreaterThanOrEqual(body[i]!.coChangeCount);
+    }
+    // Each entry should have a repo field injected
+    expect(body[0]).toHaveProperty("repo");
+  });
+
+  it("aggregates pairs from all repos", async () => {
+    const res = await get("/api/temporal-coupling");
+    const body = (await res.json()) as Array<{ repo: string }>;
+    const repos = new Set(body.map((p) => p.repo));
+    expect(repos.has("repo-a")).toBe(true);
+    expect(repos.has("repo-b")).toBe(true);
+  });
+});
+
+describe("GET /api/temporal-coupling/:repo", () => {
+  it("returns the per-repo object directly", async () => {
+    const res = await get("/api/temporal-coupling/repo-a");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { pairs: unknown[]; commitsAnalyzed: number };
+    expect(Array.isArray(body.pairs)).toBe(true);
+    expect(body.pairs.length).toBe(2);
+    expect(typeof body.commitsAnalyzed).toBe("number");
+    expect(body.commitsAnalyzed).toBe(20);
+  });
+
+  it("returns default empty structure for unknown repo", async () => {
+    const res = await get("/api/temporal-coupling/repo-unknown");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { pairs: unknown[]; commitsAnalyzed: number };
+    expect(body.pairs).toEqual([]);
+    expect(body.commitsAnalyzed).toBe(0);
+  });
+});
+
+describe("GET /api/atdi", () => {
+  it("returns the system ATDI object", async () => {
+    const res = await get("/api/atdi");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { score: number; moduleCount: number };
+    expect(body.score).toBe(84);
+    expect(body.moduleCount).toBe(100);
+  });
+});
+
+describe("GET /api/atdi/:repo", () => {
+  it("returns per-repo ATDI object", async () => {
+    const res = await get("/api/atdi/repo-a");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { score: number; moduleCount: number };
+    expect(body.score).toBe(72);
+    expect(body.moduleCount).toBe(40);
+  });
+
+  it("returns null for unknown repo", async () => {
+    const res = await get("/api/atdi/repo-unknown");
+    expect(res.status).toBe(200);
+    const body: unknown = await res.json();
+    expect(body).toBeNull();
+  });
+});
+
+describe("GET /api/debt", () => {
+  it("returns the system debt object", async () => {
+    const res = await get("/api/debt");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { totalMinutes: number; totalHours: number };
+    expect(body.totalMinutes).toBe(1000);
+    expect(body.totalHours).toBeCloseTo(16.7, 1);
+  });
+});
+
+describe("GET /api/debt/:repo", () => {
+  it("returns per-repo debt object", async () => {
+    const res = await get("/api/debt/repo-a");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { totalMinutes: number; totalHours: number };
+    expect(body.totalMinutes).toBe(400);
+  });
+
+  it("returns null for unknown repo", async () => {
+    const res = await get("/api/debt/repo-unknown");
+    expect(res.status).toBe(200);
+    const body: unknown = await res.json();
+    expect(body).toBeNull();
+  });
+});
+
+describe("GET /api/cross-repo-graph", () => {
+  it("returns edges with sourceRepo and targetRepo", async () => {
+    const res = await get("/api/cross-repo-graph");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      edges: Array<{ sourceRepo: string; targetRepo: string }>;
+      repoPairs: string[];
+    };
+    expect(Array.isArray(body.edges)).toBe(true);
+    expect(body.edges.length).toBeGreaterThan(0);
+    expect(body.edges[0]).toHaveProperty("sourceRepo");
+    expect(body.edges[0]).toHaveProperty("targetRepo");
+    expect(Array.isArray(body.repoPairs)).toBe(true);
+  });
+
+  it("filters edges by ?repo= query param", async () => {
+    const res = await get("/api/cross-repo-graph?repo=repo-a");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      edges: Array<{ sourceRepo: string; targetRepo: string }>;
+    };
+    // All edges must involve repo-a
+    for (const edge of body.edges) {
+      expect(edge.sourceRepo === "repo-a" || edge.targetRepo === "repo-a").toBe(true);
+    }
+  });
+
+  it("returns empty edges array when ?repo= matches no edges", async () => {
+    const res = await get("/api/cross-repo-graph?repo=repo-unknown");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { edges: unknown[] };
+    expect(body.edges).toEqual([]);
+  });
+});
+
+describe("POST /api/cross-repo-impact", () => {
+  it("returns impact structure for valid request", async () => {
+    const res = await fetch(`${baseUrl}/api/cross-repo-impact`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ files: ["src/foo.ts"], repo: "repo-a" }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      changedFiles: string[];
+      changedRepo: string;
+      affectedWithinRepo: unknown[];
+      affectedAcrossRepos: Record<string, unknown>;
+      reposReached: number;
+    };
+    expect(Array.isArray(body.changedFiles)).toBe(true);
+    expect(body.changedFiles).toContain("src/foo.ts");
+    expect(body.changedRepo).toBe("repo-a");
+    expect(Array.isArray(body.affectedWithinRepo)).toBe(true);
+    expect(typeof body.affectedAcrossRepos).toBe("object");
+    expect(typeof body.reposReached).toBe("number");
+  });
+
+  it("returns 400 when files or repo is missing", async () => {
+    const res = await fetch(`${baseUrl}/api/cross-repo-impact`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ files: ["src/foo.ts"] }), // missing repo
+    });
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("GET /api/cross-repo-features", () => {
+  it("returns flags array", async () => {
+    const res = await get("/api/cross-repo-features");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { flags: Array<{ name: string; repos: string[] }> };
+    expect(Array.isArray(body.flags)).toBe(true);
+    expect(body.flags.length).toBe(2);
+    expect(body.flags.map((f) => f.name)).toContain("FEATURE_X");
+  });
+
+  it("filters flags by ?repo= param", async () => {
+    const res = await get("/api/cross-repo-features?repo=repo-b");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { flags: Array<{ name: string; repos: string[] }> };
+    // Both FEATURE_X and FEATURE_Y include repo-b
+    for (const flag of body.flags) {
+      expect(flag.repos).toContain("repo-b");
+    }
+  });
+});
+
+describe("GET /api/cross-repo-faults", () => {
+  it("returns faultLinks array", async () => {
+    const res = await get("/api/cross-repo-faults");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      faultLinks: Array<{ endpoint: string; sourceRepo: string; targetRepo: string }>;
+    };
+    expect(Array.isArray(body.faultLinks)).toBe(true);
+    expect(body.faultLinks.length).toBe(1);
+    expect(body.faultLinks[0]!.endpoint).toBe("/api/data");
+  });
+
+  it("filters faultLinks by ?repo= param", async () => {
+    const res = await get("/api/cross-repo-faults?repo=repo-a");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      faultLinks: Array<{ sourceRepo: string; targetRepo: string }>;
+    };
+    for (const link of body.faultLinks) {
+      expect(link.sourceRepo === "repo-a" || link.targetRepo === "repo-a").toBe(true);
+    }
+  });
+
+  it("returns empty faultLinks for unknown repo", async () => {
+    const res = await get("/api/cross-repo-faults?repo=repo-unknown");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { faultLinks: unknown[] };
+    expect(body.faultLinks).toEqual([]);
+  });
+});
+
+describe("GET /api/cross-repo-catalog", () => {
+  it("returns entries array", async () => {
+    const res = await get("/api/cross-repo-catalog");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { entries: Array<{ repo: string }> };
+    expect(Array.isArray(body.entries)).toBe(true);
+    expect(body.entries.length).toBe(2);
+  });
+
+  it("filters entries by ?repo= param (own repo)", async () => {
+    const res = await get("/api/cross-repo-catalog?repo=repo-a");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      entries: Array<{ repo: string; consumers: string[]; producers: string[] }>;
+    };
+    // Every returned entry must involve repo-a
+    for (const entry of body.entries) {
+      const involves =
+        entry.repo === "repo-a" ||
+        entry.consumers.includes("repo-a") ||
+        entry.producers.includes("repo-a");
+      expect(involves).toBe(true);
+    }
+  });
+});
+
+describe("GET /api/metrics-summary", () => {
+  it("returns object keyed by repo", async () => {
+    const res = await get("/api/metrics-summary");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, { repo: string; moduleCount: number }>;
+    expect(typeof body).toBe("object");
+    expect("repo-a" in body).toBe(true);
+    expect("repo-b" in body).toBe(true);
+    expect(body["repo-a"]!.moduleCount).toBe(2);
+  });
+
+  it("each entry has expected shape", async () => {
+    const res = await get("/api/metrics-summary");
+    const body = (await res.json()) as Record<
+      string,
+      { repo: string; avgInstability: number; avgAbstractness: number }
+    >;
+    const entry = body["repo-a"]!;
+    expect(typeof entry.avgInstability).toBe("number");
+    expect(typeof entry.avgAbstractness).toBe("number");
+  });
+});
+
+describe("GET /api/findings/:ruleId", () => {
+  it("returns only findings matching the specified ruleId", async () => {
+    const res = await get("/api/findings/MMA002");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { results: Array<{ ruleId: string }>; total: number };
+    expect(Array.isArray(body.results)).toBe(true);
+    expect(body.results.length).toBeGreaterThan(0);
+    for (const result of body.results) {
+      expect(result.ruleId).toBe("MMA002");
+    }
+  });
+
+  it("returns empty results for a ruleId that does not exist", async () => {
+    const res = await get("/api/findings/MMA999");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { results: unknown[]; total: number };
+    expect(body.results).toEqual([]);
+    expect(body.total).toBe(0);
+  });
+
+  it("MMA001 returns exactly one finding", async () => {
+    const res = await get("/api/findings/MMA001");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { results: Array<{ ruleId: string }> };
+    expect(body.results.length).toBe(1);
+    expect(body.results[0]!.ruleId).toBe("MMA001");
   });
 });

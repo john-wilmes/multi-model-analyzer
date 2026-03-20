@@ -6,7 +6,7 @@ Static analysis toolchain for large TypeScript/JavaScript codebases. Extracts sy
 
 ## Architecture
 
-Monorepo with npm workspaces — 15 `packages/*` workspaces + `apps/cli`:
+Monorepo with npm workspaces — 15 `packages/*` workspaces + 2 apps (`apps/cli`, `apps/dashboard`):
 
 | Package | Purpose |
 |---------|---------|
@@ -26,6 +26,7 @@ Monorepo with npm workspaces — 15 `packages/*` workspaces + `apps/cli`:
 | `packages/diagnostics` | SARIF report generation |
 | `packages/query` | Natural language query routing |
 | `apps/cli` | CLI entry point (`mma index`, `mma query`, `mma practices`) |
+| `apps/dashboard` | Web dashboard (React 19, Recharts, Cytoscape) |
 
 ## Key Commands
 
@@ -56,7 +57,7 @@ The `parseFiles()` orchestrator runs tree-sitter first, then optionally augments
 - Node.js 22+ required
 - TypeScript strict mode, ESM throughout
 - Build must pass (`npx tsc --build`) before committing
-- Do not commit generated files: `dist/`, `*.tsbuildinfo`, `packages/parsing/wasm/`
+- Do not commit generated files: `dist/`, `*.tsbuildinfo`
 - Do not commit `mma.config.json` (contains local paths)
 - Single-developer project: use feature branches + PRs to main
 - All PRs are reviewed by CodeRabbit (GitHub app). Wait for the review and address findings before merging.

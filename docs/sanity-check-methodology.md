@@ -3,8 +3,8 @@
 How we validate that MMA's analysis output matches reality. Each dimension has a
 test corpus, a validation procedure, and accuracy metrics.
 
-**Test Corpus**: Novu split-repo (5 repos: novu-api, novu-dashboard, novu-libs,
-novu-worker, novu-mono). Indexed with `--enrich` flag for full tier-1 through
+**Test Corpus**: Novu split-repo (4 repos: novu-api, novu-dashboard, novu-libs,
+novu-worker). Indexed with `--enrich` flag for full tier-1 through
 tier-4 summarization + narrations. DB at `data-novu/mma-novu.db`, mirrors at
 `data-novu/mirrors/`.
 
@@ -89,6 +89,8 @@ novu-api imports `@novu/shared` from novu-libs).
 (`/path/to/mirror/packages/shared`). Result: 0 cross-repo edges resolved out of
 ~2,645 expected. Fix: `join(repo.localPath, dirname(pjFile.path))` at
 `index-cmd.ts:394`.
+
+**Update (2026-03-20):** This bug has been fixed. Cross-repo edges now resolve correctly (2,864 edges in Novu corpus).
 
 ---
 
@@ -320,9 +322,11 @@ for (const prefix of ['summary:tier3:', 'summary:tier4:', 'sarif:patterns:',
 
 ## Bug Tracker (from last run, 2026-03-19)
 
+Last updated: 2026-03-20. See `mma validate` for automated sanity checks.
+
 | # | Severity | Bug | File | Status |
 |---|----------|-----|------|--------|
-| 1 | CRITICAL | packageRoots relative vs absolute path → 0 cross-repo edges | `index-cmd.ts:394` | Open |
+| 1 | CRITICAL | packageRoots relative vs absolute path → 0 cross-repo edges | `index-cmd.ts:394` | Fixed (PR #52) |
 | 2 | HIGH | Multi-line signatures truncated (30% methods) | `templates.ts:34` | Open |
 | 3 | HIGH | `@/` path aliases unresolved | ingestion/parsing | Open |
 | 4 | HIGH | Tier-4 dependencies always `undefined` | tier-4 enrichment | Open |
