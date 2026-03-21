@@ -228,9 +228,8 @@ export default function CrossRepoGraphView() {
   );
 
   const { repos, pairs } = data ? aggregateEdges(data) : { repos: new Map(), pairs: [] };
-  const topLinchpins = [...repos.entries()]
-    .sort((a, b) => b[1].fanIn - a[1].fanIn)
-    .slice(0, 5);
+  const allSorted = [...repos.entries()].sort((a, b) => b[1].fanIn - a[1].fanIn);
+  const topLinchpins = allSorted.slice(0, 10);
 
   return (
     <div className="space-y-4">
@@ -298,7 +297,14 @@ export default function CrossRepoGraphView() {
             </div>
 
             <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 p-4">
-              <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-2">Top Dependencies (by fan-in)</h3>
+              <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-2">
+                Top Dependencies (by fan-in)
+                {allSorted.length > topLinchpins.length && (
+                  <span className="font-normal text-slate-400 dark:text-slate-500 ml-1">
+                    ({topLinchpins.length} of {allSorted.length})
+                  </span>
+                )}
+              </h3>
               <div className="space-y-2">
                 {topLinchpins.map(([name, stats]) => (
                   <button

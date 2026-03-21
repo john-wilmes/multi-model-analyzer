@@ -186,31 +186,6 @@ export default function Overview() {
 
   return (
     <div className="space-y-6">
-      {/* Executive summary */}
-      {practices && (
-        <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 p-4">
-          <div className="flex items-center gap-4">
-            {practices.executive?.grade && (
-              <span
-                className={`text-5xl font-bold ${GRADE_COLORS[practices.executive.grade] ?? 'text-slate-700 dark:text-slate-300'}`}
-              >
-                {practices.executive.grade}
-              </span>
-            )}
-            <div>
-              <p className="text-lg font-semibold text-slate-800 dark:text-slate-100">
-                {practices.executive?.headline ?? 'Code Health Summary'}
-              </p>
-              {practices.executive?.score !== undefined && (
-                <p className="text-sm text-slate-500 dark:text-slate-400">
-                  Score: {practices.executive.score}
-                </p>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* ATDI panel */}
       {practices?.atdi && (
         <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 p-4">

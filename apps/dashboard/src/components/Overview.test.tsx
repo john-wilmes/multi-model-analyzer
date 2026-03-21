@@ -114,16 +114,6 @@ describe('Overview', () => {
     expect(screen.getByText('repo-b')).toBeInTheDocument();
   });
 
-  it('renders executive grade and headline', async () => {
-    render(
-      <MemoryRouter>
-        <Overview />
-      </MemoryRouter>,
-    );
-    expect(await screen.findByText('B')).toBeInTheDocument();
-    expect(screen.getByText('Moderate technical debt')).toBeInTheDocument();
-  });
-
   it('renders ATDI score section', async () => {
     render(
       <MemoryRouter>
