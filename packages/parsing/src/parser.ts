@@ -99,6 +99,7 @@ export async function parseFiles(
   // Slots are pre-allocated so output order matches input order regardless of
   // which files finish first (avoids non-deterministic test failures).
   const parsedFileSlots: (ParsedFile | null)[] = new Array(parseableFiles.length).fill(null);
+  const treeSitterTreeSlots: (TreeSitterTree | null)[] = new Array(parseableFiles.length).fill(null);
   const treeSitterTrees = new Map<string, TreeSitterTree>();
 
   let treeSitterTimeMs = 0;
@@ -126,7 +127,7 @@ export async function parseFiles(
           ? await options.contentProvider(file.path)
           : await readFile(join(rootDir, file.path), "utf-8");
         const tree = parseSource(content, file.path);
-        treeSitterTrees.set(file.path, tree);
+        treeSitterTreeSlots[idx] = tree;
 
         const { symbols, errors } = extractSymbolsFromTree(tree, file.path, repo);
         const kind = classifyFileKind(file.path);
@@ -139,7 +140,11 @@ export async function parseFiles(
         }
       } finally {
         const current = ++progressCounter;
-        progress?.({ phase: "tree-sitter", current, total: parseableFiles.length, filePath: file.path });
+        if (progress) {
+          try {
+            progress({ phase: "tree-sitter", current, total: parseableFiles.length, filePath: file.path });
+          } catch { /* progress callback must not abort parsing */ }
+        }
       }
     });
 
@@ -149,7 +154,11 @@ export async function parseFiles(
     treeSitterTimeMs = performance.now() - start;
   }
 
-  // Collapse slots to a dense array, preserving input order.
+  // Collapse slots to dense collections, preserving input order.
+  for (let i = 0; i < treeSitterTreeSlots.length; i++) {
+    const tree = treeSitterTreeSlots[i];
+    if (tree) treeSitterTrees.set(parseableFiles[i]!.path, tree);
+  }
   const parsedFiles: ParsedFile[] = parsedFileSlots.filter((p): p is ParsedFile => p !== null);
 
   // Phase 2: ts-morph (optional, type-resolved)
