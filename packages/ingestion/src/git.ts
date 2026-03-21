@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { access, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -101,13 +101,113 @@ export async function getFileContent(
   repoPath: string,
   commit: string,
   filePath: string,
+  options?: { timeoutMs?: number },
 ): Promise<string> {
   const { stdout } = await execFileAsync(
     "git",
     ["show", `${commit}:${filePath}`],
-    { cwd: repoPath, maxBuffer: 50 * 1024 * 1024 },
+    { cwd: repoPath, maxBuffer: 50 * 1024 * 1024, timeout: options?.timeoutMs },
   );
   return stdout;
+}
+
+/**
+ * Read multiple files from a bare repo in a single `git cat-file --batch` process.
+ * Much faster than spawning one `git show` per file, especially on blobless clones
+ * where each show triggers a lazy blob fetch negotiation.
+ *
+ * Returns a Map<filePath, content>. Files that fail to read are omitted.
+ */
+export async function getFileContentBatch(
+  repoPath: string,
+  commit: string,
+  filePaths: readonly string[],
+): Promise<Map<string, string>> {
+  if (filePaths.length === 0) return new Map();
+
+  return new Promise((resolve, reject) => {
+    const TIMEOUT_MS = 30_000;
+    let settled = false;
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn();
+    };
+
+    const result = new Map<string, string>();
+    const proc = spawn("git", ["cat-file", "--batch"], {
+      cwd: repoPath,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    const timer = setTimeout(() => {
+      proc.kill();
+      settle(() => reject(new Error(`git cat-file --batch timed out after ${TIMEOUT_MS}ms`)));
+    }, TIMEOUT_MS);
+
+    const stdoutChunks: Buffer[] = [];
+    proc.stdout.on("data", (chunk: Buffer) => {
+      stdoutChunks.push(chunk);
+    });
+
+    let stderr = "";
+    proc.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+
+    proc.on("error", (err) => settle(() => reject(err)));
+    proc.on("close", (code) => {
+      settle(() => {
+        if (code !== 0) {
+          reject(new Error(`git cat-file --batch exited ${code}: ${stderr}`));
+          return;
+        }
+
+        const stdout = Buffer.concat(stdoutChunks);
+
+        // Parse batch output: each entry is "<oid> <type> <size>\n<content>\n"
+        // or "<ref> missing\n" for missing objects
+        let offset = 0;
+        for (const filePath of filePaths) {
+          // Find the header line
+          const headerEnd = stdout.indexOf(0x0a, offset); // '\n'
+          if (headerEnd === -1) break;
+          const header = stdout.subarray(offset, headerEnd).toString("utf-8");
+
+          if (header.endsWith("missing")) {
+            offset = headerEnd + 1;
+            continue;
+          }
+
+          // Parse "<oid> blob <size>"
+          const sizeStr = header.split(" ").pop();
+          const size = sizeStr ? parseInt(sizeStr, 10) : 0;
+          if (isNaN(size) || size < 0) {
+            offset = headerEnd + 1;
+            continue;
+          }
+
+          const contentStart = headerEnd + 1;
+          const contentEnd = contentStart + size;
+          if (contentEnd > stdout.length) break;
+
+          result.set(filePath, stdout.subarray(contentStart, contentEnd).toString("utf-8"));
+          offset = contentEnd + 1; // skip trailing '\n'
+        }
+
+        resolve(result);
+      });
+    });
+
+    // Write all refs to stdin then close; kill proc on write error
+    const input = filePaths.map((fp) => `${commit}:${fp}\n`).join("");
+    proc.stdin.write(input, (err) => {
+      if (err) {
+        proc.kill();
+        settle(() => reject(err));
+      }
+    });
+    proc.stdin.end();
+  });
 }
 
 export function parseNameStatus(

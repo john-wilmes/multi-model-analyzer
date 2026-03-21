@@ -77,9 +77,26 @@ function extractSignature(lines: string[], startIdx: number): string {
   return sig;
 }
 
-/** A signature is complete when `)` is followed by optional return type and `{` or `;`. */
+/** A signature is complete when it contains `)` followed (eventually) by `{` or `;`. */
 function isSignatureComplete(text: string): boolean {
-  return /\)\s*(?::[\s\S]+?)?\s*[{;]\s*$/.test(text);
+  // Scan forward from the last `)` tracking brace depth to distinguish a
+  // function-body opening `{` at depth 0 from a `{` inside a return-type
+  // object literal (e.g. `): { foo: string }`).
+  const lastParen = text.lastIndexOf(")");
+  if (lastParen === -1) return false;
+  let braceDepth = 0;
+  for (let i = lastParen + 1; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "{") {
+      if (braceDepth === 0) return true; // function body opening
+      braceDepth++;
+    } else if (ch === "}") {
+      braceDepth--;
+    } else if (ch === ";" && braceDepth === 0) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function extractParams(line: string): string | null {
