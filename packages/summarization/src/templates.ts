@@ -77,9 +77,17 @@ function extractSignature(lines: string[], startIdx: number): string {
   return sig;
 }
 
-/** A signature is complete when `)` is followed by optional return type and `{` or `;`. */
+/** A signature is complete when it contains `)` followed (eventually) by `{` or `;`. */
 function isSignatureComplete(text: string): boolean {
-  return /\)\s*(?::[\s\S]+?)?\s*[{;]\s*$/.test(text);
+  // Simple scan: find last `)`, then check if `{` or `;` appears after it.
+  // Avoids regex backtracking on long lines with complex type annotations.
+  const lastParen = text.lastIndexOf(")");
+  if (lastParen === -1) return false;
+  for (let i = lastParen + 1; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "{" || ch === ";") return true;
+  }
+  return false;
 }
 
 function extractParams(line: string): string | null {

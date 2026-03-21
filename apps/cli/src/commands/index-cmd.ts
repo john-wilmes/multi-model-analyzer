@@ -28,7 +28,7 @@ import type {
   SarifResult,
 } from "@mma/core";
 import { createSarifResult, createLogicalLocation } from "@mma/core";
-import { detectChanges, classifyFiles, getFileContent, getHeadCommit, isBareRepo, getCommitHistory } from "@mma/ingestion";
+import { detectChanges, classifyFiles, getFileContent, getFileContentBatch, getHeadCommit, isBareRepo, getCommitHistory } from "@mma/ingestion";
 import { parseFiles } from "@mma/parsing";
 import type { TreeSitterTree } from "@mma/parsing";
 import { extractDependencyGraph, buildControlFlowGraph, createCfgIdCounter, extractCallEdgesFromTreeSitter, computeModuleMetrics, summarizeRepoMetrics, detectDeadExports, detectInstabilityViolations, extractHeritageEdges, tagBarrelMediatedCycles } from "@mma/structural";
@@ -550,6 +550,11 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     let trees: ReadonlyMap<string, TreeSitterTree> | undefined;
 
     // Recovery repos skip Phases 3-4b (already have parsedFiles + graph edges)
+    // Cache source text read during parsing so tier-1 summarization doesn't
+    // re-fetch from git (critical for blobless bare clones where each
+    // git-show triggers a lazy blob fetch from the remote).
+    const sourceTextCache = new Map<string, string>();
+
     if (recoveryRepos.has(repo.name)) {
       log(`  [${repo.name}] Skipping Phases 3-4b (recovery mode, 4c/4d will still run)`);
     } else {
@@ -567,6 +572,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     }
 
     // --- Phase 3: Parse files ---
+
     log(`  [${repo.name}] Parsing files...`);
     const phase3Start = performance.now();
     try {
@@ -576,8 +582,11 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       const bareCommit = isBare ? await resolveCommitForBare(repo.localPath, changeSets, repo.name) : undefined;
       const contentProvider =
         isBare && bareCommit
-          ? (filePath: string) =>
-              getFileContent(repo.localPath, bareCommit, filePath)
+          ? async (filePath: string) => {
+              const text = await getFileContent(repo.localPath, bareCommit, filePath);
+              sourceTextCache.set(filePath, text);
+              return text;
+            }
           : undefined;
 
       const result = await parseFiles(classified, repo.name, repo.localPath, {
@@ -1194,8 +1203,31 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         // Source snippets for tier-3 context (entityId → first ~30 lines of symbol body)
         const sourceContextMap = new Map<string, string>();
         const MAX_SNIPPET_LINES = 30;
+        const isBareForTier1 = await checkBareRepo(repo.localPath);
+        const bareCommitForTier1 = isBareForTier1
+          ? await resolveCommitForBare(repo.localPath, changeSets, repo.name)
+          : undefined;
+
         for (let batchStart = 0; batchStart < parsedFiles.length; batchStart += BATCH_SIZE) {
           const batch = parsedFiles.slice(batchStart, batchStart + BATCH_SIZE);
+
+          // For bare repos: bulk-fetch uncached files in this batch via git cat-file --batch
+          if (isBareForTier1 && bareCommitForTier1) {
+            const uncached: string[] = [];
+            for (const pf of batch) {
+              if (sourceTextCache.has(pf.path)) continue;
+              const cacheKey = `summary:t1:${repo.name}:${pf.path}:${pf.contentHash}`;
+              if (await kvStore.get(cacheKey)) continue;
+              uncached.push(pf.path);
+            }
+            if (uncached.length > 0) {
+              try {
+                const fetched = await getFileContentBatch(repo.localPath, bareCommitForTier1, uncached);
+                for (const [p, c] of fetched) sourceTextCache.set(p, c);
+              } catch { /* fall through to per-file reads */ }
+            }
+          }
+
           const results = await Promise.all(
             batch.map(async (pf) => {
               const cacheKey = `summary:t1:${repo.name}:${pf.path}:${pf.contentHash}`;
@@ -1209,10 +1241,13 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
                 }
               }
               try {
-                const isBare = await checkBareRepo(repo.localPath);
-                const sourceText = isBare
-                  ? await getFileContent(repo.localPath, await resolveCommitForBare(repo.localPath, changeSets, repo.name), pf.path)
-                  : await readFile(join(repo.localPath, pf.path), "utf-8");
+                const cachedSource = sourceTextCache.get(pf.path);
+                sourceTextCache.delete(pf.path); // free after use
+                const sourceText = cachedSource !== undefined
+                  ? cachedSource
+                  : isBareForTier1 && bareCommitForTier1
+                    ? await getFileContent(repo.localPath, bareCommitForTier1, pf.path, { timeoutMs: 30_000 })
+                    : await readFile(join(repo.localPath, pf.path), "utf-8");
                 const summaries = tier1Summarize(pf.symbols, pf.path, sourceText);
                 if (summaries.length > 0) {
                   await kvStore.set(cacheKey, JSON.stringify(summaries));
@@ -1254,6 +1289,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         }
 
         const tier1Count = summaryMap.size;
+        sourceTextCache.clear(); // free memory after tier-1
 
         // Tier 2: naming-based summaries (overwrites tier 1 for same entityId)
         let tier2Total = 0;
