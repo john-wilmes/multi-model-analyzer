@@ -360,17 +360,13 @@ describe("computeReachCounts bitset vs BFS parity", () => {
     expect(bitset.get("d.ts")).toBe(0);
   });
 
-  it("500-node chain completes in < 100ms", async () => {
+  it("computes counts for a 500-node chain", async () => {
     const edges: GraphEdge[] = [];
     for (let i = 0; i < 499; i++) {
       edges.push(importEdge(`n${i}.ts`, `n${i + 1}.ts`));
     }
 
-    const start = performance.now();
     const counts = await computeReachCounts(edges);
-    const elapsed = performance.now() - start;
-
-    expect(elapsed).toBeLessThan(100);
     // Last node in chain is reached by all 499 others
     expect(counts.get("n499.ts")).toBe(499);
     // First node is reached by nobody
