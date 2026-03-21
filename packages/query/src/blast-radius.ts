@@ -225,7 +225,7 @@ export async function computeBlastRadius(
  *
  * For each file, counts how many other files transitively depend on it
  * (i.e., how many files would be affected if this file changed).
- * O(V+E), pure, synchronous.
+ * O(V+E), pure. Yields to the event loop periodically to avoid blocking.
  */
 export async function computeReachCounts(
   edges: readonly GraphEdge[],

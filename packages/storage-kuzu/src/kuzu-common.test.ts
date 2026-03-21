@@ -472,29 +472,31 @@ describe("schema versioning", () => {
         "metadata: '{\"repo\":\"repo1\"}', repo: 'repo1'})",
     );
 
-    expect(detectSchemaVersion(conn1)).toBe(1);
+    try {
+      expect(detectSchemaVersion(conn1)).toBe(1);
 
-    // Run both migrations
-    migrateV1ToV2(conn1);
-    migrateV2ToV3(conn1);
+      // Run both migrations
+      migrateV1ToV2(conn1);
+      migrateV2ToV3(conn1);
 
-    expect(detectSchemaVersion(conn1)).toBe(3);
+      expect(detectSchemaVersion(conn1)).toBe(3);
 
-    // Create graph store over the migrated connection and verify all edges
-    const graphStore = new KuzuGraphStore(conn1);
+      // Create graph store over the migrated connection and verify all edges
+      const graphStore = new KuzuGraphStore(conn1);
 
-    const importsEdges = await graphStore.getEdgesByKind("imports");
-    expect(importsEdges).toHaveLength(1);
-    expect(importsEdges[0]!.source).toBe("pkg-a");
-    expect(importsEdges[0]!.target).toBe("pkg-b");
+      const importsEdges = await graphStore.getEdgesByKind("imports");
+      expect(importsEdges).toHaveLength(1);
+      expect(importsEdges[0]!.source).toBe("pkg-a");
+      expect(importsEdges[0]!.target).toBe("pkg-b");
 
-    const callEdges = await graphStore.getEdgesByKind("calls");
-    expect(callEdges).toHaveLength(1);
-    expect(callEdges[0]!.source).toBe("pkg-b");
-    expect(callEdges[0]!.target).toBe("pkg-c");
-
-    try { conn1.closeSync(); } catch { /* ignore */ }
-    try { db1.closeSync(); } catch { /* ignore */ }
+      const callEdges = await graphStore.getEdgesByKind("calls");
+      expect(callEdges).toHaveLength(1);
+      expect(callEdges[0]!.source).toBe("pkg-b");
+      expect(callEdges[0]!.target).toBe("pkg-c");
+    } finally {
+      try { conn1.closeSync(); } catch { /* ignore */ }
+      try { db1.closeSync(); } catch { /* ignore */ }
+    }
   });
 
   it("migrates v2→v3 via createKuzuStores with data accessible via graph store", async () => {
@@ -522,31 +524,33 @@ describe("schema versioning", () => {
         "CREATE (s)-[:Edge {kind: 'extends', metadata: '{\"repo\":\"r2\"}', repo: 'r2'}]->(t)",
     );
 
-    expect(detectSchemaVersion(conn)).toBe(2);
-    migrateV2ToV3(conn);
-    expect(detectSchemaVersion(conn)).toBe(3);
+    try {
+      expect(detectSchemaVersion(conn)).toBe(2);
+      migrateV2ToV3(conn);
+      expect(detectSchemaVersion(conn)).toBe(3);
 
-    // Also add search/KV tables so we can use a full store suite
-    conn.querySync(
-      "CREATE NODE TABLE IF NOT EXISTS SearchDoc(id STRING PRIMARY KEY, " +
-        "content STRING, metadata STRING, repo STRING)",
-    );
-    conn.querySync("LOAD EXTENSION fts");
+      // Also add search/KV tables so we can use a full store suite
+      conn.querySync(
+        "CREATE NODE TABLE IF NOT EXISTS SearchDoc(id STRING PRIMARY KEY, " +
+          "content STRING, metadata STRING, repo STRING)",
+      );
+      conn.querySync("LOAD EXTENSION fts");
 
-    const graphStore = new KuzuGraphStore(conn);
+      const graphStore = new KuzuGraphStore(conn);
 
-    const edges = await graphStore.getEdgesByKind("extends");
-    expect(edges).toHaveLength(1);
-    expect(edges[0]!.source).toBe("svc-a");
-    expect(edges[0]!.target).toBe("svc-b");
+      const edges = await graphStore.getEdgesByKind("extends");
+      expect(edges).toHaveLength(1);
+      expect(edges[0]!.source).toBe("svc-a");
+      expect(edges[0]!.target).toBe("svc-b");
 
-    // Verify getEdgesFrom also works
-    const fromEdges = await graphStore.getEdgesFrom("svc-a");
-    expect(fromEdges).toHaveLength(1);
-    expect(fromEdges[0]!.kind).toBe("extends");
-
-    try { conn.closeSync(); } catch { /* ignore */ }
-    try { db.closeSync(); } catch { /* ignore */ }
+      // Verify getEdgesFrom also works
+      const fromEdges = await graphStore.getEdgesFrom("svc-a");
+      expect(fromEdges).toHaveLength(1);
+      expect(fromEdges[0]!.kind).toBe("extends");
+    } finally {
+      try { conn.closeSync(); } catch { /* ignore */ }
+      try { db.closeSync(); } catch { /* ignore */ }
+    }
   });
 
   it("fresh database gets v3 schema directly without migration", async () => {
@@ -583,10 +587,10 @@ describe("schema versioning", () => {
     }
   });
 
-  it("v3 database opened a second time is a no-op (idempotent)", async () => {
-    // Build a v3 database, call createKuzuStores on its connection again
-    // (simulated by running initSchema twice on the same in-memory connection).
-    // In practice this verifies CREATE ... IF NOT EXISTS guards.
+  it("multiple independent stores can be created without conflict", async () => {
+    // Build a v3 database, then create a second independent in-memory store.
+    // Verifies that schema bootstrap is idempotent (CREATE ... IF NOT EXISTS)
+    // and that two separate stores don't interfere with each other.
     const stores1 = createKuzuStores({ dbPath: ":memory:" });
     try {
       await stores1.graphStore.addEdges([

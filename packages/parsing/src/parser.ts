@@ -63,8 +63,8 @@ export interface ParseStats {
 
 /**
  * Run tasks with a sliding-window concurrency pool.
- * Resolves when all tasks have settled (individual rejections are swallowed
- * because each task is responsible for its own error handling).
+ * Resolves when all tasks complete. Callers must handle errors within `fn`;
+ * uncaught rejections will propagate and abort remaining work.
  */
 async function runWithConcurrency<T>(
   items: readonly T[],

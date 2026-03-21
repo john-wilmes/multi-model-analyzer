@@ -546,7 +546,7 @@ describe("isBarrelFile", () => {
 
 describe("tagBarrelMediatedCycles", () => {
   it("tags a cycle that passes through a barrel index.ts", () => {
-    const files = new Map<string, import("@mma/parsing").TreeSitterTree>();
+    const files = new Map<string, TreeSitterTree>();
     // barrel: index.ts re-exports from service.ts
     files.set("src/index.ts", parseSource(`export * from "./service";`, "src/index.ts"));
     // service imports from index (forming a cycle through the barrel)
@@ -563,7 +563,7 @@ describe("tagBarrelMediatedCycles", () => {
   });
 
   it("does not tag a cycle with no barrel files", () => {
-    const files = new Map<string, import("@mma/parsing").TreeSitterTree>();
+    const files = new Map<string, TreeSitterTree>();
     files.set("src/a.ts", parseSource(`export class A {};\nimport { B } from "./b";`, "src/a.ts"));
     files.set("src/b.ts", parseSource(`export class B {};\nimport { A } from "./a";`, "src/b.ts"));
 
@@ -576,7 +576,7 @@ describe("tagBarrelMediatedCycles", () => {
   });
 
   it("does not tag a cycle when index.ts exports local symbols (not a barrel)", () => {
-    const files = new Map<string, import("@mma/parsing").TreeSitterTree>();
+    const files = new Map<string, TreeSitterTree>();
     // This index.ts defines its own symbols — not a pure barrel
     files.set("src/index.ts", parseSource(`export class Root {}\nexport * from "./helper";`, "src/index.ts"));
     files.set("src/helper.ts", parseSource(`import { Root } from "./index";`, "src/helper.ts"));
@@ -590,12 +590,12 @@ describe("tagBarrelMediatedCycles", () => {
   });
 
   it("handles an empty cycle list", () => {
-    const files = new Map<string, import("@mma/parsing").TreeSitterTree>();
+    const files = new Map<string, TreeSitterTree>();
     expect(tagBarrelMediatedCycles([], files, "test-repo")).toEqual([]);
   });
 
   it("only checks index.ts/index.js filenames for barrel status", () => {
-    const files = new Map<string, import("@mma/parsing").TreeSitterTree>();
+    const files = new Map<string, TreeSitterTree>();
     // A non-index file that only has re-exports should NOT be treated as a barrel
     files.set("src/barrel.ts", parseSource(`export * from "./a";`, "src/barrel.ts"));
     files.set("src/a.ts", parseSource(`import { x } from "./barrel";`, "src/a.ts"));
