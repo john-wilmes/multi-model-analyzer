@@ -79,13 +79,22 @@ function extractSignature(lines: string[], startIdx: number): string {
 
 /** A signature is complete when it contains `)` followed (eventually) by `{` or `;`. */
 function isSignatureComplete(text: string): boolean {
-  // Simple scan: find last `)`, then check if `{` or `;` appears after it.
-  // Avoids regex backtracking on long lines with complex type annotations.
+  // Scan forward from the last `)` tracking brace depth to distinguish a
+  // function-body opening `{` at depth 0 from a `{` inside a return-type
+  // object literal (e.g. `): { foo: string }`).
   const lastParen = text.lastIndexOf(")");
   if (lastParen === -1) return false;
+  let braceDepth = 0;
   for (let i = lastParen + 1; i < text.length; i++) {
     const ch = text[i];
-    if (ch === "{" || ch === ";") return true;
+    if (ch === "{") {
+      if (braceDepth === 0) return true; // function body opening
+      braceDepth++;
+    } else if (ch === "}") {
+      braceDepth--;
+    } else if (ch === ";" && braceDepth === 0) {
+      return true;
+    }
   }
   return false;
 }

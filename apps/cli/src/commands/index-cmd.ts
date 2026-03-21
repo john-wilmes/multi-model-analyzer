@@ -1213,18 +1213,24 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
 
           // For bare repos: bulk-fetch uncached files in this batch via git cat-file --batch
           if (isBareForTier1 && bareCommitForTier1) {
-            const uncached: string[] = [];
-            for (const pf of batch) {
-              if (sourceTextCache.has(pf.path)) continue;
-              const cacheKey = `summary:t1:${repo.name}:${pf.path}:${pf.contentHash}`;
-              if (await kvStore.get(cacheKey)) continue;
-              uncached.push(pf.path);
-            }
+            // Filter out files already in the source-text cache, then check the
+            // KV summary cache in parallel for the remainder.
+            const notInMemory = batch.filter((pf) => !sourceTextCache.has(pf.path));
+            const cacheChecks = await Promise.all(
+              notInMemory.map(async (pf) => {
+                const cacheKey = `summary:t1:${repo.name}:${pf.path}:${pf.contentHash}`;
+                const hit = await kvStore.get(cacheKey);
+                return { pf, hit };
+              }),
+            );
+            const uncached = cacheChecks.filter(({ hit }) => !hit).map(({ pf }) => pf.path);
             if (uncached.length > 0) {
               try {
                 const fetched = await getFileContentBatch(repo.localPath, bareCommitForTier1, uncached);
                 for (const [p, c] of fetched) sourceTextCache.set(p, c);
-              } catch { /* fall through to per-file reads */ }
+              } catch (err) {
+                log(`[warn] bulk fetch failed for ${repo.name}, falling through to per-file reads: ${String(err)}`);
+              }
             }
           }
 

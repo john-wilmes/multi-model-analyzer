@@ -126,64 +126,86 @@ export async function getFileContentBatch(
   if (filePaths.length === 0) return new Map();
 
   return new Promise((resolve, reject) => {
+    const TIMEOUT_MS = 30_000;
+    let settled = false;
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn();
+    };
+
     const result = new Map<string, string>();
     const proc = spawn("git", ["cat-file", "--batch"], {
       cwd: repoPath,
       stdio: ["pipe", "pipe", "pipe"],
     });
 
-    let stdout = Buffer.alloc(0);
+    const timer = setTimeout(() => {
+      proc.kill();
+      settle(() => reject(new Error(`git cat-file --batch timed out after ${TIMEOUT_MS}ms`)));
+    }, TIMEOUT_MS);
+
+    const stdoutChunks: Buffer[] = [];
     proc.stdout.on("data", (chunk: Buffer) => {
-      stdout = Buffer.concat([stdout, chunk]);
+      stdoutChunks.push(chunk);
     });
 
     let stderr = "";
     proc.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
 
-    proc.on("error", reject);
+    proc.on("error", (err) => settle(() => reject(err)));
     proc.on("close", (code) => {
-      if (code !== 0) {
-        reject(new Error(`git cat-file --batch exited ${code}: ${stderr}`));
-        return;
-      }
-
-      // Parse batch output: each entry is "<oid> <type> <size>\n<content>\n"
-      // or "<ref> missing\n" for missing objects
-      let offset = 0;
-      for (const filePath of filePaths) {
-        // Find the header line
-        const headerEnd = stdout.indexOf(0x0a, offset); // '\n'
-        if (headerEnd === -1) break;
-        const header = stdout.subarray(offset, headerEnd).toString("utf-8");
-
-        if (header.endsWith("missing")) {
-          offset = headerEnd + 1;
-          continue;
+      settle(() => {
+        if (code !== 0) {
+          reject(new Error(`git cat-file --batch exited ${code}: ${stderr}`));
+          return;
         }
 
-        // Parse "<oid> blob <size>"
-        const sizeStr = header.split(" ").pop();
-        const size = sizeStr ? parseInt(sizeStr, 10) : 0;
-        if (isNaN(size) || size < 0) {
-          offset = headerEnd + 1;
-          continue;
+        const stdout = Buffer.concat(stdoutChunks);
+
+        // Parse batch output: each entry is "<oid> <type> <size>\n<content>\n"
+        // or "<ref> missing\n" for missing objects
+        let offset = 0;
+        for (const filePath of filePaths) {
+          // Find the header line
+          const headerEnd = stdout.indexOf(0x0a, offset); // '\n'
+          if (headerEnd === -1) break;
+          const header = stdout.subarray(offset, headerEnd).toString("utf-8");
+
+          if (header.endsWith("missing")) {
+            offset = headerEnd + 1;
+            continue;
+          }
+
+          // Parse "<oid> blob <size>"
+          const sizeStr = header.split(" ").pop();
+          const size = sizeStr ? parseInt(sizeStr, 10) : 0;
+          if (isNaN(size) || size < 0) {
+            offset = headerEnd + 1;
+            continue;
+          }
+
+          const contentStart = headerEnd + 1;
+          const contentEnd = contentStart + size;
+          if (contentEnd > stdout.length) break;
+
+          result.set(filePath, stdout.subarray(contentStart, contentEnd).toString("utf-8"));
+          offset = contentEnd + 1; // skip trailing '\n'
         }
 
-        const contentStart = headerEnd + 1;
-        const contentEnd = contentStart + size;
-        if (contentEnd > stdout.length) break;
-
-        result.set(filePath, stdout.subarray(contentStart, contentEnd).toString("utf-8"));
-        offset = contentEnd + 1; // skip trailing '\n'
-      }
-
-      resolve(result);
+        resolve(result);
+      });
     });
 
-    // Write all refs to stdin then close
-    for (const filePath of filePaths) {
-      proc.stdin.write(`${commit}:${filePath}\n`);
-    }
+    // Write all refs to stdin then close; kill proc on write error
+    const input = filePaths.map((fp) => `${commit}:${fp}\n`).join("");
+    proc.stdin.write(input, (err) => {
+      if (err) {
+        proc.kill();
+        settle(() => reject(err));
+      }
+    });
     proc.stdin.end();
   });
 }
