@@ -301,17 +301,23 @@ export function findCallees(
   return callGraph.edges.filter((e) => e.source === sourceFunction);
 }
 
-export function getTransitiveDependencies(
+/** Yield to the event loop to prevent blocking on large graph traversals. */
+const yieldToEventLoop = (): Promise<void> =>
+  new Promise((resolve) => setImmediate(resolve));
+
+export async function getTransitiveDependencies(
   callGraph: CallGraph,
   startFunction: string,
   maxDepth: number = 10,
-): Set<string> {
+): Promise<Set<string>> {
   const visited = new Set<string>();
   const queue: Array<{ node: string; depth: number }> = [
     { node: startFunction, depth: 0 },
   ];
 
+  let iter = 0;
   while (queue.length > 0) {
+    if (++iter % 1000 === 0) await yieldToEventLoop();
     const current = queue.shift()!;
     if (visited.has(current.node) || current.depth > maxDepth) continue;
     visited.add(current.node);

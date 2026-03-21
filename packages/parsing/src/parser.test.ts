@@ -319,6 +319,61 @@ export const helper = (x: number) => x * 2;
 });
 
 // ---------------------------------------------------------------------------
+// Concurrency
+// ---------------------------------------------------------------------------
+
+describe("parseFiles — concurrency option", () => {
+  it("produces the same results with concurrency=1 and concurrency=4", async () => {
+    const files = await Promise.all(
+      Array.from({ length: 6 }, (_, i) =>
+        writeTempFile(`conc/file${i}.ts`, `export function fn${i}() { return ${i}; }`),
+      ),
+    );
+
+    const [seq, par] = await Promise.all([
+      parseFiles(files, "test-repo", tempDir, { concurrency: 1 }),
+      parseFiles(files, "test-repo", tempDir, { concurrency: 4 }),
+    ]);
+
+    expect(par.parsedFiles).toHaveLength(seq.parsedFiles.length);
+    expect(par.stats.fileCount).toBe(seq.stats.fileCount);
+    expect(par.stats.symbolCount).toBe(seq.stats.symbolCount);
+
+    // Output order must match input order regardless of concurrency.
+    const seqPaths = seq.parsedFiles.map((p) => p.path);
+    const parPaths = par.parsedFiles.map((p) => p.path);
+    expect(parPaths).toEqual(seqPaths);
+  });
+
+  it("accepts concurrency=1 (sequential fallback)", async () => {
+    const file = await writeTempFile("conc/seq.ts", `export const SEQ = true;`);
+    const result = await parseFiles([file], "test-repo", tempDir, { concurrency: 1 });
+    expect(result.parsedFiles).toHaveLength(1);
+    expect(result.parsedFiles[0]!.symbols.some((s) => s.name === "SEQ")).toBe(true);
+  });
+
+  it("calls onProgress for all files when concurrency > 1", async () => {
+    const files = await Promise.all(
+      Array.from({ length: 4 }, (_, i) =>
+        writeTempFile(`conc/prog${i}.ts`, `export const V${i} = ${i};`),
+      ),
+    );
+    const progressCalls: ProgressInfo[] = [];
+
+    await parseFiles(files, "test-repo", tempDir, {
+      concurrency: 4,
+      onProgress: (info) => progressCalls.push({ ...info }),
+    });
+
+    const tsCalls = progressCalls.filter((p) => p.phase === "tree-sitter");
+    expect(tsCalls).toHaveLength(4);
+    const seen = new Set(tsCalls.map((p) => p.current));
+    expect(seen).toEqual(new Set([1, 2, 3, 4]));
+    expect(tsCalls.every((p) => p.total === 4)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Stats aggregation
 // ---------------------------------------------------------------------------
 

@@ -133,6 +133,7 @@ function visitNode(
     if (symbolKind) {
       const name = extractName(node);
       if (name) {
+        const decorators = extractDecorators(node);
         symbols.push({
           name,
           kind: symbolKind,
@@ -140,6 +141,7 @@ function visitNode(
           endLine: node.endPosition.row + 1,
           exported: isExported(node),
           containerName: container ?? undefined,
+          ...(decorators.length > 0 ? { decorators } : {}),
         });
       }
     }
@@ -183,6 +185,98 @@ function extractName(node: Parser.SyntaxNode): string | null {
 
 function isExported(node: Parser.SyntaxNode): boolean {
   return node.parent?.type === "export_statement" || false;
+}
+
+/**
+ * Extract decorator names for a declaration node.
+ *
+ * Tree-sitter TypeScript AST structure for decorators:
+ *
+ * 1. Class/function with export:
+ *    (export_statement
+ *      (decorator ...)       -- decorators are children of export_statement
+ *      (class_declaration))  -- declaration is a sibling within export_statement
+ *
+ * 2. Class/function without export:
+ *    (program
+ *      (decorator ...)
+ *      (class_declaration))
+ *
+ * 3. Method inside a class:
+ *    (class_body
+ *      (decorator ...)
+ *      (method_definition))  -- decorator is a sibling within class_body
+ *
+ * In all cases, decorators are siblings of the declaration within the same
+ * parent container. We scan backwards from the declaration to collect only
+ * the consecutive decorator siblings immediately preceding it (stopping at
+ * the first non-decorator sibling).
+ *
+ * Decorator AST shape:
+ *   (decorator (identifier))                          -- @Injectable
+ *   (decorator (call_expression function:(identifier) arguments:...))  -- @Controller('/api')
+ *
+ * We extract only the base name (the identifier), discarding arguments.
+ */
+function extractDecorators(node: Parser.SyntaxNode): string[] {
+  // Tree-sitter TypeScript grammar places decorators in two locations:
+  //
+  // 1. As named children of the node itself (non-exported declarations):
+  //      (class_declaration (decorator ...) (type_identifier) (class_body))
+  //
+  // 2. As named children of the parent export_statement, appearing before the
+  //    declaration (exported declarations):
+  //      (export_statement (decorator ...) (class_declaration ...))
+  //    In this case `previousNamedSibling` of the class_declaration is the decorator.
+  //
+  // 3. Methods inside a class body — same as case 2 but parent is class_body:
+  //      (class_body (decorator ...) (method_definition ...))
+  //
+  // We handle case 1 first (own children), then fall through to case 2/3
+  // (previous siblings).
+
+  // Case 1: decorators as own named children of this node
+  const ownDecorators: string[] = [];
+  for (const child of node.namedChildren) {
+    if (child.type === "decorator") {
+      ownDecorators.push(extractDecoratorName(child));
+    } else {
+      // Decorators appear first; once we hit a non-decorator child, stop.
+      break;
+    }
+  }
+  if (ownDecorators.length > 0) return ownDecorators.filter(Boolean);
+
+  // Case 2/3: decorators as consecutive named siblings immediately before this node.
+  // Use `previousNamedSibling` to avoid calling `namedChildren` on the parent
+  // (web-tree-sitter returns a new array each time, so indexOf breaks).
+  const siblingDecorators: string[] = [];
+  let sibling = node.previousNamedSibling;
+  while (sibling !== null && sibling.type === "decorator") {
+    siblingDecorators.unshift(extractDecoratorName(sibling));
+    sibling = sibling.previousNamedSibling;
+  }
+  return siblingDecorators.filter(Boolean);
+}
+
+function extractDecoratorName(decorator: Parser.SyntaxNode): string {
+  // The first named child of a decorator is either:
+  //   - an identifier  (e.g. @Injectable)
+  //   - a call_expression whose function field is an identifier (e.g. @Controller('/api'))
+  const inner = decorator.namedChild(0);
+  if (!inner) return "";
+
+  if (inner.type === "identifier") {
+    return inner.text;
+  }
+  if (inner.type === "call_expression") {
+    const func = inner.childForFieldName("function");
+    if (func?.type === "identifier") return func.text;
+    if (func?.type === "member_expression") {
+      return func.childForFieldName("property")?.text ?? "";
+    }
+  }
+  return "";
 }
 
 export function hashContent(content: string): string {

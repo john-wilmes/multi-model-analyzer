@@ -7,7 +7,7 @@
 
 import { describe, it, expect, beforeAll } from "vitest";
 import { initTreeSitter, parseSource, extractSymbolsFromTree } from "@mma/parsing";
-import { extractDependencyGraph, buildControlFlowGraph, traceBackward, createCfgIdCounter } from "../src/index.js";
+import { extractDependencyGraph, buildControlFlowGraph, traceBackward, createCfgIdCounter, isBarrelFile, tagBarrelMediatedCycles } from "../src/index.js";
 import type { TreeSitterTree } from "@mma/parsing";
 
 beforeAll(async () => {
@@ -469,5 +469,142 @@ export * from "raw:./data";
 
     expect(edges).toHaveLength(1);
     expect(edges[0]!.target).toBe("./data");
+  });
+});
+
+describe("isBarrelFile", () => {
+  it("returns true for a pure re-export barrel (export * from)", () => {
+    const tree = parseSource(
+      `export * from "./a";\nexport * from "./b";`,
+      "index.ts",
+    );
+    expect(isBarrelFile(tree)).toBe(true);
+  });
+
+  it("returns true for a named re-export barrel (export { X } from)", () => {
+    const tree = parseSource(
+      `export { Foo } from "./foo";\nexport { Bar } from "./bar";`,
+      "index.ts",
+    );
+    expect(isBarrelFile(tree)).toBe(true);
+  });
+
+  it("returns false when a re-export lacks a from clause", () => {
+    const tree = parseSource(
+      `import type { Baz } from "./baz";\nexport * from "./a";\nexport { Baz };`,
+      "index.ts",
+    );
+    // "export { Baz }" has no source/from clause — disqualifies as barrel
+    expect(isBarrelFile(tree)).toBe(false);
+  });
+
+  it("returns true for barrel with only type re-exports", () => {
+    const tree = parseSource(
+      `export type { Foo } from "./foo";`,
+      "index.ts",
+    );
+    expect(isBarrelFile(tree)).toBe(true);
+  });
+
+  it("returns false for a file that exports a local class", () => {
+    const tree = parseSource(
+      `export class Foo {}\nexport * from "./shared";`,
+      "index.ts",
+    );
+    expect(isBarrelFile(tree)).toBe(false);
+  });
+
+  it("returns false for a file that exports a local function", () => {
+    const tree = parseSource(
+      `export function bar(): void {}\n`,
+      "index.ts",
+    );
+    expect(isBarrelFile(tree)).toBe(false);
+  });
+
+  it("returns false for an empty file (no re-exports)", () => {
+    const tree = parseSource(``, "index.ts");
+    expect(isBarrelFile(tree)).toBe(false);
+  });
+
+  it("returns false for a file with only import statements", () => {
+    const tree = parseSource(
+      `import { foo } from "./foo";\nimport { bar } from "./bar";`,
+      "index.ts",
+    );
+    expect(isBarrelFile(tree)).toBe(false);
+  });
+
+  it("returns false for a file with a top-level variable declaration", () => {
+    const tree = parseSource(
+      `export * from "./a";\nconst x = 1;`,
+      "index.ts",
+    );
+    expect(isBarrelFile(tree)).toBe(false);
+  });
+});
+
+describe("tagBarrelMediatedCycles", () => {
+  it("tags a cycle that passes through a barrel index.ts", () => {
+    const files = new Map<string, TreeSitterTree>();
+    // barrel: index.ts re-exports from service.ts
+    files.set("src/index.ts", parseSource(`export * from "./service";`, "src/index.ts"));
+    // service imports from index (forming a cycle through the barrel)
+    files.set("src/service.ts", parseSource(`import { x } from "./index";`, "src/service.ts"));
+
+    const cycles: string[][] = [
+      ["test-repo:src/index.ts", "test-repo:src/service.ts"],
+    ];
+
+    const annotated = tagBarrelMediatedCycles(cycles, files, "test-repo");
+    expect(annotated).toHaveLength(1);
+    expect(annotated[0]!.barrelMediated).toBe(true);
+    expect(annotated[0]!.cycle).toEqual(cycles[0]);
+  });
+
+  it("does not tag a cycle with no barrel files", () => {
+    const files = new Map<string, TreeSitterTree>();
+    files.set("src/a.ts", parseSource(`export class A {};\nimport { B } from "./b";`, "src/a.ts"));
+    files.set("src/b.ts", parseSource(`export class B {};\nimport { A } from "./a";`, "src/b.ts"));
+
+    const cycles: string[][] = [
+      ["test-repo:src/a.ts", "test-repo:src/b.ts"],
+    ];
+
+    const annotated = tagBarrelMediatedCycles(cycles, files, "test-repo");
+    expect(annotated[0]!.barrelMediated).toBe(false);
+  });
+
+  it("does not tag a cycle when index.ts exports local symbols (not a barrel)", () => {
+    const files = new Map<string, TreeSitterTree>();
+    // This index.ts defines its own symbols — not a pure barrel
+    files.set("src/index.ts", parseSource(`export class Root {}\nexport * from "./helper";`, "src/index.ts"));
+    files.set("src/helper.ts", parseSource(`import { Root } from "./index";`, "src/helper.ts"));
+
+    const cycles: string[][] = [
+      ["test-repo:src/index.ts", "test-repo:src/helper.ts"],
+    ];
+
+    const annotated = tagBarrelMediatedCycles(cycles, files, "test-repo");
+    expect(annotated[0]!.barrelMediated).toBe(false);
+  });
+
+  it("handles an empty cycle list", () => {
+    const files = new Map<string, TreeSitterTree>();
+    expect(tagBarrelMediatedCycles([], files, "test-repo")).toEqual([]);
+  });
+
+  it("only checks index.{ts,tsx,js,jsx} filenames for barrel status", () => {
+    const files = new Map<string, TreeSitterTree>();
+    // A non-index file that only has re-exports should NOT be treated as a barrel
+    files.set("src/barrel.ts", parseSource(`export * from "./a";`, "src/barrel.ts"));
+    files.set("src/a.ts", parseSource(`import { x } from "./barrel";`, "src/a.ts"));
+
+    const cycles: string[][] = [
+      ["test-repo:src/barrel.ts", "test-repo:src/a.ts"],
+    ];
+
+    const annotated = tagBarrelMediatedCycles(cycles, files, "test-repo");
+    expect(annotated[0]!.barrelMediated).toBe(false);
   });
 });

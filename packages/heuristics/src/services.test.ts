@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { inferServices, inferServicesWithMeta } from "./services.js";
+import { inferServices, inferServicesWithMeta, classifyNestJsRole } from "./services.js";
 import type { ServiceInferenceInput, PackageJsonInfo } from "./services.js";
 import type { DependencyGraph } from "@mma/core";
 
@@ -331,5 +331,64 @@ describe("inferServicesWithMeta", () => {
     expect(filledResult.meta.confidenceStats!.min).toBeGreaterThanOrEqual(0);
     expect(filledResult.meta.confidenceStats!.max).toBeLessThanOrEqual(1);
     expect(filledResult.meta.confidenceStats!.mean).toBeGreaterThanOrEqual(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// classifyNestJsRole
+// ---------------------------------------------------------------------------
+
+describe("classifyNestJsRole", () => {
+  it("classifies @Controller as 'controller'", () => {
+    expect(classifyNestJsRole({ name: "UserController", decorators: ["Controller"] })).toBe("controller");
+  });
+
+  it("classifies @Module as 'module'", () => {
+    expect(classifyNestJsRole({ name: "AppModule", decorators: ["Module"] })).toBe("module");
+  });
+
+  it("classifies @Injectable as 'provider'", () => {
+    expect(classifyNestJsRole({ name: "UserService", decorators: ["Injectable"] })).toBe("provider");
+  });
+
+  it("classifies @Injectable + Guard suffix as 'guard'", () => {
+    expect(classifyNestJsRole({ name: "AuthGuard", decorators: ["Injectable"] })).toBe("guard");
+  });
+
+  it("classifies @Injectable + Pipe suffix as 'pipe'", () => {
+    expect(classifyNestJsRole({ name: "ValidationPipe", decorators: ["Injectable"] })).toBe("pipe");
+  });
+
+  it("classifies @Injectable + Interceptor suffix as 'interceptor'", () => {
+    expect(classifyNestJsRole({ name: "LoggingInterceptor", decorators: ["Injectable"] })).toBe("interceptor");
+  });
+
+  it("classifies @WebSocketGateway as 'gateway'", () => {
+    expect(classifyNestJsRole({ name: "EventsGateway", decorators: ["WebSocketGateway"] })).toBe("gateway");
+  });
+
+  it("classifies @Processor as 'processor'", () => {
+    expect(classifyNestJsRole({ name: "EmailProcessor", decorators: ["Processor"] })).toBe("processor");
+  });
+
+  it("classifies @Process as 'processor'", () => {
+    expect(classifyNestJsRole({ name: "handleJob", decorators: ["Process"] })).toBe("processor");
+  });
+
+  it("returns 'unknown' when decorators is undefined", () => {
+    expect(classifyNestJsRole({ name: "SomeClass" })).toBe("unknown");
+  });
+
+  it("returns 'unknown' when decorators is empty", () => {
+    expect(classifyNestJsRole({ name: "SomeClass", decorators: [] })).toBe("unknown");
+  });
+
+  it("returns 'unknown' for non-NestJS decorators", () => {
+    expect(classifyNestJsRole({ name: "MyClass", decorators: ["JsonProperty", "Expose"] })).toBe("unknown");
+  });
+
+  it("uses first matching NestJS decorator (Controller wins over Injectable)", () => {
+    // Controller appears before Injectable in the priority list
+    expect(classifyNestJsRole({ name: "ApiController", decorators: ["Controller", "Injectable"] })).toBe("controller");
   });
 });

@@ -313,6 +313,102 @@ export function findCircularDependencies(edges: readonly GraphEdge[]): string[][
   return cycles;
 }
 
+/** A dependency cycle with optional barrel-mediation metadata. */
+export interface AnnotatedCycle {
+  /** The nodes in the cycle (file IDs in `repo:path` format from `makeFileId`). */
+  readonly cycle: string[];
+  /**
+   * True when at least one node in the cycle is a barrel file (index.ts/index.js
+   * whose entire body consists of re-export statements).  These cycles are
+   * structural artifacts of the barrel pattern and are typically false-positive
+   * circular-dependency warnings.
+   */
+  readonly barrelMediated: boolean;
+}
+
+/**
+ * Determine whether a file is a barrel — every top-level construct is either a
+ * re-export (`export * from '…'` / `export { X } from '…'`) or an import
+ * statement (type-only imports for barrel files are common).  The file must
+ * also contain at least one re-export to qualify.
+ *
+ * Non-barrel exports (inline exports of locally defined symbols such as
+ * `export class Foo {}` or `export const x = …`) cause the function to return
+ * false.
+ */
+export function isBarrelFile(tree: TreeSitterTree): boolean {
+  const root = tree.rootNode;
+  let hasReexport = false;
+
+  for (const child of root.namedChildren) {
+    switch (child.type) {
+      case "import_statement":
+      case "comment":
+        // Allowed: type-only imports and comments don't disqualify a barrel.
+        continue;
+      case "export_statement": {
+        // Re-export: must have a "source" field (the `from '…'` clause).
+        const sourceNode = (child as any).childForFieldName?.("source");
+        if (sourceNode) {
+          hasReexport = true;
+        } else {
+          // Inline export of a local declaration — not a re-export.
+          return false;
+        }
+        break;
+      }
+      default:
+        // Any other top-level node (variable declaration, class, function, …)
+        // means this file is not a pure barrel.
+        return false;
+    }
+  }
+
+  return hasReexport;
+}
+
+/**
+ * Given the set of file trees and the cycles produced by
+ * `findCircularDependencies`, annotate each cycle with a `barrelMediated` flag.
+ *
+ * @param cycles    Raw cycles as returned by `findCircularDependencies`.
+ * @param files     The same file map passed to `extractDependencyGraph`.
+ * @param repo      Repository name (used to decode `repo:path` file IDs).
+ * @returns         Annotated cycles in the same order as the input.
+ */
+export function tagBarrelMediatedCycles(
+  cycles: readonly string[][],
+  files: ReadonlyMap<string, TreeSitterTree>,
+  repo: string,
+): AnnotatedCycle[] {
+  // Build a set of paths that are barrel files for O(1) lookup.
+  const barrelPaths = new Set<string>();
+  for (const [filePath, tree] of files) {
+    const basename = filePath.split("/").pop() ?? "";
+    if (
+      (basename === "index.ts" || basename === "index.js" ||
+       basename === "index.tsx" || basename === "index.jsx") &&
+      isBarrelFile(tree)
+    ) {
+      barrelPaths.add(filePath);
+    }
+  }
+
+  const prefix = repo + ":";
+
+  return cycles.map((cycle) => {
+    const barrelMediated = cycle.some((nodeId) => {
+      // nodeId is either `repo:path` (internal, from makeFileId) or a bare
+      // package name (external).  Strip the repo prefix to recover the file path.
+      const path = nodeId.startsWith(prefix)
+        ? nodeId.slice(prefix.length)
+        : nodeId;
+      return barrelPaths.has(path);
+    });
+    return { cycle, barrelMediated };
+  });
+}
+
 export function findDependentsOf(
   graph: DependencyGraph,
   module: string,

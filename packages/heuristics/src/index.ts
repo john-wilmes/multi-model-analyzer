@@ -1,5 +1,5 @@
-export { inferServices, inferServicesWithMeta, buildArchitecture } from "./services.js";
-export type { ServiceInferenceInput, PackageJsonInfo } from "./services.js";
+export { inferServices, inferServicesWithMeta, buildArchitecture, classifyNestJsRole } from "./services.js";
+export type { ServiceInferenceInput, PackageJsonInfo, NestJsRole } from "./services.js";
 
 export { detectPatterns, detectPatternsWithMeta } from "./patterns.js";
 export type { PatternDetectionInput } from "./patterns.js";

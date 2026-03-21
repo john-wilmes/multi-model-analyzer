@@ -8,6 +8,10 @@
 import type { GraphStore, KVStore } from "@mma/storage";
 import type { FlagInventory, FeatureFlag } from "@mma/core";
 
+/** Yield to the event loop to prevent blocking on large graph traversals. */
+const yieldToEventLoop = (): Promise<void> =>
+  new Promise((resolve) => setImmediate(resolve));
+
 export interface FlagInventoryResult {
   readonly total: number;
   readonly returned: number;
@@ -145,7 +149,9 @@ export async function computeFlagImpact(
     queue.push({ node: file, depth: 0 });
   }
 
+  let bfsIter = 0;
   while (queue.length > 0) {
+    if (++bfsIter % 1000 === 0) await yieldToEventLoop();
     const current = queue.shift()!;
     if (current.depth >= maxDepth) continue;
 

@@ -82,6 +82,7 @@ export function printSarif(
     level: SarifLevel;
     message: string;
     repo?: string;
+    properties?: Record<string, unknown>;
   }>,
 ): void {
   const sarifResults = results.map((r) =>
@@ -89,6 +90,7 @@ export function printSarif(
       locations: r.repo
         ? [{ logicalLocations: [{ name: r.repo, kind: "module", properties: { repo: r.repo } }] }]
         : undefined,
+      properties: r.properties,
     }),
   );
 

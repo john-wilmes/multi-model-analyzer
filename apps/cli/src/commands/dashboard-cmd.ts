@@ -293,7 +293,7 @@ export async function handleApi(
     // Use per-repo SARIF keys when repo filter is present (avoids parsing monolithic blob)
     const levelParam = query.multi["level"];
     const levelFilter = levelParam && levelParam.length > 0 ? (levelParam.length === 1 ? levelParam[0] : levelParam) : undefined;
-    const { results: paginated } = await getSarifResultsPaginated(kvStore, {
+    const { results, total } = await getSarifResultsPaginated(kvStore, {
       repo: query.single["repo"],
       ruleId: ruleIdFromPath ?? query.single["rule"],
       level: levelFilter,
@@ -301,23 +301,7 @@ export async function handleApi(
       offset,
     });
 
-    // Additional fullyQualifiedName filter for backward compat
-    let results = paginated;
-    if (query.single["repo"] && !ruleIdFromPath) {
-      const repoFilter = query.single["repo"];
-      results = results.filter((r) => {
-        const locs = r.locations as Array<{ logicalLocations?: Array<{ properties?: Record<string, unknown>; fullyQualifiedName?: string }> }> | undefined;
-        return !locs || locs.some((loc) =>
-          loc.logicalLocations?.some(
-            (ll) =>
-              ll.properties?.["repo"] === repoFilter ||
-              ll.fullyQualifiedName?.startsWith(repoFilter + "/"),
-          ),
-        );
-      });
-    }
-
-    return sendJson(res, { results, total: results.length }, 200, corsOrigin);
+    return sendJson(res, { results, total, limit, offset }, 200, corsOrigin);
   }
 
   // GET /api/graph/:repo?kind=imports&limit=1000

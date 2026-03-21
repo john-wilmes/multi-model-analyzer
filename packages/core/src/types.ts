@@ -61,6 +61,12 @@ export interface SymbolInfo {
   readonly containerName?: string;
   /** True for abstract class declarations. Populated by ts-morph; absent when only tree-sitter is used. */
   readonly isAbstract?: boolean;
+  /**
+   * Decorator names applied to this symbol (e.g. ["Controller", "Injectable"]).
+   * Populated by tree-sitter extraction for class, function, and method declarations.
+   * Absent when no decorators are present.
+   */
+  readonly decorators?: readonly string[];
 }
 
 export type SymbolKind =

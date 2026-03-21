@@ -10,6 +10,10 @@ import type { GraphEdge } from "@mma/core";
 import type { GraphStore, SearchStore } from "@mma/storage";
 import type { CrossRepoGraph } from "@mma/correlation";
 
+/** Yield to the event loop to prevent blocking on large graph traversals. */
+const yieldToEventLoop = (): Promise<void> =>
+  new Promise((resolve) => setImmediate(resolve));
+
 export interface AffectedFile {
   readonly path: string;
   readonly depth: number;
@@ -78,8 +82,11 @@ export async function computeBlastRadius(
     queue.push({ node: file, depth: 0, edgeKind: "source" });
   }
 
-  while (queue.length > 0) {
-    const current = queue.shift()!;
+  let bfsIter = 0;
+  let queueHead = 0;
+  while (queueHead < queue.length) {
+    if (++bfsIter % 1000 === 0) await yieldToEventLoop();
+    const current = queue[queueHead++]!;
     if (current.depth >= maxDepth) continue;
 
     // Get all files that import this file (reverse: getEdgesTo finds edges where target = current)
@@ -164,8 +171,11 @@ export async function computeBlastRadius(
         targetVisited.add(seedFile);
         targetQueue.push({ node: seedFile, depth: seedDepth });
 
-        while (targetQueue.length > 0) {
-          const current = targetQueue.shift()!;
+        let crossBfsIter = 0;
+        let targetQueueHead = 0;
+        while (targetQueueHead < targetQueue.length) {
+          if (++crossBfsIter % 1000 === 0) await yieldToEventLoop();
+          const current = targetQueue[targetQueueHead++]!;
           if (current.depth >= maxDepth) continue;
 
           const edges = await graphStore.getEdgesTo(current.node, targetRepo);
@@ -217,11 +227,11 @@ export async function computeBlastRadius(
  *
  * For each file, counts how many other files transitively depend on it
  * (i.e., how many files would be affected if this file changed).
- * O(V+E), pure, synchronous.
+ * O(V·(V+E)) worst case. Yields to the event loop periodically to avoid blocking.
  */
-export function computeReachCounts(
+export async function computeReachCounts(
   edges: readonly GraphEdge[],
-): Map<string, number> {
+): Promise<Map<string, number>> {
   // Build reverse adjacency: for each target, who imports it?
   // "A imports B" means B is depended upon by A → reverse: B -> [A]
   const reverseAdj = new Map<string, string[]>();
@@ -241,13 +251,17 @@ export function computeReachCounts(
 
   // For each node, BFS through reverse adjacency to count transitive dependents
   const result = new Map<string, number>();
+  let nodeIter = 0;
   for (const node of allNodes) {
+    if (++nodeIter % 100 === 0) await yieldToEventLoop();
     const visited = new Set<string>();
     const queue = [node];
     visited.add(node);
 
+    let innerIter = 0;
     while (queue.length > 0) {
       const current = queue.shift()!;
+      if (++innerIter % 200 === 0) await yieldToEventLoop();
       const dependents = reverseAdj.get(current);
       if (dependents) {
         for (const dep of dependents) {

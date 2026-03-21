@@ -53,7 +53,7 @@ export async function queryCommand(
       const isCircular = /\bcircular\b/.test(q);
       if (isCircular) {
         const keys = await options.kvStore.keys("circularDeps:");
-        const allCycles: Array<{ repo: string; cycle: string[] }> = [];
+        const allCycles: Array<{ repo: string; cycle: string[]; barrelMediated: boolean }> = [];
         for (const key of keys) {
           const repo = key.replace("circularDeps:", "");
           if (repoFilter && repo !== repoFilter) continue;
@@ -66,8 +66,16 @@ export async function queryCommand(
             console.log(`Warning: corrupted circular dependency data for ${repo}. Re-run 'index' to regenerate.`);
             continue;
           }
-          for (const cycle of cycles) {
-            allCycles.push({ repo, cycle });
+          // Load barrel-mediation flags (may not exist for older indexes).
+          let barrelFlags: boolean[] = [];
+          const barrelJson = await options.kvStore.get(`circularDepsBarrel:${repo}`);
+          if (barrelJson) {
+            try {
+              barrelFlags = JSON.parse(barrelJson) as boolean[];
+            } catch { /* ignore — treat all as non-barrel */ }
+          }
+          for (let i = 0; i < cycles.length; i++) {
+            allCycles.push({ repo, cycle: cycles[i]!, barrelMediated: barrelFlags[i] === true });
           }
         }
         if (format === "json") {
@@ -78,6 +86,7 @@ export async function queryCommand(
             level: "warning" as const,
             message: `Circular: ${c.cycle.join(" -> ")}`,
             repo: c.repo,
+            properties: c.barrelMediated ? { barrelMediated: true } : undefined,
           })));
         } else {
           if (allCycles.length === 0) {
@@ -86,16 +95,18 @@ export async function queryCommand(
               : "No circular dependencies found.");
           } else {
             // Group by repo for display
-            const byRepo = new Map<string, string[][]>();
+            const byRepo = new Map<string, Array<{ cycle: string[]; barrelMediated: boolean }>>();
             for (const c of allCycles) {
               const arr = byRepo.get(c.repo) ?? [];
-              arr.push(c.cycle);
+              arr.push({ cycle: c.cycle, barrelMediated: c.barrelMediated });
               byRepo.set(c.repo, arr);
             }
             for (const [repo, cycles] of byRepo) {
-              console.log(`${cycles.length} circular dependencies (${repo}):`);
-              for (const cycle of cycles) {
-                console.log(`  ${cycle.join(" -> ")}`);
+              const barrelCount = cycles.filter((c) => c.barrelMediated).length;
+              console.log(`${cycles.length} circular dependencies (${repo})${barrelCount > 0 ? `, ${barrelCount} barrel-mediated` : ""}:`);
+              for (const { cycle, barrelMediated } of cycles) {
+                const tag = barrelMediated ? " [barrel]" : "";
+                console.log(`  ${cycle.join(" -> ")}${tag}`);
               }
             }
           }
