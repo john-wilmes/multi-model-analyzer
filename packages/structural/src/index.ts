@@ -13,8 +13,10 @@ export {
   findDependentsOf,
   findDependenciesOf,
   resolveImportSpecifier,
+  isBarrelFile,
+  tagBarrelMediatedCycles,
 } from "./dependencies.js";
-export type { DependencyGraphOptions } from "./dependencies.js";
+export type { DependencyGraphOptions, AnnotatedCycle } from "./dependencies.js";
 
 export {
   buildControlFlowGraph,

@@ -705,17 +705,29 @@ async function dispatchRoute(
 
 async function getCircularDeps(kvStore: KVStore, repo?: string): Promise<unknown> {
   const keys = await kvStore.keys("circularDeps:");
-  const results: Array<{ repo: string; cycles: string[][] }> = [];
+  const results: Array<{ repo: string; cycles: Array<{ cycle: string[]; barrelMediated: boolean }> }> = [];
   for (const key of keys) {
     const r = key.replace("circularDeps:", "");
     if (repo && r !== repo) continue;
     const json = await kvStore.get(key);
     if (!json) continue;
     try {
-      results.push({ repo: r, cycles: JSON.parse(json) as string[][] });
+      const cycles = JSON.parse(json) as string[][];
+      // Load barrel-mediation flags (may not exist for older indexes).
+      let barrelFlags: boolean[] = [];
+      const barrelJson = await kvStore.get(`circularDepsBarrel:${r}`);
+      if (barrelJson) {
+        try { barrelFlags = JSON.parse(barrelJson) as boolean[]; } catch { /* ignore */ }
+      }
+      results.push({
+        repo: r,
+        cycles: cycles.map((cycle, i) => ({ cycle, barrelMediated: barrelFlags[i] === true })),
+      });
     } catch { /* skip corrupted */ }
   }
-  return { totalCycles: results.reduce((n, r) => n + r.cycles.length, 0), repos: results };
+  const totalCycles = results.reduce((n, r) => n + r.cycles.length, 0);
+  const totalBarrel = results.reduce((n, r) => n + r.cycles.filter((c) => c.barrelMediated).length, 0);
+  return { totalCycles, totalBarrelMediated: totalBarrel, repos: results };
 }
 
 async function getPatterns(kvStore: KVStore, query: string, repo?: string): Promise<unknown> {

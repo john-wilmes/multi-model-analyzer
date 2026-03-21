@@ -10,6 +10,10 @@ import type { GraphEdge } from "@mma/core";
 import type { GraphStore, SearchStore } from "@mma/storage";
 import type { CrossRepoGraph } from "@mma/correlation";
 
+/** Yield to the event loop to prevent blocking on large graph traversals. */
+const yieldToEventLoop = (): Promise<void> =>
+  new Promise((resolve) => setImmediate(resolve));
+
 export interface AffectedFile {
   readonly path: string;
   readonly depth: number;
@@ -78,7 +82,9 @@ export async function computeBlastRadius(
     queue.push({ node: file, depth: 0, edgeKind: "source" });
   }
 
+  let bfsIter = 0;
   while (queue.length > 0) {
+    if (++bfsIter % 1000 === 0) await yieldToEventLoop();
     const current = queue.shift()!;
     if (current.depth >= maxDepth) continue;
 
@@ -164,7 +170,9 @@ export async function computeBlastRadius(
         targetVisited.add(seedFile);
         targetQueue.push({ node: seedFile, depth: seedDepth });
 
+        let crossBfsIter = 0;
         while (targetQueue.length > 0) {
+          if (++crossBfsIter % 1000 === 0) await yieldToEventLoop();
           const current = targetQueue.shift()!;
           if (current.depth >= maxDepth) continue;
 
@@ -219,9 +227,9 @@ export async function computeBlastRadius(
  * (i.e., how many files would be affected if this file changed).
  * O(V+E), pure, synchronous.
  */
-export function computeReachCounts(
+export async function computeReachCounts(
   edges: readonly GraphEdge[],
-): Map<string, number> {
+): Promise<Map<string, number>> {
   // Build reverse adjacency: for each target, who imports it?
   // "A imports B" means B is depended upon by A → reverse: B -> [A]
   const reverseAdj = new Map<string, string[]>();
@@ -241,7 +249,9 @@ export function computeReachCounts(
 
   // For each node, BFS through reverse adjacency to count transitive dependents
   const result = new Map<string, number>();
+  let nodeIter = 0;
   for (const node of allNodes) {
+    if (++nodeIter % 100 === 0) await yieldToEventLoop();
     const visited = new Set<string>();
     const queue = [node];
     visited.add(node);

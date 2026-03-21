@@ -31,7 +31,7 @@ import { createSarifResult, createLogicalLocation } from "@mma/core";
 import { detectChanges, classifyFiles, getFileContent, getHeadCommit, isBareRepo, getCommitHistory } from "@mma/ingestion";
 import { parseFiles } from "@mma/parsing";
 import type { TreeSitterTree } from "@mma/parsing";
-import { extractDependencyGraph, buildControlFlowGraph, createCfgIdCounter, extractCallEdgesFromTreeSitter, computeModuleMetrics, summarizeRepoMetrics, detectDeadExports, detectInstabilityViolations, extractHeritageEdges } from "@mma/structural";
+import { extractDependencyGraph, buildControlFlowGraph, createCfgIdCounter, extractCallEdgesFromTreeSitter, computeModuleMetrics, summarizeRepoMetrics, detectDeadExports, detectInstabilityViolations, extractHeritageEdges, tagBarrelMediatedCycles } from "@mma/structural";
 import type { TreeSitterNode } from "@mma/parsing";
 import { buildFeatureModel, extractConstraintsFromCode, validateFeatureModel } from "@mma/model-config";
 import { identifyLogRoots, traceBackwardFromLog, buildFaultTree, analyzeGaps, analyzeCascadingRisk, FAULT_RULES } from "@mma/model-fault";
@@ -656,8 +656,14 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
           log(`    warning: 0 import edges from ${trees.size} trees -- pattern and flag detection may be limited`);
         }
         await kvStore.set(`circularDeps:${repo.name}`, JSON.stringify(graph.circularDependencies));
+        // Tag barrel-mediated cycles and persist the boolean flags so consumers
+        // can suppress false-positive warnings without re-running analysis.
+        const annotated = tagBarrelMediatedCycles(graph.circularDependencies, trees, repo.name);
+        const barrelFlags = annotated.map((a) => a.barrelMediated);
+        await kvStore.set(`circularDepsBarrel:${repo.name}`, JSON.stringify(barrelFlags));
         if (graph.circularDependencies.length > 0) {
-          log(`    ${graph.circularDependencies.length} circular dependencies found`);
+          const barrelCount = barrelFlags.filter(Boolean).length;
+          log(`    ${graph.circularDependencies.length} circular dependencies found (${barrelCount} barrel-mediated)`);
           for (const cycle of graph.circularDependencies.slice(0, 5)) {
             log(`      ${cycle.join(" -> ")}`);
           }
@@ -991,7 +997,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
           const prSarif = pageRankToSarif(prResult, repo.name);
           await kvStore.set(`sarif:blastRadius:${repo.name}`, JSON.stringify(prSarif));
           log(`    PageRank: ${prResult.ranked.length} nodes scored, ${prSarif.length} high-risk`);
-          const reachCounts = computeReachCounts(depGraph.edges);
+          const reachCounts = await computeReachCounts(depGraph.edges);
           await kvStore.set(`reachCounts:${repo.name}`, JSON.stringify([...reachCounts]));
           log(`    ReachCounts: ${reachCounts.size} nodes scored`);
         }

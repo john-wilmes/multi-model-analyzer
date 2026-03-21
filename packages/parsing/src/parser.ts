@@ -8,6 +8,7 @@
  */
 
 import { readFile } from "node:fs/promises";
+import { availableParallelism } from "node:os";
 import { join } from "node:path";
 import type { ClassifiedFile, ParsedFile } from "@mma/core";
 import { isParseable, classifyFileKind } from "./classify.js";
@@ -24,11 +25,19 @@ import {
 } from "./tsmorph.js";
 import { hashContent } from "./treesitter.js";
 
+/** Default file-level concurrency for the tree-sitter phase. */
+const DEFAULT_CONCURRENCY = Math.max(1, Math.min(availableParallelism(), 8));
+
 export interface ParseOptions {
   readonly enableTsMorph?: boolean;
   readonly tsconfigPath?: string;
   readonly onProgress?: (info: ProgressInfo) => void;
   readonly contentProvider?: (filePath: string) => Promise<string>;
+  /**
+   * Maximum number of files to parse concurrently in the tree-sitter phase.
+   * Defaults to `Math.min(os.availableParallelism(), 8)`.
+   */
+  readonly concurrency?: number;
 }
 
 export interface ProgressInfo {
@@ -52,6 +61,27 @@ export interface ParseStats {
   readonly tsMorphTimeMs: number;
 }
 
+/**
+ * Run tasks with a sliding-window concurrency pool.
+ * Resolves when all tasks have settled (individual rejections are swallowed
+ * because each task is responsible for its own error handling).
+ */
+async function runWithConcurrency<T>(
+  items: readonly T[],
+  concurrency: number,
+  fn: (item: T, index: number) => Promise<void>,
+): Promise<void> {
+  let next = 0;
+  async function worker(): Promise<void> {
+    while (next < items.length) {
+      const idx = next++;
+      await fn(items[idx]!, idx);
+    }
+  }
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, worker);
+  await Promise.all(workers);
+}
+
 export async function parseFiles(
   files: readonly ClassifiedFile[],
   repo: string,
@@ -60,7 +90,11 @@ export async function parseFiles(
 ): Promise<ParseResult> {
   const parseableFiles = files.filter((f) => isParseable(f.kind));
   const progress = options?.onProgress;
-  const parsedFiles: ParsedFile[] = [];
+  const concurrency = Math.max(1, options?.concurrency ?? DEFAULT_CONCURRENCY);
+
+  // Slots are pre-allocated so output order matches input order regardless of
+  // which files finish first (avoids non-deterministic test failures).
+  const parsedFileSlots: (ParsedFile | null)[] = new Array(parseableFiles.length).fill(null);
   const treeSitterTrees = new Map<string, TreeSitterTree>();
 
   let treeSitterTimeMs = 0;
@@ -78,9 +112,14 @@ export async function parseFiles(
   if (tsInitOk) {
     const start = performance.now();
     let notFoundCount = 0;
-    for (let i = 0; i < parseableFiles.length; i++) {
-      const file = parseableFiles[i]!;
-      progress?.({ phase: "tree-sitter", current: i + 1, total: parseableFiles.length, filePath: file.path });
+    // Shared atomic counter for progress reporting; incremented as each file
+    // starts (pre-increment inside the worker so calls arrive in natural order
+    // even when tasks finish out of order).
+    let progressCounter = 0;
+
+    await runWithConcurrency(parseableFiles, concurrency, async (file, idx) => {
+      const current = ++progressCounter;
+      progress?.({ phase: "tree-sitter", current, total: parseableFiles.length, filePath: file.path });
 
       try {
         const content = options?.contentProvider
@@ -91,20 +130,24 @@ export async function parseFiles(
 
         const { symbols, errors } = extractSymbolsFromTree(tree, file.path, repo);
         const kind = classifyFileKind(file.path);
-        parsedFiles.push(createParsedFile(file.path, repo, content, kind, symbols, errors));
+        parsedFileSlots[idx] = createParsedFile(file.path, repo, content, kind, symbols, errors);
       } catch (err) {
         if (typeof err === "object" && err !== null && "code" in err && (err as { code?: string }).code === "ENOENT") {
           notFoundCount++;
-          continue;
+          return;
         }
         console.warn(`tree-sitter parse failed for ${file.path}:`, err);
       }
-    }
+    });
+
     if (notFoundCount > 0) {
       console.warn(`tree-sitter: skipped ${notFoundCount} files (not found on disk)`);
     }
     treeSitterTimeMs = performance.now() - start;
   }
+
+  // Collapse slots to a dense array, preserving input order.
+  const parsedFiles: ParsedFile[] = parsedFileSlots.filter((p): p is ParsedFile => p !== null);
 
   // Phase 2: ts-morph (optional, type-resolved)
   // ts-morph requires filesystem access; skip for bare repos (contentProvider signals bare repo)

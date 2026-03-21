@@ -5,6 +5,10 @@
 import type { GraphStore } from "@mma/storage";
 import type { CrossRepoGraph, CrossRepoImpactResult } from "./types.js";
 
+/** Yield to the event loop to prevent blocking on large graph traversals. */
+const yieldToEventLoop = (): Promise<void> =>
+  new Promise((resolve) => setImmediate(resolve));
+
 /**
  * Given a set of changed files in a repo, computes all transitively affected
  * files within the same repo and across repo boundaries.
@@ -26,7 +30,9 @@ export async function computeCrossRepoImpact(
   const intraQueue: string[] = [...changedFiles];
   for (const f of changedFiles) intraVisited.add(f);
 
+  let intraIter = 0;
   while (intraQueue.length > 0) {
+    if (++intraIter % 1000 === 0) await yieldToEventLoop();
     const file = intraQueue.shift()!;
     const edges = await graphStore.getEdgesTo(file, changedRepo);
     for (const edge of edges) {
@@ -90,7 +96,9 @@ export async function computeCrossRepoImpact(
         const targetQueue: string[] = [seedFile];
         targetVisited.add(seedFile);
 
+        let targetIter = 0;
         while (targetQueue.length > 0) {
+          if (++targetIter % 1000 === 0) await yieldToEventLoop();
           const file = targetQueue.shift()!;
           const edges = await graphStore.getEdgesTo(file, targetRepo);
           for (const edge of edges) {

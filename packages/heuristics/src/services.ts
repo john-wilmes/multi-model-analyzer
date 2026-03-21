@@ -5,7 +5,7 @@
  * main/bin entry point, or follows common monorepo patterns (apps/*, services/*).
  */
 
-import type { InferredService, InferredArchitecture, DependencyGraph, HeuristicResult } from "@mma/core";
+import type { InferredService, InferredArchitecture, DependencyGraph, HeuristicResult, SymbolInfo } from "@mma/core";
 import { runHeuristic } from "@mma/core";
 
 export interface ServiceInferenceInput {
@@ -219,4 +219,82 @@ export function buildArchitecture(
   patterns: readonly import("@mma/core").DetectedPattern[],
 ): InferredArchitecture {
   return { services, patterns, repo };
+}
+
+/**
+ * NestJS-specific role inferred from class decorators.
+ *
+ * - "controller"   — @Controller (handles HTTP routes)
+ * - "provider"     — @Injectable (DI-managed service, repository, factory, etc.)
+ * - "module"       — @Module (application module definition)
+ * - "guard"        — @Injectable + naming convention, or @UseGuards target
+ * - "pipe"         — @Injectable + naming convention
+ * - "interceptor"  — @Injectable + naming convention
+ * - "gateway"      — @WebSocketGateway (WebSocket server)
+ * - "processor"    — @Processor / @Process (BullMQ queue consumer)
+ * - "unknown"      — no recognised NestJS decorators
+ */
+export type NestJsRole =
+  | "controller"
+  | "provider"
+  | "module"
+  | "guard"
+  | "pipe"
+  | "interceptor"
+  | "gateway"
+  | "processor"
+  | "unknown";
+
+/**
+ * NestJS decorators that map directly to a role.
+ * Checked in priority order: more specific roles first.
+ */
+const NESTJS_DECORATOR_ROLES: ReadonlyArray<[string, NestJsRole]> = [
+  ["Controller", "controller"],
+  ["Module", "module"],
+  ["WebSocketGateway", "gateway"],
+  ["Processor", "processor"],
+  ["Process", "processor"],
+  ["Injectable", "provider"],
+];
+
+/**
+ * Class-name suffixes that refine an @Injectable into a more specific role.
+ * Only applied when the primary decorator is "Injectable".
+ */
+const INJECTABLE_SUFFIX_ROLES: ReadonlyArray<[RegExp, NestJsRole]> = [
+  [/Guard$/, "guard"],
+  [/Pipe$/, "pipe"],
+  [/Interceptor$/, "interceptor"],
+];
+
+/**
+ * Classify the NestJS role of a single class symbol based on its decorators.
+ *
+ * @param symbol - A `SymbolInfo` with `kind === "class"` and optional `decorators`.
+ * @returns The inferred `NestJsRole`, or `"unknown"` when no NestJS decorators
+ *   are present.
+ *
+ * @example
+ * ```ts
+ * const role = classifyNestJsRole({ name: "UserController", decorators: ["Controller"] });
+ * // => "controller"
+ * ```
+ */
+export function classifyNestJsRole(symbol: Pick<SymbolInfo, "name" | "decorators">): NestJsRole {
+  const decorators = symbol.decorators ?? [];
+
+  for (const [decorator, role] of NESTJS_DECORATOR_ROLES) {
+    if (decorators.includes(decorator)) {
+      // Refine @Injectable into guard/pipe/interceptor via class-name suffix
+      if (role === "provider") {
+        for (const [pattern, refinedRole] of INJECTABLE_SUFFIX_ROLES) {
+          if (pattern.test(symbol.name)) return refinedRole;
+        }
+      }
+      return role;
+    }
+  }
+
+  return "unknown";
 }

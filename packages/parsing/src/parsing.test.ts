@@ -184,6 +184,126 @@ describe("tree-sitter parsing", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Decorator extraction
+// ---------------------------------------------------------------------------
+
+describe("decorator extraction", () => {
+  beforeAll(async () => {
+    await initTreeSitter();
+  }, 15_000);
+
+  it("extracts a bare decorator on a class", () => {
+    const code = `
+      @Injectable()
+      export class UserService {}
+    `;
+    const tree = parseSource(code, "test.ts");
+    const { symbols } = extractSymbolsFromTree(tree, "test.ts", "repo");
+    tree.delete();
+
+    const cls = symbols.find((s) => s.name === "UserService");
+    expect(cls).toBeDefined();
+    expect(cls!.decorators).toEqual(["Injectable"]);
+  });
+
+  it("extracts a decorator with string argument", () => {
+    const code = `
+      @Controller('/api/users')
+      export class UserController {}
+    `;
+    const tree = parseSource(code, "test.ts");
+    const { symbols } = extractSymbolsFromTree(tree, "test.ts", "repo");
+    tree.delete();
+
+    const cls = symbols.find((s) => s.name === "UserController");
+    expect(cls).toBeDefined();
+    expect(cls!.decorators).toEqual(["Controller"]);
+  });
+
+  it("extracts multiple decorators on a class", () => {
+    const code = `
+      @ApiTags('users')
+      @Controller('/users')
+      @UseGuards(AuthGuard)
+      export class UsersController {}
+    `;
+    const tree = parseSource(code, "test.ts");
+    const { symbols } = extractSymbolsFromTree(tree, "test.ts", "repo");
+    tree.delete();
+
+    const cls = symbols.find((s) => s.name === "UsersController");
+    expect(cls).toBeDefined();
+    expect(cls!.decorators).toContain("ApiTags");
+    expect(cls!.decorators).toContain("Controller");
+    expect(cls!.decorators).toContain("UseGuards");
+    expect(cls!.decorators).toHaveLength(3);
+  });
+
+  it("extracts decorators on a non-exported class", () => {
+    const code = `
+      @Module({ imports: [] })
+      class AppModule {}
+    `;
+    const tree = parseSource(code, "test.ts");
+    const { symbols } = extractSymbolsFromTree(tree, "test.ts", "repo");
+    tree.delete();
+
+    const cls = symbols.find((s) => s.name === "AppModule");
+    expect(cls).toBeDefined();
+    expect(cls!.decorators).toEqual(["Module"]);
+  });
+
+  it("extracts decorators on methods", () => {
+    const code = `
+      @Controller('/api')
+      export class AppController {
+        @Get('/hello')
+        getHello(): string { return 'hello'; }
+
+        @Post('/create')
+        createItem() {}
+      }
+    `;
+    const tree = parseSource(code, "test.ts");
+    const { symbols } = extractSymbolsFromTree(tree, "test.ts", "repo");
+    tree.delete();
+
+    const getHello = symbols.find((s) => s.name === "getHello");
+    expect(getHello).toBeDefined();
+    expect(getHello!.decorators).toEqual(["Get"]);
+
+    const createItem = symbols.find((s) => s.name === "createItem");
+    expect(createItem).toBeDefined();
+    expect(createItem!.decorators).toEqual(["Post"]);
+  });
+
+  it("omits decorators field when no decorators present", () => {
+    const code = `export class PlainClass { method() {} }`;
+    const tree = parseSource(code, "test.ts");
+    const { symbols } = extractSymbolsFromTree(tree, "test.ts", "repo");
+    tree.delete();
+
+    const cls = symbols.find((s) => s.name === "PlainClass");
+    expect(cls).toBeDefined();
+    expect(cls!.decorators).toBeUndefined();
+  });
+
+  it("extracts @Processor decorator on a class", () => {
+    const code = `
+      @Processor('email-queue')
+      export class EmailProcessor {}
+    `;
+    const tree = parseSource(code, "test.ts");
+    const { symbols } = extractSymbolsFromTree(tree, "test.ts", "repo");
+    tree.delete();
+
+    const cls = symbols.find((s) => s.name === "EmailProcessor");
+    expect(cls).toBeDefined();
+    expect(cls!.decorators).toEqual(["Processor"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // hashContent
 // ---------------------------------------------------------------------------
 

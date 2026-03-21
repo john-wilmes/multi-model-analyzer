@@ -252,54 +252,54 @@ describe("computeBlastRadius", () => {
 });
 
 describe("computeReachCounts", () => {
-  it("computes reach counts for a chain (A→B→C)", () => {
+  it("computes reach counts for a chain (A→B→C)", async () => {
     const edges: GraphEdge[] = [
       importEdge("a.ts", "b.ts"),
       importEdge("b.ts", "c.ts"),
     ];
-    const counts = computeReachCounts(edges);
+    const counts = await computeReachCounts(edges);
     expect(counts.get("c.ts")).toBe(2); // A and B both reach C
     expect(counts.get("b.ts")).toBe(1); // only A reaches B
     expect(counts.get("a.ts")).toBe(0); // nothing reaches A
   });
 
-  it("computes reach counts for a diamond (A→B, A→C, B→D, C→D)", () => {
+  it("computes reach counts for a diamond (A→B, A→C, B→D, C→D)", async () => {
     const edges: GraphEdge[] = [
       importEdge("a.ts", "b.ts"),
       importEdge("a.ts", "c.ts"),
       importEdge("b.ts", "d.ts"),
       importEdge("c.ts", "d.ts"),
     ];
-    const counts = computeReachCounts(edges);
+    const counts = await computeReachCounts(edges);
     expect(counts.get("d.ts")).toBe(3); // A, B, C all reach D
     expect(counts.get("b.ts")).toBe(1); // only A reaches B
     expect(counts.get("c.ts")).toBe(1); // only A reaches C
     expect(counts.get("a.ts")).toBe(0); // nothing reaches A
   });
 
-  it("handles cycles (A→B→A)", () => {
+  it("handles cycles (A→B→A)", async () => {
     const edges: GraphEdge[] = [
       importEdge("a.ts", "b.ts"),
       importEdge("b.ts", "a.ts"),
     ];
-    const counts = computeReachCounts(edges);
+    const counts = await computeReachCounts(edges);
     expect(counts.get("a.ts")).toBe(1); // B reaches A
     expect(counts.get("b.ts")).toBe(1); // A reaches B
   });
 
-  it("returns empty map for no import edges", () => {
+  it("returns empty map for no import edges", async () => {
     const edges: GraphEdge[] = [
       { source: "a.ts", target: "b.ts", kind: "calls", metadata: { repo: "test" } },
     ];
-    const counts = computeReachCounts(edges);
+    const counts = await computeReachCounts(edges);
     expect(counts.size).toBe(0);
   });
 
-  it("handles isolated nodes (no incoming edges)", () => {
+  it("handles isolated nodes (no incoming edges)", async () => {
     const edges: GraphEdge[] = [
       importEdge("a.ts", "b.ts"),
     ];
-    const counts = computeReachCounts(edges);
+    const counts = await computeReachCounts(edges);
     expect(counts.get("b.ts")).toBe(1); // A reaches B
     expect(counts.get("a.ts")).toBe(0); // nothing reaches A
   });
