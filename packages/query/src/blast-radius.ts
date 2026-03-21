@@ -83,9 +83,10 @@ export async function computeBlastRadius(
   }
 
   let bfsIter = 0;
-  while (queue.length > 0) {
+  let queueHead = 0;
+  while (queueHead < queue.length) {
     if (++bfsIter % 1000 === 0) await yieldToEventLoop();
-    const current = queue.shift()!;
+    const current = queue[queueHead++]!;
     if (current.depth >= maxDepth) continue;
 
     // Get all files that import this file (reverse: getEdgesTo finds edges where target = current)
@@ -171,9 +172,10 @@ export async function computeBlastRadius(
         targetQueue.push({ node: seedFile, depth: seedDepth });
 
         let crossBfsIter = 0;
-        while (targetQueue.length > 0) {
+        let targetQueueHead = 0;
+        while (targetQueueHead < targetQueue.length) {
           if (++crossBfsIter % 1000 === 0) await yieldToEventLoop();
-          const current = targetQueue.shift()!;
+          const current = targetQueue[targetQueueHead++]!;
           if (current.depth >= maxDepth) continue;
 
           const edges = await graphStore.getEdgesTo(current.node, targetRepo);
@@ -225,7 +227,7 @@ export async function computeBlastRadius(
  *
  * For each file, counts how many other files transitively depend on it
  * (i.e., how many files would be affected if this file changed).
- * O(V+E), pure. Yields to the event loop periodically to avoid blocking.
+ * O(V·(V+E)) worst case. Yields to the event loop periodically to avoid blocking.
  */
 export async function computeReachCounts(
   edges: readonly GraphEdge[],

@@ -373,7 +373,7 @@ export function isBarrelFile(tree: TreeSitterTree): boolean {
  *
  * @param cycles    Raw cycles as returned by `findCircularDependencies`.
  * @param files     The same file map passed to `extractDependencyGraph`.
- * @param repo      Repository name (used to decode `repo|path` file IDs).
+ * @param repo      Repository name (used to decode `repo:path` file IDs).
  * @returns         Annotated cycles in the same order as the input.
  */
 export function tagBarrelMediatedCycles(

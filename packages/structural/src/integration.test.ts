@@ -489,7 +489,7 @@ describe("isBarrelFile", () => {
     expect(isBarrelFile(tree)).toBe(true);
   });
 
-  it("returns true when the barrel also has import statements", () => {
+  it("returns false when a re-export lacks a from clause", () => {
     const tree = parseSource(
       `import type { Baz } from "./baz";\nexport * from "./a";\nexport { Baz };`,
       "index.ts",

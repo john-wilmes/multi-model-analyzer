@@ -90,7 +90,11 @@ export async function parseFiles(
 ): Promise<ParseResult> {
   const parseableFiles = files.filter((f) => isParseable(f.kind));
   const progress = options?.onProgress;
-  const concurrency = Math.max(1, options?.concurrency ?? DEFAULT_CONCURRENCY);
+  const rawConcurrency = options?.concurrency ?? DEFAULT_CONCURRENCY;
+  if (!Number.isInteger(rawConcurrency) || rawConcurrency < 1) {
+    throw new RangeError("ParseOptions.concurrency must be a positive integer");
+  }
+  const concurrency = rawConcurrency;
 
   // Slots are pre-allocated so output order matches input order regardless of
   // which files finish first (avoids non-deterministic test failures).
