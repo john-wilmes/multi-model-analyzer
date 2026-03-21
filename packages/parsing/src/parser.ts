@@ -116,15 +116,11 @@ export async function parseFiles(
   if (tsInitOk) {
     const start = performance.now();
     let notFoundCount = 0;
-    // Shared atomic counter for progress reporting; incremented as each file
-    // starts (pre-increment inside the worker so calls arrive in natural order
-    // even when tasks finish out of order).
+    // Shared counter for progress reporting; incremented after each file is
+    // parsed so "current" reflects completed (not just started) files.
     let progressCounter = 0;
 
     await runWithConcurrency(parseableFiles, concurrency, async (file, idx) => {
-      const current = ++progressCounter;
-      progress?.({ phase: "tree-sitter", current, total: parseableFiles.length, filePath: file.path });
-
       try {
         const content = options?.contentProvider
           ? await options.contentProvider(file.path)
@@ -142,6 +138,8 @@ export async function parseFiles(
         }
         console.warn(`tree-sitter parse failed for ${file.path}:`, err);
       }
+      const current = ++progressCounter;
+      progress?.({ phase: "tree-sitter", current, total: parseableFiles.length, filePath: file.path });
     });
 
     if (notFoundCount > 0) {

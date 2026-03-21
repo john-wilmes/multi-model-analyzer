@@ -258,8 +258,10 @@ export async function computeReachCounts(
     const queue = [node];
     visited.add(node);
 
+    let innerIter = 0;
     while (queue.length > 0) {
       const current = queue.shift()!;
+      if (++innerIter % 200 === 0) await yieldToEventLoop();
       const dependents = reverseAdj.get(current);
       if (dependents) {
         for (const dep of dependents) {

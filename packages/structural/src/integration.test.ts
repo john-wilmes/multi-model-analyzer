@@ -594,7 +594,7 @@ describe("tagBarrelMediatedCycles", () => {
     expect(tagBarrelMediatedCycles([], files, "test-repo")).toEqual([]);
   });
 
-  it("only checks index.ts/index.js filenames for barrel status", () => {
+  it("only checks index.{ts,tsx,js,jsx} filenames for barrel status", () => {
     const files = new Map<string, TreeSitterTree>();
     // A non-index file that only has re-exports should NOT be treated as a barrel
     files.set("src/barrel.ts", parseSource(`export * from "./a";`, "src/barrel.ts"));
