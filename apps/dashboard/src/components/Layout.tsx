@@ -3,7 +3,7 @@ import { Link, Outlet, useLocation } from 'react-router-dom';
 import { fetchRepos } from '../api/client.ts';
 
 // ---------------------------------------------------------------------------
-// SVG Icons (18×18)
+// SVG Icons (22×22, viewBox 0 0 24 24)
 // ---------------------------------------------------------------------------
 
 function IconGrid() {
