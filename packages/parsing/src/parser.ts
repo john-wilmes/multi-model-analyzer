@@ -134,12 +134,13 @@ export async function parseFiles(
       } catch (err) {
         if (typeof err === "object" && err !== null && "code" in err && (err as { code?: string }).code === "ENOENT") {
           notFoundCount++;
-          return;
+        } else {
+          console.warn(`tree-sitter parse failed for ${file.path}:`, err);
         }
-        console.warn(`tree-sitter parse failed for ${file.path}:`, err);
+      } finally {
+        const current = ++progressCounter;
+        progress?.({ phase: "tree-sitter", current, total: parseableFiles.length, filePath: file.path });
       }
-      const current = ++progressCounter;
-      progress?.({ phase: "tree-sitter", current, total: parseableFiles.length, filePath: file.path });
     });
 
     if (notFoundCount > 0) {
