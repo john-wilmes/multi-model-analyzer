@@ -59,6 +59,8 @@
     "test": "vitest run && cd apps/dashboard && npx vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
     "validate:models": "vitest run --config validation/vitest.validation.ts",
     "clean": "tsc --build --clean",
     "setup": "bash scripts/setup.sh",
