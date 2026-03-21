@@ -10,7 +10,7 @@ export type { SearchQueryResult } from "./search.js";
 export { executeArchitectureQuery } from "./architecture.js";
 export type { ArchitectureQueryResult, RepoSummary, CrossRepoEdge, ServiceLink } from "./architecture.js";
 
-export { computeBlastRadius, computeReachCounts } from "./blast-radius.js";
+export { computeBlastRadius, computeReachCounts, computeReachCountsBFS } from "./blast-radius.js";
 export type { BlastRadiusResult, AffectedFile } from "./blast-radius.js";
 
 export { computePageRank, pageRankToSarif } from "./pagerank.js";

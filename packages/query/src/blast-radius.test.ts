@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeBlastRadius, computeReachCounts } from "./blast-radius.js";
+import { computeBlastRadius, computeReachCounts, computeReachCountsBFS } from "./blast-radius.js";
 import { InMemoryGraphStore } from "@mma/storage";
 import type { GraphEdge } from "@mma/core";
 import type { CrossRepoGraph } from "@mma/correlation";
@@ -302,6 +302,75 @@ describe("computeReachCounts", () => {
     const counts = await computeReachCounts(edges);
     expect(counts.get("b.ts")).toBe(1); // A reaches B
     expect(counts.get("a.ts")).toBe(0); // nothing reaches A
+  });
+});
+
+describe("computeReachCounts bitset vs BFS parity", () => {
+  it("produces identical results on a random DAG (100 nodes)", async () => {
+    const edges: GraphEdge[] = [];
+    // Build a random DAG: node i can import node j where j > i
+    const rng = (seed: number) => {
+      let s = seed;
+      return () => { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; };
+    };
+    const rand = rng(42);
+    const N = 100;
+    for (let i = 0; i < N; i++) {
+      for (let j = i + 1; j < N; j++) {
+        if (rand() < 0.05) {
+          edges.push(importEdge(`f${i}.ts`, `f${j}.ts`));
+        }
+      }
+    }
+
+    const [bitset, bfs] = await Promise.all([
+      computeReachCounts(edges),
+      computeReachCountsBFS(edges),
+    ]);
+
+    expect(bitset.size).toBe(bfs.size);
+    for (const [key, val] of bfs) {
+      expect(bitset.get(key)).toBe(val);
+    }
+  });
+
+  it("handles cycles with external nodes correctly", async () => {
+    // Cycle: A→B→C→A, plus D→A (external node pointing into cycle)
+    const edges: GraphEdge[] = [
+      importEdge("a.ts", "b.ts"),
+      importEdge("b.ts", "c.ts"),
+      importEdge("c.ts", "a.ts"),
+      importEdge("d.ts", "a.ts"),
+    ];
+
+    const [bitset, bfs] = await Promise.all([
+      computeReachCounts(edges),
+      computeReachCountsBFS(edges),
+    ]);
+
+    // All cycle members are reached by each other + D
+    expect(bitset.get("a.ts")).toBe(bfs.get("a.ts"));
+    expect(bitset.get("b.ts")).toBe(bfs.get("b.ts"));
+    expect(bitset.get("c.ts")).toBe(bfs.get("c.ts"));
+    expect(bitset.get("d.ts")).toBe(bfs.get("d.ts"));
+    // Each cycle member reached by 3 others (2 cycle peers + D)
+    expect(bitset.get("a.ts")).toBe(3);
+    expect(bitset.get("b.ts")).toBe(3);
+    expect(bitset.get("c.ts")).toBe(3);
+    expect(bitset.get("d.ts")).toBe(0);
+  });
+
+  it("computes counts for a 500-node chain", async () => {
+    const edges: GraphEdge[] = [];
+    for (let i = 0; i < 499; i++) {
+      edges.push(importEdge(`n${i}.ts`, `n${i + 1}.ts`));
+    }
+
+    const counts = await computeReachCounts(edges);
+    // Last node in chain is reached by all 499 others
+    expect(counts.get("n499.ts")).toBe(499);
+    // First node is reached by nobody
+    expect(counts.get("n0.ts")).toBe(0);
   });
 });
 
