@@ -1,9 +1,11 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import { fetchCrossRepoCatalog } from '../api/client.ts';
 import type { SystemCatalogEntry } from '../api/client.ts';
 
 type SortKey = 'name' | 'repo' | 'consumers' | 'producers';
 type SortDir = 'asc' | 'desc';
+
+const PAGE_SIZE = 25;
 
 interface Props {
   repo?: string;
@@ -11,28 +13,54 @@ interface Props {
 
 export default function ServiceCatalogTable({ repo }: Props) {
   const [entries, setEntries] = useState<SystemCatalogEntry[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [page, setPage] = useState(0);
   const [sortKey, setSortKey] = useState<SortKey>('name');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
+  // Debounce search input
   useEffect(() => {
-    setLoading(true);
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      setDebouncedSearch(search);
+      setPage(0);
+    }, 300);
+    return () => clearTimeout(debounceRef.current);
+  }, [search]);
+
+  // Reset page when repo changes
+  useEffect(() => {
+    setPage(0);
     setSearch('');
-    fetchCrossRepoCatalog(repo)
-      .then((data) => setEntries(data.entries))
-      .catch(() => setEntries([]))
-      .finally(() => setLoading(false));
+    setDebouncedSearch('');
   }, [repo]);
 
-  const filtered = useMemo(() => {
-    if (!search) return entries;
-    const q = search.toLowerCase();
-    return entries.filter((e) => e.entry.name.toLowerCase().includes(q));
-  }, [entries, search]);
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    fetchCrossRepoCatalog(repo, { limit: PAGE_SIZE, offset: page * PAGE_SIZE, search: debouncedSearch || undefined })
+      .then((data) => {
+        if (cancelled) return;
+        setEntries(Array.isArray(data.entries) ? data.entries : []);
+        setTotal(data.total ?? 0);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setEntries([]);
+        setTotal(0);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [repo, page, debouncedSearch]);
 
   const sorted = useMemo(() => {
-    const arr = [...filtered];
+    const arr = [...entries];
     arr.sort((a, b) => {
       let cmp = 0;
       if (sortKey === 'name') cmp = a.entry.name.localeCompare(b.entry.name);
@@ -42,7 +70,7 @@ export default function ServiceCatalogTable({ repo }: Props) {
       return sortDir === 'asc' ? cmp : -cmp;
     });
     return arr;
-  }, [filtered, sortKey, sortDir]);
+  }, [entries, sortKey, sortDir]);
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
@@ -54,7 +82,8 @@ export default function ServiceCatalogTable({ repo }: Props) {
     return <span className="ml-1">{sortDir === 'asc' ? '▲' : '▼'}</span>;
   }
 
-  const withCrossRepoConsumers = entries.filter((e) => e.consumers.length > 0).length;
+  const start = page * PAGE_SIZE + 1;
+  const end = Math.min((page + 1) * PAGE_SIZE, page * PAGE_SIZE + entries.length);
 
   if (loading) return (
     <div className="p-8 text-center animate-pulse">
@@ -63,7 +92,7 @@ export default function ServiceCatalogTable({ repo }: Props) {
     </div>
   );
 
-  if (entries.length === 0) {
+  if (total === 0 && !debouncedSearch) {
     return <p className="text-slate-500 dark:text-slate-400 text-center py-12">No service catalog entries found. Services are inferred from cross-repo dependency patterns.</p>;
   }
 
@@ -73,7 +102,7 @@ export default function ServiceCatalogTable({ repo }: Props) {
         <div>
           <h2 className="text-xl font-semibold text-slate-800 dark:text-slate-100">Service Catalog</h2>
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
-            {entries.length} services ({withCrossRepoConsumers} with cross-repo consumers)
+            {total} service{total !== 1 ? 's' : ''}
           </p>
         </div>
         <input
@@ -142,8 +171,37 @@ export default function ServiceCatalogTable({ repo }: Props) {
                 </td>
               </tr>
             ))}
+            {sorted.length === 0 && debouncedSearch && (
+              <tr>
+                <td colSpan={4} className="px-3 py-8 text-center text-slate-400 dark:text-slate-500">
+                  No services match &ldquo;{debouncedSearch}&rdquo;
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
+
+        {total > PAGE_SIZE && (
+          <div className="px-4 py-3 border-t dark:border-slate-700 flex items-center justify-between text-sm text-slate-600 dark:text-slate-400">
+            <span>{start}–{end} of {total}</span>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setPage((p) => p - 1)}
+                disabled={page === 0}
+                className="px-3 py-1 rounded border dark:border-slate-600 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Prev
+              </button>
+              <button
+                onClick={() => setPage((p) => p + 1)}
+                disabled={end >= total}
+                className="px-3 py-1 rounded border dark:border-slate-600 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
       </div>
       <p className="mt-4 text-xs text-slate-400 dark:text-slate-500">
         Services discovered across repos with cross-repo consumer/producer relationships.

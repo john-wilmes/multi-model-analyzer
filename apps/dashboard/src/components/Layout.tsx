@@ -208,8 +208,12 @@ function usePageTitle(breadcrumbs: BreadcrumbSegment[]) {
 // Layout
 // ---------------------------------------------------------------------------
 
+const REPO_PAGE_SIZE = 20;
+
 export default function Layout() {
   const [repos, setRepos] = useState<string[]>([]);
+  const [repoSearch, setRepoSearch] = useState('');
+  const [repoShowAll, setRepoShowAll] = useState(false);
   const location = useLocation();
 
   // Sidebar collapsed state — persisted
@@ -383,18 +387,56 @@ export default function Layout() {
                 </div>
               ) : (
                 <>
-                  <p className="px-3 text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">
-                    Repos
-                  </p>
-                  {repos.map((repo) => (
-                    <Link
-                      key={repo}
-                      to={`/repo/${encodeURIComponent(repo)}`}
-                      className={navClass(`/repo/${encodeURIComponent(repo)}`)}
-                    >
-                      <span className="truncate">{repo}</span>
-                    </Link>
-                  ))}
+                  <div className="flex items-center justify-between px-3 mb-1">
+                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                      Repositories
+                    </p>
+                    <span className="text-xs text-slate-500 bg-slate-700 rounded-full px-1.5 py-0.5 leading-none">
+                      {repos.length}
+                    </span>
+                  </div>
+                  {/* B5: Repo search filter */}
+                  <div className="px-3 mb-1">
+                    <input
+                      type="text"
+                      placeholder="Filter repos..."
+                      value={repoSearch}
+                      onChange={(e) => { setRepoSearch(e.target.value); setRepoShowAll(false); }}
+                      className="w-full px-2 py-1 text-xs rounded bg-slate-700 border border-slate-600 text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      aria-label="Filter repositories"
+                    />
+                  </div>
+                  {(() => {
+                    const filtered = repoSearch.trim()
+                      ? repos.filter((r) => r.toLowerCase().includes(repoSearch.toLowerCase()))
+                      : repos;
+                    const visible = repoShowAll ? filtered : filtered.slice(0, REPO_PAGE_SIZE);
+                    const hidden = filtered.length - visible.length;
+                    return (
+                      <>
+                        {visible.map((repo) => (
+                          <Link
+                            key={repo}
+                            to={`/repo/${encodeURIComponent(repo)}`}
+                            className={navClass(`/repo/${encodeURIComponent(repo)}`, true)}
+                          >
+                            <span className="truncate">{repo}</span>
+                          </Link>
+                        ))}
+                        {hidden > 0 && (
+                          <button
+                            onClick={() => setRepoShowAll(true)}
+                            className="w-full text-left px-3 py-1 text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-700 rounded"
+                          >
+                            Show {hidden} more...
+                          </button>
+                        )}
+                        {filtered.length === 0 && (
+                          <p className="px-3 py-1 text-xs text-slate-500">No repos match</p>
+                        )}
+                      </>
+                    );
+                  })()}
                 </>
               )}
             </div>

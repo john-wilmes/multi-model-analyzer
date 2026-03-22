@@ -1,6 +1,17 @@
 import { describe, it, expect, vi } from "vitest";
 import { registerTools } from "./tools.js";
 import type { Stores } from "./tools.js";
+
+// Stub out network-dependent ingestion helpers so tools that call scanGitHubOrg
+// or cloneOrFetch don't throw "GitHub token required" errors in unit tests.
+vi.mock("@mma/ingestion", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@mma/ingestion")>();
+  return {
+    ...actual,
+    scanGitHubOrg: vi.fn().mockResolvedValue({ totalReposInOrg: 0, repos: [] }),
+    cloneOrFetch: vi.fn().mockResolvedValue(undefined),
+  };
+});
 import {
   InMemoryGraphStore,
   InMemorySearchStore,
@@ -85,6 +96,8 @@ describe("registerTools", () => {
       "get_cross_repo_graph", "get_service_correlation", "get_cross_repo_models",
       "get_cross_repo_impact",
       "get_flag_inventory", "get_flag_impact", "get_vulnerability",
+      "scan_org", "get_repo_candidates", "index_repo",
+      "ignore_repo", "get_indexing_state", "check_new_repos",
     ];
 
     for (const tool of expectedTools) {
@@ -500,6 +513,8 @@ const ALL_TOOL_NAMES = [
   "get_cross_repo_graph", "get_service_correlation", "get_cross_repo_models",
   "get_cross_repo_impact",
   "get_flag_inventory", "get_flag_impact", "get_vulnerability",
+  "scan_org", "get_repo_candidates", "index_repo",
+  "ignore_repo", "get_indexing_state", "check_new_repos",
 ] as const;
 
 /** Minimal valid args for every tool so we can invoke them without crashes. */
@@ -520,6 +535,12 @@ const MINIMAL_ARGS: Record<string, Record<string, unknown>> = {
   get_flag_inventory:     {},
   get_flag_impact:        { flag: "MY_FLAG", repo: "repo-a" },
   get_vulnerability:      {},
+  scan_org:               { org: "test-org" },
+  get_repo_candidates:    {},
+  index_repo:             { name: "test-repo", url: "https://github.com/test/test-repo" },
+  ignore_repo:            { name: "test-repo" },
+  get_indexing_state:     {},
+  check_new_repos:        { org: "test-org" },
 };
 
 function makeSarifStoresWithRepoMetadata(count: number) {
@@ -551,7 +572,7 @@ function makeInvoker(server: ReturnType<typeof createMockServer>) {
 // ---------------------------------------------------------------------------
 
 describe("MCP tool sanity checks", () => {
-  it("all 16 tools return valid JSON content with text entry", async () => {
+  it("all 22 tools return valid JSON content with text entry", async () => {
     const server = createMockServer();
     register(server, makeStores());
     const invoker = makeInvoker(server);
@@ -895,10 +916,10 @@ describe("MCP tool sanity checks", () => {
 // ---------------------------------------------------------------------------
 
 describe("MCP meta-sanity checks", () => {
-  it("exactly 16 tools are registered", () => {
+  it("exactly 22 tools are registered", () => {
     const server = createMockServer();
     register(server, makeStores());
-    expect(server.tools.size).toBe(16);
+    expect(server.tools.size).toBe(22);
   });
 
   it("all registered tools have non-empty descriptions", () => {

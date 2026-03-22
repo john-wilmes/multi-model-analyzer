@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@mma/core": "*",
+    "@mma/ingestion": "*",
     "@mma/storage": "*"
   }
 }

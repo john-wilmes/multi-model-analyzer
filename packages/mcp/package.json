@@ -17,6 +17,7 @@
   "dependencies": {
     "@mma/core": "*",
     "@mma/correlation": "1.0.0",
+    "@mma/ingestion": "*",
     "@mma/query": "*",
     "@mma/storage": "*",
     "@modelcontextprotocol/sdk": "^1.12.0",
