@@ -736,49 +736,9 @@ export function registerTools(server: McpServer, stores: Stores): void {
       org: z.string().describe("GitHub organization name"),
     },
   }, async ({ org }) => {
-    const { scanGitHubOrg } = await import("@mma/ingestion");
-    const { RepoStateManager } = await import("@mma/correlation");
-
-    const stateManager = new RepoStateManager(kvStore);
-
-    // Get previous scan
-    const prevScanJson = await kvStore.get(`org-scan:${org}`);
-    const prevNames = new Set<string>();
-    if (prevScanJson) {
-      const prev = JSON.parse(prevScanJson) as { repos: Array<{ name: string }> };
-      for (const r of prev.repos) {
-        prevNames.add(r.name);
-      }
-    }
-
-    // Re-scan
-    const result = await scanGitHubOrg({ org });
-    await kvStore.set(`org-scan:${org}`, JSON.stringify(result));
-
-    // Find new repos
-    const newRepos = result.repos.filter(r => !prevNames.has(r.name));
-
-    // Register new ones as candidates
-    for (const repo of newRepos) {
-      const existing = await stateManager.get(repo.name);
-      if (!existing) {
-        await stateManager.addCandidate(
-          { name: repo.name, url: repo.url, defaultBranch: repo.defaultBranch, language: repo.language ?? undefined },
-          "org-scan",
-        );
-      }
-    }
-
-    return jsonResult({
-      org,
-      previousRepoCount: prevNames.size,
-      currentRepoCount: result.repos.length,
-      newRepos: newRepos.map(r => ({
-        name: r.name,
-        language: r.language,
-        stars: r.starCount,
-      })),
-    });
+    const { diffOrgScan } = await import("./wake-up.js");
+    const result = await diffOrgScan(org, kvStore);
+    return jsonResult(result);
   });
 }
 
