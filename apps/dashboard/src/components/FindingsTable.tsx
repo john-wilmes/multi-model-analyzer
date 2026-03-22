@@ -84,9 +84,10 @@ interface RepoGroup {
 function groupByRepo(findings: Finding[]): RepoGroup[] {
   const map = new Map<string, RepoGroup>();
   for (const f of findings) {
-    // repo may be in properties, or derived from location
+    // Prefer the top-level repo field, then properties['repo'], then location-derived, then unknown
     const repoKey =
-      (f.properties?.['repo'] as string | undefined) ??
+      f.repo ??
+      (f.properties?.['repo'] != null ? String(f.properties['repo']) : undefined) ??
       f.locations?.[0]?.logicalLocations?.[0]?.fullyQualifiedName?.split(':')[0] ??
       '(unknown)';
     const existing = map.get(repoKey);
@@ -290,6 +291,7 @@ export default function FindingsTable() {
           <div className="inline-flex rounded-lg border dark:border-slate-600 overflow-hidden">
             <button
               onClick={() => switchViewMode('flat')}
+              aria-pressed={viewMode === 'flat'}
               className={`px-3 py-1 text-sm font-medium transition-colors ${
                 viewMode === 'flat'
                   ? 'bg-blue-600 text-white'
@@ -300,6 +302,7 @@ export default function FindingsTable() {
             </button>
             <button
               onClick={() => switchViewMode('by-rule')}
+              aria-pressed={viewMode === 'by-rule'}
               className={`px-3 py-1 text-sm font-medium transition-colors ${
                 viewMode === 'by-rule'
                   ? 'bg-blue-600 text-white'
@@ -310,6 +313,7 @@ export default function FindingsTable() {
             </button>
             <button
               onClick={() => switchViewMode('by-repo')}
+              aria-pressed={viewMode === 'by-repo'}
               className={`px-3 py-1 text-sm font-medium transition-colors ${
                 viewMode === 'by-repo'
                   ? 'bg-blue-600 text-white'
@@ -543,6 +547,7 @@ export default function FindingsTable() {
                   {/* Accordion header */}
                   <button
                     onClick={() => toggleRule(group.repo)}
+                    aria-expanded={isExpanded}
                     className="w-full flex items-center justify-between px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors text-left"
                   >
                     <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">
