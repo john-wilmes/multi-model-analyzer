@@ -418,7 +418,7 @@ export default function Layout() {
                           <Link
                             key={repo}
                             to={`/repo/${encodeURIComponent(repo)}`}
-                            className={navClass(`/repo/${encodeURIComponent(repo)}`)}
+                            className={navClass(`/repo/${encodeURIComponent(repo)}`, true)}
                           >
                             <span className="truncate">{repo}</span>
                           </Link>

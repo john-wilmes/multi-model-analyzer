@@ -145,13 +145,31 @@ export class RepoStateManager {
       );
     }
 
-    // Reset ignoredAt when re-activating; preserve original discoveredAt.
+    // Reset ignoredAt when re-activating; set a fresh discoveredAt timestamp.
     const { ignoredAt: _dropped, ...rest } = existing;
     const updated: RepoState = {
       ...rest,
       status: "candidate",
       discoveredAt: new Date().toISOString(),
     };
+    await this.kv.set(key(name), JSON.stringify(updated));
+    return updated;
+  }
+
+  /**
+   * Reset a repo from `indexing` back to `candidate` (e.g. on indexing failure).
+   * Throws if the repo is not in `indexing` state.
+   */
+  async resetToCandidate(name: string): Promise<RepoState> {
+    const existing = await this.#requireExisting(name);
+
+    if (existing.status !== "indexing") {
+      throw new Error(
+        `Cannot reset repo "${name}" to candidate: expected status "indexing" but got "${existing.status}"`,
+      );
+    }
+
+    const updated: RepoState = { ...existing, status: "candidate" };
     await this.kv.set(key(name), JSON.stringify(updated));
     return updated;
   }

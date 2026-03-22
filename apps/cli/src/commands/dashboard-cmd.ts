@@ -73,8 +73,8 @@ function parseQuery(url: string): ParsedQuery {
   for (const part of url.slice(idx + 1).split("&")) {
     const [k, v] = part.split("=");
     if (!k) continue;
-    const key = decodeURIComponent(k);
-    const val = v ? decodeURIComponent(v) : "";
+    const key = decodeURIComponent(k.replace(/\+/g, "%20"));
+    const val = v ? decodeURIComponent(v.replace(/\+/g, "%20")) : "";
     if (!(key in result.single)) result.single[key] = val;
     if (!result.multi[key]) result.multi[key] = [];
     result.multi[key].push(val);
@@ -550,14 +550,26 @@ export async function handleApi(
       const limit = Math.min(parseInt(query.single["limit"] ?? "200", 10) || 200, 2000);
       const offset = Math.max(parseInt(query.single["offset"] ?? "0", 10) || 0, 0);
       const edges = allEdges.slice(offset, offset + limit);
+
+      // Filter companion metadata when repo filter is active
+      const repoPairs = repoFilter
+        ? parsed.repoPairs.filter((p: string) => p.includes(repoFilter))
+        : parsed.repoPairs;
+      const downstreamMap = repoFilter
+        ? parsed.downstreamMap.filter(([repo, deps]: [string, string[]]) => repo === repoFilter || deps.includes(repoFilter))
+        : parsed.downstreamMap;
+      const upstreamMap = repoFilter
+        ? parsed.upstreamMap.filter(([repo, deps]: [string, string[]]) => repo === repoFilter || deps.includes(repoFilter))
+        : parsed.upstreamMap;
+
       return sendJson(res, {
         edges,
         total: allEdges.length,
         limit,
         offset,
-        repoPairs: parsed.repoPairs,
-        downstreamMap: parsed.downstreamMap,
-        upstreamMap: parsed.upstreamMap,
+        repoPairs,
+        downstreamMap,
+        upstreamMap,
       }, 200, corsOrigin);
     } catch {
       return sendJson(res, { error: "Corrupted correlation data." }, 200, corsOrigin);

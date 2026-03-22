@@ -40,14 +40,23 @@ export default function ServiceCatalogTable({ repo }: Props) {
   }, [repo]);
 
   useEffect(() => {
+    let cancelled = false;
     setLoading(true);
     fetchCrossRepoCatalog(repo, { limit: PAGE_SIZE, offset: page * PAGE_SIZE, search: debouncedSearch || undefined })
       .then((data) => {
+        if (cancelled) return;
         setEntries(Array.isArray(data.entries) ? data.entries : []);
         setTotal(data.total ?? 0);
       })
-      .catch(() => { setEntries([]); setTotal(0); })
-      .finally(() => setLoading(false));
+      .catch(() => {
+        if (cancelled) return;
+        setEntries([]);
+        setTotal(0);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
   }, [repo, page, debouncedSearch]);
 
   const sorted = useMemo(() => {

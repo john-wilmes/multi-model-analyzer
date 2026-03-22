@@ -669,6 +669,10 @@ export function registerTools(server: McpServer, stores: Stores): void {
         message: `Repository "${name}" cloned successfully. Run the full index pipeline via CLI for complete analysis.`,
       });
     } catch (err) {
+      // Reset state back to "candidate" so the repo can be retried
+      try {
+        await stateManager.resetToCandidate(name);
+      } catch { /* best-effort reset */ }
       return jsonResult({
         status: "failed",
         name,

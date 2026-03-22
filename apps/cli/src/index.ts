@@ -655,18 +655,22 @@ async function main(): Promise<void> {
   // explore command -- interactive incremental indexing
   if (command === "explore") {
     mkdirSync(dirname(dbPath), { recursive: true });
-    const stores = await createStores({ backend: earlyBackend, dbPath });
+    // Try to get mirrorDir and backend from config; fall back to defaults
+    let mirrorDir = resolve("mirrors");
+    let exploreBackend = earlyBackend;
+    try {
+      const configPath = resolve(values.config);
+      const configRaw = await readFile(configPath, "utf-8");
+      const config = JSON.parse(configRaw) as CliConfig;
+      mirrorDir = resolve(dirname(configPath), config.mirrorDir);
+      // Honour config.backend unless --backend was explicitly passed on CLI
+      if (!values.backend && config.backend) {
+        exploreBackend = config.backend;
+      }
+    } catch { /* use defaults */ }
+    const stores = await createStores({ backend: exploreBackend, dbPath });
     try {
       const { exploreCommand } = await import("./commands/index-interactive.js");
-      // Try to get mirrorDir from config, default to ./mirrors
-      let mirrorDir = resolve("mirrors");
-      try {
-        const configPath = resolve(values.config);
-        const configRaw = await readFile(configPath, "utf-8");
-        const config = JSON.parse(configRaw) as CliConfig;
-        mirrorDir = resolve(dirname(configPath), config.mirrorDir);
-      } catch { /* use default */ }
-
       await exploreCommand({
         kvStore: stores.kvStore,
         graphStore: stores.graphStore,

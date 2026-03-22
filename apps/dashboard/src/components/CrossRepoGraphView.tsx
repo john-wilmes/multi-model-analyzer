@@ -164,6 +164,8 @@ export default function CrossRepoGraphView() {
 
   useEffect(() => {
     let cancelled = false;
+    setError(null);
+    setLoading(true);
     Promise.all([
       fetchCrossRepoGraph(repoFilter),
       fetchAtdi(),
@@ -546,13 +548,21 @@ export default function CrossRepoGraphView() {
         return;
       }
       const query = debouncedSearch.toLowerCase();
+      // Collect matching node IDs first
+      const matchingIds = new Set<string>();
       cy.nodes().forEach((node) => {
         const match = (node.data('label') as string | undefined)?.toLowerCase().includes(query) ?? false;
+        if (match) matchingIds.add(node.id());
         node.style('opacity', match ? 1 : 0.15);
-        node.connectedEdges().style('opacity', match ? 0.7 : 0.08);
+      });
+      // Style edges: visible if either endpoint matches
+      cy.edges().forEach((edge) => {
+        const srcMatch = matchingIds.has(edge.data('source') as string);
+        const tgtMatch = matchingIds.has(edge.data('target') as string);
+        edge.style('opacity', (srcMatch || tgtMatch) ? 0.7 : 0.08);
       });
     });
-  }, [debouncedSearch]);
+  }, [debouncedSearch, data, viewMode, sizeMetric, expandedClusters, repoStates]);
 
   if (loading) return (
     <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 p-8 animate-pulse flex items-center justify-center" style={{ minHeight: 400 }}>
