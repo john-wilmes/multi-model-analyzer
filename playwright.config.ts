@@ -12,13 +12,24 @@ export default defineConfig({
     trace: "on-first-retry",
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
-  webServer: {
-    command:
-      "node apps/cli/dist/index.js dashboard --db data-supabase/mma-supabase.db --port 4321",
-    url: "http://127.0.0.1:4321/api/repos",
-    reuseExistingServer: !process.env.CI,
-    timeout: 30_000,
-    stdout: "pipe",
-    stderr: "pipe",
-  },
+  webServer: [
+    {
+      command:
+        "node apps/cli/dist/index.js dashboard --db data-supabase/mma-supabase.db --port 4321",
+      url: "http://127.0.0.1:4321/api/repos",
+      reuseExistingServer: !process.env.CI,
+      timeout: 30_000,
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+    {
+      command:
+        "node apps/cli/dist/index.js serve --db data-supabase/mma-supabase.db --transport http --port 4322",
+      port: 4322,
+      reuseExistingServer: !process.env.CI,
+      timeout: 30_000,
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  ],
 });
