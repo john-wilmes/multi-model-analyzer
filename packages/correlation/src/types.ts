@@ -150,6 +150,31 @@ export interface CrossRepoModelsOptions {
   readonly verbose?: boolean;
 }
 
+/** Status of a repo in the incremental indexing workflow. */
+export type RepoStatus = "candidate" | "indexing" | "indexed" | "ignored";
+
+/** How a repo was discovered for indexing. */
+export type DiscoverySource =
+  | "org-scan"
+  | `dependency:${string}`
+  | "user-selected"
+  | `reverse-dep:${string}`;
+
+/** Persisted state for a single repo in the incremental indexing workflow. */
+export interface RepoState {
+  readonly name: string;
+  readonly url: string;
+  readonly defaultBranch?: string;
+  readonly language?: string;
+  readonly status: RepoStatus;
+  readonly discoveredVia: DiscoverySource;
+  readonly discoveredAt: string; // ISO date
+  readonly indexedAt?: string; // ISO date
+  readonly ignoredAt?: string; // ISO date
+  /** Number of cross-repo connections (edges) to/from already-indexed repos. */
+  readonly connectionCount: number;
+}
+
 /** Combined result of all cross-repo model analyses. */
 export interface CrossRepoModelsResult {
   readonly features: CrossRepoFeatureResult;

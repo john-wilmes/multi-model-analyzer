@@ -652,6 +652,34 @@ async function main(): Promise<void> {
     return;
   }
 
+  // explore command -- interactive incremental indexing
+  if (command === "explore") {
+    mkdirSync(dirname(dbPath), { recursive: true });
+    const stores = await createStores({ backend: earlyBackend, dbPath });
+    try {
+      const { exploreCommand } = await import("./commands/index-interactive.js");
+      // Try to get mirrorDir from config, default to ./mirrors
+      let mirrorDir = resolve("mirrors");
+      try {
+        const configPath = resolve(values.config);
+        const configRaw = await readFile(configPath, "utf-8");
+        const config = JSON.parse(configRaw) as CliConfig;
+        mirrorDir = resolve(dirname(configPath), config.mirrorDir);
+      } catch { /* use default */ }
+
+      await exploreCommand({
+        kvStore: stores.kvStore,
+        graphStore: stores.graphStore,
+        searchStore: stores.searchStore,
+        mirrorDir,
+        verbose,
+      });
+    } finally {
+      stores.close();
+    }
+    return;
+  }
+
   const configPath = resolve(values.config);
   let config: CliConfig;
   try {
@@ -913,6 +941,8 @@ Usage:
   mma compress [--db path]                      Gzip the analysis database
   mma dashboard [--db path] [--port 3000] [--host 127.0.0.1]
                                                 Serve local web dashboard
+  mma explore [--db path] [--config path] [-v]
+                                                Interactive incremental indexing (guided repo discovery)
 
 Options:
   -c, --config    Path to config file (default: mma.config.json)
