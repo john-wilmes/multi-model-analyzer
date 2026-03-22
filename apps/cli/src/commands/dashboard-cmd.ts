@@ -679,6 +679,19 @@ export async function handleApi(
     }
   }
 
+  // GET /api/repo-states
+  if (path === "/api/repo-states") {
+    const keys = await kvStore.keys("repo-state:");
+    const states: Array<unknown> = [];
+    for (const k of keys) {
+      const raw = await kvStore.get(k);
+      if (raw) {
+        try { states.push(JSON.parse(raw) as unknown); } catch { /* skip */ }
+      }
+    }
+    return sendJson(res, { states }, 200, corsOrigin);
+  }
+
   // GET /api/blast-radius/:repo[?file=path&maxDepth=N]
   const blastMatch = path.match(/^\/api\/blast-radius\/(.+)$/);
   if (blastMatch) {

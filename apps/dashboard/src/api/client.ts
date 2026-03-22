@@ -244,6 +244,22 @@ export async function fetchCrossRepoCatalog(repo?: string, pagination?: Paginati
   return fetchJson(`${BASE}/api/cross-repo-catalog${qs ? `?${qs}` : ''}`);
 }
 
+// -- Repo State Types --
+
+export interface RepoStateInfo {
+  name: string;
+  url: string;
+  status: 'candidate' | 'indexing' | 'indexed' | 'ignored';
+  discoveredVia: string;
+  discoveredAt: string;
+  indexedAt?: string;
+  connectionCount: number;
+}
+
+export async function fetchRepoStates(): Promise<{ states: RepoStateInfo[] }> {
+  return fetchJson(`${BASE}/api/repo-states`);
+}
+
 // -- Blast Radius Types --
 
 export interface BlastRadiusOverviewFile {

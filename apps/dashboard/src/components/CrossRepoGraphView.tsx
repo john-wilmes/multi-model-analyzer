@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import cytoscape from 'cytoscape';
 import cytoscapeDagre from 'cytoscape-dagre';
-import { fetchCrossRepoGraph, fetchAtdi, type CrossRepoGraphData, type AtdiRepoScore } from '../api/client.ts';
+import { fetchCrossRepoGraph, fetchAtdi, fetchRepoStates, type CrossRepoGraphData, type AtdiRepoScore, type RepoStateInfo } from '../api/client.ts';
 
 // Debounce helper (avoids external deps)
 function useDebounce<T>(value: T, delay: number): T {
@@ -142,6 +142,7 @@ function healthColor(atdi: AtdiRepoScore | undefined): string {
 export default function CrossRepoGraphView() {
   const [data, setData] = useState<CrossRepoGraphData | null>(null);
   const [atdiByRepo, setAtdiByRepo] = useState<Map<string, AtdiRepoScore>>(new Map());
+  const [repoStates, setRepoStates] = useState<RepoStateInfo[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [hoveredEdge, setHoveredEdge] = useState<RepoPairStats | null>(null);
@@ -166,7 +167,8 @@ export default function CrossRepoGraphView() {
     Promise.all([
       fetchCrossRepoGraph(repoFilter),
       fetchAtdi(),
-    ]).then(([graphData, atdiData]) => {
+      fetchRepoStates(),
+    ]).then(([graphData, atdiData, stateData]) => {
       if (cancelled) return;
       setData(graphData);
       if (atdiData) {
@@ -174,6 +176,7 @@ export default function CrossRepoGraphView() {
         for (const r of atdiData.repoScores) m.set(r.repo, r);
         setAtdiByRepo(m);
       }
+      setRepoStates(stateData.states);
     }).catch((err: unknown) => {
       if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load');
     }).finally(() => {
@@ -199,7 +202,8 @@ export default function CrossRepoGraphView() {
   }, []);
 
   useEffect(() => {
-    if (!cyRef.current || !data || data.edges.length === 0) return;
+    const hasGhostNodes = repoStates.some((rs) => rs.status === 'candidate' || rs.status === 'indexing');
+    if (!cyRef.current || !data || (data.edges.length === 0 && !hasGhostNodes)) return;
     const { repos, pairs } = aggregateEdges(data);
     const repoNames = [...repos.keys()];
 
@@ -288,6 +292,22 @@ export default function CrossRepoGraphView() {
         });
       }
 
+      // B7: Add ghost nodes for candidate/indexing repos not already in the graph
+      for (const rs of repoStates) {
+        if (rs.status === 'ignored' || rs.status === 'indexed') continue;
+        if (repos.has(rs.name)) continue; // already in the graph from edges
+        elements.push({
+          data: {
+            id: rs.name,
+            label: rs.name,
+            size: NODE_MIN,
+            color: rs.status === 'indexing' ? '#3b82f6' : '#475569',
+            repoStatus: rs.status,
+          },
+          classes: rs.status === 'indexing' ? 'indexing-node' : 'candidate-node',
+        });
+      }
+
       layoutName = 'cose';
       layoutOpts = { animate: false, nodeRepulsion: 4000, idealEdgeLength: 100 };
     } else {
@@ -314,6 +334,23 @@ export default function CrossRepoGraphView() {
           },
         })),
       );
+
+      // B7: Add ghost nodes for candidate/indexing repos not already in the graph
+      for (const rs of repoStates) {
+        if (rs.status === 'ignored' || rs.status === 'indexed') continue;
+        if (repos.has(rs.name)) continue; // already in the graph from edges
+        elements.push({
+          data: {
+            id: rs.name,
+            label: rs.name,
+            size: NODE_MIN,
+            color: rs.status === 'indexing' ? '#3b82f6' : '#475569',
+            repoStatus: rs.status,
+          },
+          classes: rs.status === 'indexing' ? 'indexing-node' : 'candidate-node',
+        });
+      }
+
       layoutName = 'dagre';
       layoutOpts = { rankDir: 'TB', nodeSep: 80, rankSep: 100 };
     }
@@ -380,6 +417,28 @@ export default function CrossRepoGraphView() {
           } as cytoscape.Css.Edge,
         },
         {
+          // B7: Candidate repos — ghost appearance
+          selector: 'node.candidate-node',
+          style: {
+            'background-color': '#475569',
+            'border-width': 2,
+            'border-style': 'dashed',
+            'border-color': '#64748b',
+            opacity: 0.5,
+            'font-style': 'italic',
+          } as cytoscape.Css.Node,
+        },
+        {
+          // B7: Indexing repos — pulsing blue appearance
+          selector: 'node.indexing-node',
+          style: {
+            'background-color': '#3b82f6',
+            'border-width': 3,
+            'border-color': '#60a5fa',
+            'border-style': 'solid',
+          } as cytoscape.Css.Node,
+        },
+        {
           selector: 'node.highlighted',
           style: {
             'border-color': '#1d4ed8',
@@ -414,6 +473,18 @@ export default function CrossRepoGraphView() {
       minZoom: 0.3,
       maxZoom: 3,
     });
+
+    // B7: Pulsing animation for indexing nodes
+    const indexingNodes = cy.nodes('.indexing-node');
+    if (indexingNodes.length > 0) {
+      let pulseState = true;
+      const pulseInterval = setInterval(() => {
+        pulseState = !pulseState;
+        indexingNodes.style('opacity', pulseState ? 1 : 0.4);
+      }, 800);
+      // Clean up interval on destroy
+      cy.on('destroy', () => clearInterval(pulseInterval));
+    }
 
     // Hover: highlight connected edges (use batch for performance)
     cy.on('mouseover', 'node', (evt) => {
@@ -463,7 +534,7 @@ export default function CrossRepoGraphView() {
 
     cyInstanceRef.current = cy;
     return () => { cy.destroy(); cyInstanceRef.current = undefined; };
-  }, [data, navigate, viewMode, sizeMetric, atdiByRepo, expandedClusters, toggleCluster]);
+  }, [data, navigate, viewMode, sizeMetric, atdiByRepo, expandedClusters, toggleCluster, repoStates]);
 
   // B2: Search-to-focus — filter node opacity based on debounced search query
   useEffect(() => {
@@ -519,7 +590,7 @@ export default function CrossRepoGraphView() {
         )}
       </div>
 
-      {!data || data.edges.length === 0 ? (
+      {(!data || data.edges.length === 0) && !repoStates.some((rs) => rs.status === 'candidate' || rs.status === 'indexing') ? (
         <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 p-8 text-center text-slate-400 dark:text-slate-500">
           No cross-repo dependency data available. Run <code className="font-mono text-xs bg-slate-100 dark:bg-slate-700 px-1 rounded">mma index</code> with 2+ repos to generate correlation data.
         </div>
@@ -583,7 +654,7 @@ export default function CrossRepoGraphView() {
               </div>
 
               {/* B4: Health color legend */}
-              <div className="flex items-center gap-2 ml-auto">
+              <div className="flex items-center gap-2 ml-auto flex-wrap">
                 <span className="text-xs text-gray-400">Health:</span>
                 <span className="flex items-center gap-1 text-xs text-gray-300">
                   <span className="inline-block w-2.5 h-2.5 rounded-full bg-green-500" /> 0 errors
@@ -597,6 +668,18 @@ export default function CrossRepoGraphView() {
                 <span className="flex items-center gap-1 text-xs text-gray-300">
                   <span className="inline-block w-2.5 h-2.5 rounded-full bg-gray-500" /> n/a
                 </span>
+                {/* B7: Repo state legend */}
+                {repoStates.some((rs) => rs.status === 'candidate' || rs.status === 'indexing') && (
+                  <>
+                    <span className="ml-2 pl-2 border-l border-gray-600 text-xs text-gray-400">State:</span>
+                    <span className="flex items-center gap-1 text-xs text-gray-300">
+                      <span className="inline-block w-2.5 h-2.5 rounded border border-dashed border-slate-400 bg-slate-600 opacity-50" /> Candidate
+                    </span>
+                    <span className="flex items-center gap-1 text-xs text-gray-300">
+                      <span className="inline-block w-2.5 h-2.5 rounded-full bg-blue-500 animate-pulse" /> Indexing
+                    </span>
+                  </>
+                )}
               </div>
             </div>
 
@@ -643,7 +726,16 @@ export default function CrossRepoGraphView() {
               <div className="space-y-1 text-sm text-slate-600 dark:text-slate-400">
                 <div><span className="font-medium text-slate-800 dark:text-slate-200">{repos.size}</span> repos</div>
                 <div><span className="font-medium text-slate-800 dark:text-slate-200">{pairs.length}</span> dependency pairs</div>
-                <div><span className="font-medium text-slate-800 dark:text-slate-200">{data.edges.length}</span> total edges</div>
+                <div><span className="font-medium text-slate-800 dark:text-slate-200">{data?.edges.length ?? 0}</span> total edges</div>
+                {repoStates.length > 0 && (
+                  <>
+                    <div className="border-t border-slate-200 dark:border-slate-700 my-2" />
+                    <div><span className="font-medium text-slate-800 dark:text-slate-200">{repoStates.filter(s => s.status === 'candidate').length}</span> candidates</div>
+                    <div><span className="font-medium text-slate-800 dark:text-slate-200">{repoStates.filter(s => s.status === 'indexing').length}</span> indexing</div>
+                    <div><span className="font-medium text-slate-800 dark:text-slate-200">{repoStates.filter(s => s.status === 'indexed').length}</span> indexed</div>
+                    <div><span className="font-medium text-slate-800 dark:text-slate-200">{repoStates.filter(s => s.status === 'ignored').length}</span> ignored</div>
+                  </>
+                )}
               </div>
             </div>
 
