@@ -1,8 +1,18 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import cytoscape from 'cytoscape';
 import cytoscapeDagre from 'cytoscape-dagre';
-import { fetchCrossRepoGraph, type CrossRepoGraphData } from '../api/client.ts';
+import { fetchCrossRepoGraph, fetchAtdi, type CrossRepoGraphData, type AtdiRepoScore } from '../api/client.ts';
+
+// Debounce helper (avoids external deps)
+function useDebounce<T>(value: T, delay: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(timer);
+  }, [value, delay]);
+  return debounced;
+}
 
 cytoscapeDagre(cytoscape);
 
@@ -41,70 +51,285 @@ function aggregateEdges(data: CrossRepoGraphData): {
   return { repos, pairs: [...pairMap.values()] };
 }
 
+// ── B1: Cluster utilities ────────────────────────────────────────────────────
+
+/** Group repo names by their first name segment (split on -, /, .). */
+export function clusterRepos(repoNames: string[]): Map<string, string[]> {
+  const groups = new Map<string, string[]>();
+  for (const name of repoNames) {
+    const key = name.split(/[-/.]/)[0] ?? name;
+    let members = groups.get(key);
+    if (!members) { members = []; groups.set(key, members); }
+    members.push(name);
+  }
+
+  // Merge single-member clusters into "other"
+  const result = new Map<string, string[]>();
+  const orphans: string[] = [];
+  for (const [key, members] of groups) {
+    if (members.length >= 2) {
+      result.set(key, members);
+    } else {
+      orphans.push(...members);
+    }
+  }
+  if (orphans.length > 0) result.set('other', orphans);
+  return result;
+}
+
+// ── B4: Node sizing utilities ────────────────────────────────────────────────
+
+type SizeMetric = 'findings' | 'modules' | 'fan-in' | 'fan-out';
+
+const NODE_MIN = 20;
+const NODE_MAX = 60;
+
+function logNormalize(value: number, maxValue: number): number {
+  if (value === 0 || maxValue === 0) return NODE_MIN;
+  return NODE_MIN + (NODE_MAX - NODE_MIN) * (Math.log(value + 1) / Math.log(maxValue + 1));
+}
+
+function computeNodeSizes(
+  repoNames: string[],
+  metric: SizeMetric,
+  repos: Map<string, { fanIn: number; fanOut: number }>,
+  atdiByRepo: Map<string, AtdiRepoScore>,
+): Map<string, number> {
+  const rawValues = new Map<string, number>();
+
+  for (const name of repoNames) {
+    const stats = repos.get(name);
+    const atdi = atdiByRepo.get(name);
+    let value = 0;
+    switch (metric) {
+      case 'fan-in':
+        value = stats?.fanIn ?? 0;
+        break;
+      case 'fan-out':
+        value = stats?.fanOut ?? 0;
+        break;
+      case 'findings': {
+        const fc = atdi?.findingCounts;
+        value = fc ? (fc.error + fc.warning + fc.note) : 0;
+        break;
+      }
+      case 'modules':
+        value = atdi?.moduleCount ?? 0;
+        break;
+    }
+    rawValues.set(name, value);
+  }
+
+  const maxValue = Math.max(...rawValues.values(), 1);
+  const sizes = new Map<string, number>();
+  for (const [name, value] of rawValues) {
+    sizes.set(name, logNormalize(value, maxValue));
+  }
+  return sizes;
+}
+
+/** Health color for a repo node based on error finding count. */
+function healthColor(atdi: AtdiRepoScore | undefined): string {
+  if (!atdi) return '#6b7280'; // gray — no data
+  const errors = atdi.findingCounts.error;
+  if (errors === 0) return '#22c55e';   // green
+  if (errors <= 5) return '#eab308';   // yellow
+  return '#ef4444';                     // red
+}
+
+// ── Component ────────────────────────────────────────────────────────────────
+
 export default function CrossRepoGraphView() {
   const [data, setData] = useState<CrossRepoGraphData | null>(null);
+  const [atdiByRepo, setAtdiByRepo] = useState<Map<string, AtdiRepoScore>>(new Map());
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [hoveredEdge, setHoveredEdge] = useState<RepoPairStats | null>(null);
   const [tooltipPos, setTooltipPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
-  const cyRef = useRef<HTMLDivElement>(null);
-  const cyInstanceRef = useRef<cytoscape.Core | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const debouncedSearch = useDebounce(searchQuery, 200);
+
+  // B1: Cluster view controls
+  const [viewMode, setViewMode] = useState<'flat' | 'cluster'>('flat');
+  const [expandedClusters, setExpandedClusters] = useState<Set<string>>(new Set());
+  // B4: Node sizing
+  const [sizeMetric, setSizeMetric] = useState<SizeMetric>('findings');
+
+  const cyRef = useRef<HTMLDivElement | null>(null);
+  const cyInstanceRef = useRef<cytoscape.Core | undefined>(undefined);
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const repoFilter = searchParams.get('repo') ?? undefined;
 
   useEffect(() => {
     let cancelled = false;
-    fetchCrossRepoGraph(repoFilter)
-      .then((d) => { if (!cancelled) setData(d); })
-      .catch((err: unknown) => { if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load'); })
-      .finally(() => { if (!cancelled) setLoading(false); });
+    Promise.all([
+      fetchCrossRepoGraph(repoFilter),
+      fetchAtdi(),
+    ]).then(([graphData, atdiData]) => {
+      if (cancelled) return;
+      setData(graphData);
+      if (atdiData) {
+        const m = new Map<string, AtdiRepoScore>();
+        for (const r of atdiData.repoScores) m.set(r.repo, r);
+        setAtdiByRepo(m);
+      }
+    }).catch((err: unknown) => {
+      if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load');
+    }).finally(() => {
+      if (!cancelled) setLoading(false);
+    });
     return () => { cancelled = true; };
   }, [repoFilter]);
+
+  // Auto-switch to cluster mode when there are 15+ repos
+  useEffect(() => {
+    if (!data) return;
+    const { repos } = aggregateEdges(data);
+    if (repos.size >= 15) setViewMode('cluster');
+  }, [data]);
+
+  const toggleCluster = useCallback((clusterId: string) => {
+    setExpandedClusters((prev) => {
+      const next = new Set(prev);
+      if (next.has(clusterId)) next.delete(clusterId);
+      else next.add(clusterId);
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     if (!cyRef.current || !data || data.edges.length === 0) return;
     const { repos, pairs } = aggregateEdges(data);
+    const repoNames = [...repos.keys()];
 
     // Build lookup for tooltip on hover
     const pairLookup = new Map<string, RepoPairStats>();
     for (const p of pairs) pairLookup.set(`${p.source}→${p.target}`, p);
 
-    let maxDegree = 1;
-    for (const r of repos.values()) {
-      const deg = r.fanIn + r.fanOut;
-      if (deg > maxDegree) maxDegree = deg;
+    // B4: Compute node sizes from chosen metric
+    const sizes = computeNodeSizes(repoNames, sizeMetric, repos, atdiByRepo);
+
+    let elements: cytoscape.ElementDefinition[];
+    let layoutName: string;
+    let layoutOpts: Record<string, unknown>;
+    let isClusterMode = false;
+
+    if (viewMode === 'cluster') {
+      isClusterMode = true;
+      const clusters = clusterRepos(repoNames);
+
+      elements = [];
+      // Parent (cluster) nodes
+      for (const [clusterName, members] of clusters) {
+        const clusterId = `cluster:${clusterName}`;
+        const isExpanded = expandedClusters.has(clusterId);
+        elements.push({
+          data: {
+            id: clusterId,
+            label: isExpanded
+              ? clusterName
+              : `${clusterName} (${members.length})`,
+            isCluster: true,
+            memberCount: members.length,
+          },
+          classes: 'cluster',
+        });
+
+        if (isExpanded) {
+          // Show member nodes as children of the cluster compound node
+          for (const member of members) {
+            const sz = sizes.get(member) ?? NODE_MIN;
+            elements.push({
+              data: {
+                id: member,
+                label: member,
+                parent: clusterId,
+                size: sz,
+                color: healthColor(atdiByRepo.get(member)),
+              },
+            });
+          }
+        }
+      }
+
+      // Inter-cluster edges (aggregate)
+      // Map each repo to its effective node ID (cluster ID if collapsed, repo ID if expanded)
+      const clusterOf = new Map<string, string>();
+      for (const [clusterName, members] of clusters) {
+        const clusterId = `cluster:${clusterName}`;
+        for (const m of members) {
+          clusterOf.set(m, expandedClusters.has(clusterId) ? m : clusterId);
+        }
+      }
+
+      const clusterEdgeMap = new Map<string, number>();
+      for (const p of pairs) {
+        const src = clusterOf.get(p.source) ?? p.source;
+        const tgt = clusterOf.get(p.target) ?? p.target;
+        if (src === tgt) continue; // skip intra-cluster edges
+        const key = `${src}→${tgt}`;
+        clusterEdgeMap.set(key, (clusterEdgeMap.get(key) ?? 0) + p.count);
+      }
+
+      let edgeIdx = 0;
+      for (const [key, count] of clusterEdgeMap) {
+        const arrowIdx = key.indexOf('→');
+        const src = key.slice(0, arrowIdx);
+        const tgt = key.slice(arrowIdx + 1);
+        elements.push({
+          data: {
+            id: `ce-${edgeIdx++}`,
+            source: src,
+            target: tgt,
+            label: String(count),
+            weight: count,
+          },
+        });
+      }
+
+      layoutName = 'cose';
+      layoutOpts = { animate: false, nodeRepulsion: 4000, idealEdgeLength: 100 };
+    } else {
+      // Flat mode (original behavior, enhanced with B4 sizing and health color)
+      elements = repoNames.map((name) => {
+        const sz = sizes.get(name) ?? NODE_MIN;
+        return {
+          data: {
+            id: name,
+            label: name,
+            size: sz,
+            color: healthColor(atdiByRepo.get(name)),
+          },
+        };
+      });
+      elements.push(
+        ...pairs.map((p) => ({
+          data: {
+            id: `${p.source}→${p.target}`,
+            source: p.source,
+            target: p.target,
+            label: String(p.count),
+            weight: p.count,
+          },
+        })),
+      );
+      layoutName = 'dagre';
+      layoutOpts = { rankDir: 'TB', nodeSep: 80, rankSep: 100 };
     }
-
-    const nodes = [...repos.entries()].map(([name, stats]) => ({
-      data: {
-        id: name,
-        label: name,
-        degree: stats.fanIn + stats.fanOut,
-        fanIn: stats.fanIn,
-        fanOut: stats.fanOut,
-        size: 30 + 40 * ((stats.fanIn + stats.fanOut) / maxDegree),
-      },
-    }));
-
-    const edges = pairs.map((p) => ({
-      data: {
-        id: `${p.source}→${p.target}`,
-        source: p.source,
-        target: p.target,
-        label: String(p.count),
-        weight: p.count,
-      },
-    }));
 
     const cy = cytoscape({
       container: cyRef.current,
-      elements: [...nodes, ...edges],
+      elements,
+      // B3: Performance hardening
+      pixelRatio: 1,
+      textureOnViewport: true,
+      hideEdgesOnViewport: true,
       style: [
         {
           selector: 'node',
           style: {
-            'background-color': '#3b82f6',
+            'background-color': 'data(color)',
             label: 'data(label)',
             width: 'data(size)',
             height: 'data(size)',
@@ -116,6 +341,26 @@ export default function CrossRepoGraphView() {
             'text-margin-y': 6,
             'border-width': 2,
             'border-color': '#2563eb',
+            'min-zoomed-font-size': 14,
+          } as cytoscape.Css.Node,
+        },
+        {
+          // B1: Cluster parent nodes — larger, distinct style
+          selector: 'node.cluster',
+          style: {
+            'background-color': '#334155',
+            'border-color': '#64748b',
+            'border-width': 2,
+            'border-style': 'dashed',
+            label: 'data(label)',
+            'font-size': '13px',
+            'font-weight': 'bold',
+            color: '#cbd5e1',
+            'text-valign': 'center',
+            'text-halign': 'center',
+            width: 80,
+            height: 80,
+            shape: 'roundrectangle',
           } as cytoscape.Css.Node,
         },
         {
@@ -125,7 +370,7 @@ export default function CrossRepoGraphView() {
             'line-color': '#94a3b8',
             'target-arrow-color': '#64748b',
             'target-arrow-shape': 'triangle',
-            'curve-style': 'bezier',
+            'curve-style': 'haystack',
             label: 'data(label)',
             'font-size': '9px',
             color: '#cbd5e1',
@@ -137,7 +382,6 @@ export default function CrossRepoGraphView() {
         {
           selector: 'node.highlighted',
           style: {
-            'background-color': '#2563eb',
             'border-color': '#1d4ed8',
             'border-width': 3,
           } as cytoscape.Css.Node,
@@ -164,33 +408,36 @@ export default function CrossRepoGraphView() {
         },
       ],
       layout: {
-        name: 'dagre',
-        rankDir: 'TB',
-        nodeSep: 80,
-        rankSep: 100,
+        name: layoutName,
+        ...layoutOpts,
       } as cytoscape.LayoutOptions,
       minZoom: 0.3,
       maxZoom: 3,
     });
 
-    // Hover: highlight connected edges
+    // Hover: highlight connected edges (use batch for performance)
     cy.on('mouseover', 'node', (evt) => {
-      const node = evt.target;
+      const node = evt.target as cytoscape.NodeSingular;
+      if (node.data('isCluster') as boolean) return; // skip dim for cluster parents
       const connected = node.connectedEdges();
       const connectedNodes = connected.connectedNodes();
-      cy.elements().addClass('dimmed');
-      node.removeClass('dimmed').addClass('highlighted');
-      connected.removeClass('dimmed').addClass('highlighted');
-      connectedNodes.removeClass('dimmed').addClass('highlighted');
+      cy.batch(() => {
+        cy.elements().addClass('dimmed');
+        node.removeClass('dimmed').addClass('highlighted');
+        connected.removeClass('dimmed').addClass('highlighted');
+        connectedNodes.removeClass('dimmed').addClass('highlighted');
+      });
     });
 
     cy.on('mouseout', 'node', () => {
-      cy.elements().removeClass('dimmed highlighted');
+      cy.batch(() => {
+        cy.elements().removeClass('dimmed highlighted');
+      });
     });
 
     // Hover edge: show tooltip
     cy.on('mouseover', 'edge', (evt) => {
-      const edge = evt.target;
+      const edge = evt.target as cytoscape.EdgeSingular;
       const edgeId = edge.data('id') as string;
       const pair = pairLookup.get(edgeId);
       if (pair) {
@@ -204,15 +451,37 @@ export default function CrossRepoGraphView() {
       setHoveredEdge(null);
     });
 
-    // Click node: navigate to repo detail
+    // Click: cluster node toggles expand/collapse; repo node navigates
     cy.on('tap', 'node', (evt) => {
-      const repoName = evt.target.data('id') as string;
-      navigate(`/repo/${encodeURIComponent(repoName)}`);
+      const node = evt.target as cytoscape.NodeSingular;
+      if (isClusterMode && (node.data('isCluster') as boolean)) {
+        toggleCluster(node.data('id') as string);
+      } else if (!(node.data('isCluster') as boolean)) {
+        navigate(`/repo/${encodeURIComponent(node.data('id') as string)}`);
+      }
     });
 
     cyInstanceRef.current = cy;
-    return () => { cy.destroy(); cyInstanceRef.current = null; };
-  }, [data, navigate]);
+    return () => { cy.destroy(); cyInstanceRef.current = undefined; };
+  }, [data, navigate, viewMode, sizeMetric, atdiByRepo, expandedClusters, toggleCluster]);
+
+  // B2: Search-to-focus — filter node opacity based on debounced search query
+  useEffect(() => {
+    const cy = cyInstanceRef.current;
+    if (!cy) return;
+    cy.batch(() => {
+      if (!debouncedSearch.trim()) {
+        cy.elements().style({ opacity: 1 });
+        return;
+      }
+      const query = debouncedSearch.toLowerCase();
+      cy.nodes().forEach((node) => {
+        const match = (node.data('label') as string | undefined)?.toLowerCase().includes(query) ?? false;
+        node.style('opacity', match ? 1 : 0.15);
+        node.connectedEdges().style('opacity', match ? 0.7 : 0.08);
+      });
+    });
+  }, [debouncedSearch]);
 
   if (loading) return (
     <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 p-8 animate-pulse flex items-center justify-center" style={{ minHeight: 400 }}>
@@ -258,7 +527,87 @@ export default function CrossRepoGraphView() {
         <div className="flex gap-4">
           {/* Graph */}
           <div className="flex-1 bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 relative" style={{ minHeight: 500 }}>
+
+            {/* Controls toolbar */}
+            <div className="flex items-center gap-3 p-2 border-b border-slate-200 dark:border-slate-700 flex-wrap">
+              {/* B2: Search bar */}
+              <input
+                type="text"
+                placeholder="Search repos..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-36 px-2 py-1 text-xs rounded bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                aria-label="Search graph repos"
+              />
+
+              {/* B1: View mode toggle */}
+              <div className="flex rounded overflow-hidden border border-gray-600">
+                <button
+                  aria-pressed={viewMode === 'flat'}
+                  onClick={() => setViewMode('flat')}
+                  className={`px-3 py-1 text-xs font-medium transition-colors ${
+                    viewMode === 'flat'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-gray-700 text-gray-200 hover:bg-gray-600'
+                  }`}
+                >
+                  Flat
+                </button>
+                <button
+                  aria-pressed={viewMode === 'cluster'}
+                  onClick={() => { setViewMode('cluster'); setExpandedClusters(new Set()); }}
+                  className={`px-3 py-1 text-xs font-medium transition-colors ${
+                    viewMode === 'cluster'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-gray-700 text-gray-200 hover:bg-gray-600'
+                  }`}
+                >
+                  Cluster
+                </button>
+              </div>
+
+              {/* B4: Size metric selector */}
+              <div className="flex items-center gap-1">
+                <label htmlFor="size-metric" className="text-xs text-gray-400 dark:text-gray-400 whitespace-nowrap">Size by</label>
+                <select
+                  id="size-metric"
+                  value={sizeMetric}
+                  onChange={(e) => setSizeMetric(e.target.value as SizeMetric)}
+                  className="text-xs bg-gray-700 text-gray-200 border border-gray-600 rounded px-2 py-1"
+                >
+                  <option value="findings">SARIF Findings</option>
+                  <option value="modules">Module Count</option>
+                  <option value="fan-in">Fan-in</option>
+                  <option value="fan-out">Fan-out</option>
+                </select>
+              </div>
+
+              {/* B4: Health color legend */}
+              <div className="flex items-center gap-2 ml-auto">
+                <span className="text-xs text-gray-400">Health:</span>
+                <span className="flex items-center gap-1 text-xs text-gray-300">
+                  <span className="inline-block w-2.5 h-2.5 rounded-full bg-green-500" /> 0 errors
+                </span>
+                <span className="flex items-center gap-1 text-xs text-gray-300">
+                  <span className="inline-block w-2.5 h-2.5 rounded-full bg-yellow-500" /> 1-5
+                </span>
+                <span className="flex items-center gap-1 text-xs text-gray-300">
+                  <span className="inline-block w-2.5 h-2.5 rounded-full bg-red-500" /> 6+
+                </span>
+                <span className="flex items-center gap-1 text-xs text-gray-300">
+                  <span className="inline-block w-2.5 h-2.5 rounded-full bg-gray-500" /> n/a
+                </span>
+              </div>
+            </div>
+
+            {viewMode === 'cluster' && expandedClusters.size > 0 && (
+              <div className="px-3 py-1 text-xs text-gray-400 bg-slate-900 border-b border-slate-700">
+                Click cluster to collapse. Expanded: {[...expandedClusters].map((id) => id.replace('cluster:', '')).join(', ')}
+              </div>
+            )}
+
             <div ref={cyRef} style={{ width: '100%', height: 500 }} />
+
             {hoveredEdge && (
               <div
                 style={{
@@ -314,8 +663,14 @@ export default function CrossRepoGraphView() {
                     onClick={() => navigate(`/repo/${encodeURIComponent(name)}`)}
                     className="block w-full text-left hover:bg-slate-50 dark:hover:bg-slate-700 rounded px-2 py-1 -mx-2"
                   >
-                    <div className="text-sm font-medium text-slate-700 dark:text-slate-300 truncate">{name}</div>
-                    <div className="text-xs text-slate-400 dark:text-slate-500">
+                    <div className="flex items-center gap-1.5">
+                      <span
+                        className="inline-block w-2 h-2 rounded-full flex-shrink-0"
+                        style={{ backgroundColor: healthColor(atdiByRepo.get(name)) }}
+                      />
+                      <span className="text-sm font-medium text-slate-700 dark:text-slate-300 truncate">{name}</span>
+                    </div>
+                    <div className="text-xs text-slate-400 dark:text-slate-500 ml-3.5">
                       {stats.fanIn} in / {stats.fanOut} out
                     </div>
                   </button>
