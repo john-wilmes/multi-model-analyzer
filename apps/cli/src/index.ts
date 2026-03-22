@@ -662,7 +662,9 @@ async function main(): Promise<void> {
       const configPath = resolve(values.config);
       const configRaw = await readFile(configPath, "utf-8");
       const config = JSON.parse(configRaw) as CliConfig;
-      mirrorDir = resolve(dirname(configPath), config.mirrorDir);
+      if (typeof config.mirrorDir === "string" && config.mirrorDir.trim() !== "") {
+        mirrorDir = resolve(dirname(configPath), config.mirrorDir);
+      }
       // Honour config.backend unless --backend was explicitly passed on CLI
       if (!values.backend && config.backend) {
         exploreBackend = config.backend;

@@ -551,16 +551,33 @@ export async function handleApi(
       const offset = Math.max(parseInt(query.single["offset"] ?? "0", 10) || 0, 0);
       const edges = allEdges.slice(offset, offset + limit);
 
-      // Filter companion metadata when repo filter is active
-      const repoPairs = repoFilter
-        ? parsed.repoPairs.filter((p: string) => p.includes(repoFilter))
-        : parsed.repoPairs;
-      const downstreamMap = repoFilter
-        ? parsed.downstreamMap.filter(([repo, deps]: [string, string[]]) => repo === repoFilter || deps.includes(repoFilter))
-        : parsed.downstreamMap;
-      const upstreamMap = repoFilter
-        ? parsed.upstreamMap.filter(([repo, deps]: [string, string[]]) => repo === repoFilter || deps.includes(repoFilter))
-        : parsed.upstreamMap;
+      // Filter companion metadata when repo filter is active (exact match, not substring)
+      let repoPairs: string[];
+      let downstreamMap: [string, string[]][];
+      let upstreamMap: [string, string[]][];
+      if (repoFilter) {
+        // Collect repos that are paired with the filter target
+        const relevantRepos = new Set<string>([repoFilter]);
+        repoPairs = parsed.repoPairs.filter((p: string) => {
+          const [left, right] = p.split(" <-> ");
+          if (left === repoFilter || right === repoFilter) {
+            if (left) relevantRepos.add(left);
+            if (right) relevantRepos.add(right);
+            return true;
+          }
+          return false;
+        });
+        downstreamMap = parsed.downstreamMap
+          .filter(([repo, deps]: [string, string[]]) => repo === repoFilter || deps.includes(repoFilter))
+          .map(([repo, deps]: [string, string[]]) => [repo, deps.filter(d => relevantRepos.has(d))]);
+        upstreamMap = parsed.upstreamMap
+          .filter(([repo, deps]: [string, string[]]) => repo === repoFilter || deps.includes(repoFilter))
+          .map(([repo, deps]: [string, string[]]) => [repo, deps.filter(d => relevantRepos.has(d))]);
+      } else {
+        repoPairs = parsed.repoPairs;
+        downstreamMap = parsed.downstreamMap;
+        upstreamMap = parsed.upstreamMap;
+      }
 
       return sendJson(res, {
         edges,
@@ -695,14 +712,18 @@ export async function handleApi(
   // GET /api/repo-states
   if (path === "/api/repo-states") {
     const keys = await kvStore.keys("repo-state:");
+    const total = keys.length;
+    const limit = Math.min(parseInt(query.single["limit"] ?? "50", 10) || 50, 500);
+    const offset = Math.max(parseInt(query.single["offset"] ?? "0", 10) || 0, 0);
+    const slicedKeys = keys.slice(offset, offset + limit);
     const states: Array<unknown> = [];
-    for (const k of keys) {
+    for (const k of slicedKeys) {
       const raw = await kvStore.get(k);
       if (raw) {
         try { states.push(JSON.parse(raw) as unknown); } catch { /* skip */ }
       }
     }
-    return sendJson(res, { states }, 200, corsOrigin);
+    return sendJson(res, { states, total, limit, offset }, 200, corsOrigin);
   }
 
   // GET /api/blast-radius/:repo[?file=path&maxDepth=N]
