@@ -605,7 +605,8 @@ export async function handleApi(
     const raw = await kvStore.get("cross-repo:features");
     if (!raw) return sendJson(res, { flags: [] }, 200, corsOrigin);
     try {
-      const flags = JSON.parse(raw) as SharedFlag[];
+      const parsed = JSON.parse(raw) as SharedFlag[] | { sharedFlags: SharedFlag[] };
+      const flags = Array.isArray(parsed) ? parsed : (parsed.sharedFlags ?? []);
       const repo = query.single["repo"];
       const filtered = repo ? flags.filter((f) => f.repos.includes(repo)) : flags;
       return sendJson(res, { flags: filtered }, 200, corsOrigin);
@@ -626,7 +627,8 @@ export async function handleApi(
     const raw = await kvStore.get("cross-repo:faults");
     if (!raw) return sendJson(res, { faultLinks: [] }, 200, corsOrigin);
     try {
-      const faultLinks = JSON.parse(raw) as CrossRepoFaultLink[];
+      const parsed = JSON.parse(raw) as CrossRepoFaultLink[] | { faultLinks: CrossRepoFaultLink[] };
+      const faultLinks = Array.isArray(parsed) ? parsed : (parsed.faultLinks ?? []);
       const repo = query.single["repo"];
       const filtered = repo
         ? faultLinks.filter((l) => l.sourceRepo === repo || l.targetRepo === repo)
@@ -654,7 +656,8 @@ export async function handleApi(
     const raw = await kvStore.get("cross-repo:catalog");
     if (!raw) return sendJson(res, { entries: [] }, 200, corsOrigin);
     try {
-      const entries = JSON.parse(raw) as SystemCatalogEntry[];
+      const parsed = JSON.parse(raw) as SystemCatalogEntry[] | { entries: SystemCatalogEntry[] };
+      const entries = Array.isArray(parsed) ? parsed : (parsed.entries ?? []);
       const repo = query.single["repo"];
       const filtered = repo
         ? entries.filter(
