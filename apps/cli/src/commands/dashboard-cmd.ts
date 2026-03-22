@@ -532,7 +532,7 @@ export async function handleApi(
     }
   }
 
-  // GET /api/cross-repo-graph?repo=X
+  // GET /api/cross-repo-graph?repo=X&limit=200&offset=0
   if (path === "/api/cross-repo-graph") {
     const raw = await kvStore.get("correlation:graph");
     if (!raw) return sendJson(res, { error: "No correlation data. Run 'mma index' with 2+ repos first." }, 200, corsOrigin);
@@ -544,11 +544,17 @@ export async function handleApi(
         upstreamMap: [string, string[]][];
       };
       const repoFilter = query.single["repo"];
-      const edges = repoFilter
+      const allEdges = repoFilter
         ? parsed.edges.filter((e) => e.sourceRepo === repoFilter || e.targetRepo === repoFilter)
         : parsed.edges;
+      const limit = Math.min(parseInt(query.single["limit"] ?? "200", 10) || 200, 2000);
+      const offset = Math.max(parseInt(query.single["offset"] ?? "0", 10) || 0, 0);
+      const edges = allEdges.slice(offset, offset + limit);
       return sendJson(res, {
         edges,
+        total: allEdges.length,
+        limit,
+        offset,
         repoPairs: parsed.repoPairs,
         downstreamMap: parsed.downstreamMap,
         upstreamMap: parsed.upstreamMap,
@@ -588,22 +594,28 @@ export async function handleApi(
     }
   }
 
-  // GET /api/cross-repo-features?repo=X
+  // GET /api/cross-repo-features?repo=X&limit=50&offset=0&search=term
   if (path === "/api/cross-repo-features") {
     type SharedFlag = { name: string; repos: string[]; coordinated: boolean };
     const raw = await kvStore.get("cross-repo:features");
-    if (!raw) return sendJson(res, { flags: [] }, 200, corsOrigin);
+    if (!raw) return sendJson(res, { flags: [], total: 0, limit: 50, offset: 0 }, 200, corsOrigin);
     try {
-      const flags = JSON.parse(raw) as SharedFlag[];
+      const parsed = JSON.parse(raw) as SharedFlag[] | { sharedFlags?: SharedFlag[] };
+      const allFlags: SharedFlag[] = Array.isArray(parsed) ? parsed : (parsed.sharedFlags ?? []);
       const repo = query.single["repo"];
-      const filtered = repo ? flags.filter((f) => f.repos.includes(repo)) : flags;
-      return sendJson(res, { flags: filtered }, 200, corsOrigin);
+      const search = query.single["search"]?.toLowerCase();
+      const limit = Math.min(parseInt(query.single["limit"] ?? "50", 10) || 50, 500);
+      const offset = Math.max(parseInt(query.single["offset"] ?? "0", 10) || 0, 0);
+      let filtered = repo ? allFlags.filter((f) => f.repos.includes(repo)) : allFlags;
+      if (search) filtered = filtered.filter((f) => f.name.toLowerCase().includes(search));
+      const flags = filtered.slice(offset, offset + limit);
+      return sendJson(res, { flags, total: filtered.length, limit, offset }, 200, corsOrigin);
     } catch {
-      return sendJson(res, { flags: [] }, 200, corsOrigin);
+      return sendJson(res, { flags: [], total: 0, limit: 50, offset: 0 }, 200, corsOrigin);
     }
   }
 
-  // GET /api/cross-repo-faults?repo=X
+  // GET /api/cross-repo-faults?repo=X&limit=50&offset=0&search=term
   if (path === "/api/cross-repo-faults") {
     type CrossRepoFaultLink = {
       endpoint: string;
@@ -613,20 +625,26 @@ export async function handleApi(
       targetFaultTreeCount: number;
     };
     const raw = await kvStore.get("cross-repo:faults");
-    if (!raw) return sendJson(res, { faultLinks: [] }, 200, corsOrigin);
+    if (!raw) return sendJson(res, { faultLinks: [], total: 0, limit: 50, offset: 0 }, 200, corsOrigin);
     try {
-      const faultLinks = JSON.parse(raw) as CrossRepoFaultLink[];
+      const parsed = JSON.parse(raw) as CrossRepoFaultLink[] | { sarifResults?: CrossRepoFaultLink[] };
+      const allLinks: CrossRepoFaultLink[] = Array.isArray(parsed) ? parsed : (parsed.sarifResults ?? []);
       const repo = query.single["repo"];
-      const filtered = repo
-        ? faultLinks.filter((l) => l.sourceRepo === repo || l.targetRepo === repo)
-        : faultLinks;
-      return sendJson(res, { faultLinks: filtered }, 200, corsOrigin);
+      const search = query.single["search"]?.toLowerCase();
+      const limit = Math.min(parseInt(query.single["limit"] ?? "50", 10) || 50, 500);
+      const offset = Math.max(parseInt(query.single["offset"] ?? "0", 10) || 0, 0);
+      let filtered = repo
+        ? allLinks.filter((l) => l.sourceRepo === repo || l.targetRepo === repo)
+        : allLinks;
+      if (search) filtered = filtered.filter((l) => l.endpoint.toLowerCase().includes(search));
+      const faultLinks = filtered.slice(offset, offset + limit);
+      return sendJson(res, { faultLinks, total: filtered.length, limit, offset }, 200, corsOrigin);
     } catch {
-      return sendJson(res, { faultLinks: [] }, 200, corsOrigin);
+      return sendJson(res, { faultLinks: [], total: 0, limit: 50, offset: 0 }, 200, corsOrigin);
     }
   }
 
-  // GET /api/cross-repo-catalog?repo=X
+  // GET /api/cross-repo-catalog?repo=X&limit=50&offset=0&search=term
   if (path === "/api/cross-repo-catalog") {
     type SystemCatalogEntry = {
       entry: {
@@ -641,18 +659,23 @@ export async function handleApi(
       producers: string[];
     };
     const raw = await kvStore.get("cross-repo:catalog");
-    if (!raw) return sendJson(res, { entries: [] }, 200, corsOrigin);
+    if (!raw) return sendJson(res, { entries: [], total: 0, limit: 50, offset: 0 }, 200, corsOrigin);
     try {
-      const entries = JSON.parse(raw) as SystemCatalogEntry[];
+      const allEntries = JSON.parse(raw) as SystemCatalogEntry[];
       const repo = query.single["repo"];
-      const filtered = repo
-        ? entries.filter(
+      const search = query.single["search"]?.toLowerCase();
+      const limit = Math.min(parseInt(query.single["limit"] ?? "50", 10) || 50, 500);
+      const offset = Math.max(parseInt(query.single["offset"] ?? "0", 10) || 0, 0);
+      let filtered = repo
+        ? allEntries.filter(
             (e) => e.repo === repo || e.consumers.includes(repo) || e.producers.includes(repo),
           )
-        : entries;
-      return sendJson(res, { entries: filtered }, 200, corsOrigin);
+        : allEntries;
+      if (search) filtered = filtered.filter((e) => e.entry.name.toLowerCase().includes(search));
+      const entries = filtered.slice(offset, offset + limit);
+      return sendJson(res, { entries, total: filtered.length, limit, offset }, 200, corsOrigin);
     } catch {
-      return sendJson(res, { entries: [] }, 200, corsOrigin);
+      return sendJson(res, { entries: [], total: 0, limit: 50, offset: 0 }, 200, corsOrigin);
     }
   }
 
