@@ -75,7 +75,7 @@ export async function exploreCommand(options: ExploreCommandOptions): Promise<vo
   });
 
   if (source === "github") {
-    const org = await input({ message: "GitHub org name:" });
+    const org = (await input({ message: "GitHub org name:" })).trim();
     const token = process.env["GITHUB_TOKEN"];
     if (!token) {
       console.error("Set GITHUB_TOKEN environment variable for GitHub org scanning.");
@@ -92,7 +92,7 @@ export async function exploreCommand(options: ExploreCommandOptions): Promise<vo
     // Cache scan result
     await kvStore.set(`org-scan:${org}`, JSON.stringify(result));
   } else {
-    const dirPath = await input({ message: "Directory path:" });
+    const dirPath = (await input({ message: "Directory path:" })).trim();
     console.log(`Scanning ${dirPath}...`);
     repos = [...(await scanLocalDirectory(dirPath))];
     console.log(`Found ${repos.length} repos`);
