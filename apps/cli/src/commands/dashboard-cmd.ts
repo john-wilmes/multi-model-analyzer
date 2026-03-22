@@ -171,6 +171,28 @@ function getAllowedOrigin(req: IncomingMessage, corsOrigins: ReadonlySet<string>
   return corsOrigins.has(origin) ? origin : undefined;
 }
 
+/** Shared logic for /api/metrics and /api/metrics-all. */
+async function fetchAllMetrics(kvStore: KVStore, limit: number): Promise<ModuleMetrics[]> {
+  const cacheKey = `metrics-all:${limit}`;
+  const cached = cacheGet(cacheKey);
+  if (cached !== undefined) return cached as ModuleMetrics[];
+  const keys = await kvStore.keys("metrics:");
+  const result: ModuleMetrics[] = [];
+  for (const key of keys) {
+    if (result.length >= limit) break;
+    const json = await kvStore.get(key);
+    if (json) {
+      try {
+        const metrics = JSON.parse(json) as ModuleMetrics[];
+        const remaining = limit - result.length;
+        result.push(...metrics.slice(0, remaining));
+      } catch { /* skip malformed */ }
+    }
+  }
+  cacheSet(cacheKey, result);
+  return result;
+}
+
 export async function handleApi(
   req: IncomingMessage,
   res: ServerResponse,
@@ -204,27 +226,16 @@ export async function handleApi(
     return sendJson(res, result, 200, corsOrigin);
   }
 
+  // GET /api/metrics — alias for /api/metrics-all (no repo required)
+  if (path === "/api/metrics") {
+    const limit = Math.min(parseInt(query.single["limit"] ?? "1000", 10) || 1000, 5000);
+    return sendJson(res, await fetchAllMetrics(kvStore, limit), 200, corsOrigin);
+  }
+
   // GET /api/metrics-all?limit=1000
   if (path === "/api/metrics-all") {
     const limit = Math.min(parseInt(query.single["limit"] ?? "1000", 10) || 1000, 5000);
-    const cacheKey = `metrics-all:${limit}`;
-    const cached = cacheGet(cacheKey);
-    if (cached !== undefined) return sendJson(res, cached, 200, corsOrigin);
-    const keys = await kvStore.keys("metrics:");
-    const result: ModuleMetrics[] = [];
-    for (const key of keys) {
-      if (result.length >= limit) break;
-      const json = await kvStore.get(key);
-      if (json) {
-        try {
-          const metrics = JSON.parse(json) as ModuleMetrics[];
-          const remaining = limit - result.length;
-          result.push(...metrics.slice(0, remaining));
-        } catch { /* skip malformed */ }
-      }
-    }
-    cacheSet(cacheKey, result);
-    return sendJson(res, result, 200, corsOrigin);
+    return sendJson(res, await fetchAllMetrics(kvStore, limit), 200, corsOrigin);
   }
 
   // GET /api/dsm/:repo
@@ -594,7 +605,8 @@ export async function handleApi(
     const raw = await kvStore.get("cross-repo:features");
     if (!raw) return sendJson(res, { flags: [] }, 200, corsOrigin);
     try {
-      const flags = JSON.parse(raw) as SharedFlag[];
+      const parsed = JSON.parse(raw) as SharedFlag[] | { sharedFlags: SharedFlag[] };
+      const flags = Array.isArray(parsed) ? parsed : (parsed.sharedFlags ?? []);
       const repo = query.single["repo"];
       const filtered = repo ? flags.filter((f) => f.repos.includes(repo)) : flags;
       return sendJson(res, { flags: filtered }, 200, corsOrigin);
@@ -615,7 +627,8 @@ export async function handleApi(
     const raw = await kvStore.get("cross-repo:faults");
     if (!raw) return sendJson(res, { faultLinks: [] }, 200, corsOrigin);
     try {
-      const faultLinks = JSON.parse(raw) as CrossRepoFaultLink[];
+      const parsed = JSON.parse(raw) as CrossRepoFaultLink[] | { faultLinks: CrossRepoFaultLink[] };
+      const faultLinks = Array.isArray(parsed) ? parsed : (parsed.faultLinks ?? []);
       const repo = query.single["repo"];
       const filtered = repo
         ? faultLinks.filter((l) => l.sourceRepo === repo || l.targetRepo === repo)
@@ -643,7 +656,8 @@ export async function handleApi(
     const raw = await kvStore.get("cross-repo:catalog");
     if (!raw) return sendJson(res, { entries: [] }, 200, corsOrigin);
     try {
-      const entries = JSON.parse(raw) as SystemCatalogEntry[];
+      const parsed = JSON.parse(raw) as SystemCatalogEntry[] | { entries: SystemCatalogEntry[] };
+      const entries = Array.isArray(parsed) ? parsed : (parsed.entries ?? []);
       const repo = query.single["repo"];
       const filtered = repo
         ? entries.filter(

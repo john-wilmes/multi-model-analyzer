@@ -20,7 +20,7 @@ export default function ServiceCatalogTable({ repo }: Props) {
     setLoading(true);
     setSearch('');
     fetchCrossRepoCatalog(repo)
-      .then((data) => setEntries(data.entries))
+      .then((data) => setEntries(Array.isArray(data.entries) ? data.entries : []))
       .catch(() => setEntries([]))
       .finally(() => setLoading(false));
   }, [repo]);
