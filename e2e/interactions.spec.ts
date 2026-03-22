@@ -1,16 +1,10 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect } from '@playwright/test';
+import { waitForLoad } from './helpers.js';
 
 test.describe.configure({ mode: 'parallel' });
 
 let repoName = '';
 let modulePath = '';
-
-async function waitForLoad(page: Page) {
-  await page.waitForFunction(
-    () => !document.body.innerText.includes('Loading'),
-    { timeout: 15_000 },
-  );
-}
 
 test.beforeAll(async ({ request }) => {
   const reposRes = await request.get('/api/repos');
@@ -90,9 +84,14 @@ test('Findings — view mode: By Rule shows accordion groups', async ({ page }) 
   // Click first accordion group to expand it
   const firstGroupButton = page.locator('button').filter({ hasText: /MMA/ }).first();
   if (await firstGroupButton.count() > 0) {
+    const bodyLenBefore = bodyText.length;
     await firstGroupButton.click();
-    // After click, expanded content should be visible
-    await page.waitForTimeout(500);
+    // Wait until the accordion expands (body text grows)
+    await page.waitForFunction(
+      (minLen: number) => document.body.innerText.length > minLen,
+      bodyLenBefore,
+      { timeout: 5_000 },
+    );
     const expandedText = await page.innerText('body');
     expect(expandedText.length).toBeGreaterThan(bodyText.length);
   }
@@ -222,8 +221,17 @@ test('Temporal Coupling — sort by column header changes sort indicator', async
   const textBefore = await coChangesHeader.innerText();
   await coChangesHeader.click();
 
-  // After click, sort indicator (▲ or ▼) should appear or toggle
-  await page.waitForTimeout(300);
+  // Wait until the sort indicator (▲ or ▼) appears or the header text changes
+  await page.waitForFunction(
+    (before: string) => {
+      const header = document.querySelector('[role="columnheader"]');
+      if (!header) return false;
+      const text = (header as HTMLElement).innerText;
+      return text !== before || text.includes('▲') || text.includes('▼');
+    },
+    textBefore,
+    { timeout: 5_000 },
+  );
   const textAfter = await coChangesHeader.innerText();
 
   // The header text should now include an arrow indicator

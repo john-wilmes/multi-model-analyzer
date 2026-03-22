@@ -219,6 +219,7 @@ test.describe("Tools — dependencies", () => {
     if (!hasContent && data.description) {
       console.log("get_dependencies description:", data.description);
     }
+    expect(hasContent).toBe(true);
     expect(typeof data.description).toBe("string");
   });
 });

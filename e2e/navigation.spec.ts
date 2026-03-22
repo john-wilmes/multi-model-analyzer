@@ -1,14 +1,8 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect } from '@playwright/test';
+import { waitForLoad } from './helpers.js';
 
 let repoName = '';
 let modulePath = '';
-
-async function waitForLoad(page: Page) {
-  await page.waitForFunction(
-    () => !document.body.innerText.includes('Loading'),
-    { timeout: 15_000 },
-  );
-}
 
 test.beforeAll(async ({ request }) => {
   const reposRes = await request.get('/api/repos');
