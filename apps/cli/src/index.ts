@@ -654,7 +654,7 @@ async function main(): Promise<void> {
 
   // explore command -- interactive incremental indexing
   if (command === "explore") {
-    mkdirSync(dirname(dbPath), { recursive: true });
+    if (dbPath !== ":memory:") mkdirSync(dirname(dbPath), { recursive: true });
     // Try to get mirrorDir and backend from config; fall back to defaults
     let mirrorDir = resolve("mirrors");
     let exploreBackend = earlyBackend;
@@ -945,7 +945,7 @@ Usage:
   mma compress [--db path]                      Gzip the analysis database
   mma dashboard [--db path] [--port 3000] [--host 127.0.0.1]
                                                 Serve local web dashboard
-  mma explore [--db path] [--config path] [-v]
+  mma explore [--db path] [--config path] [--backend <name>] [-v]
                                                 Interactive incremental indexing (guided repo discovery)
 
 Options:

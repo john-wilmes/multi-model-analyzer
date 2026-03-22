@@ -673,7 +673,8 @@ export async function handleApi(
     const raw = await kvStore.get("cross-repo:catalog");
     if (!raw) return sendJson(res, { entries: [], total: 0, limit: 50, offset: 0 }, 200, corsOrigin);
     try {
-      const allEntries = JSON.parse(raw) as SystemCatalogEntry[];
+      const parsed = JSON.parse(raw) as SystemCatalogEntry[] | { entries?: SystemCatalogEntry[] };
+      const allEntries: SystemCatalogEntry[] = Array.isArray(parsed) ? parsed : (parsed.entries ?? []);
       const repo = query.single["repo"];
       const search = query.single["search"]?.toLowerCase();
       const limit = Math.min(parseInt(query.single["limit"] ?? "50", 10) || 50, 500);
