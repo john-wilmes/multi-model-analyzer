@@ -18,7 +18,7 @@ interface Finding {
   properties?: Record<string, unknown>;
 }
 
-type ViewMode = 'flat' | 'by-rule';
+type ViewMode = 'flat' | 'by-rule' | 'by-repo';
 
 const PAGE_SIZE = 25;
 
@@ -29,7 +29,7 @@ const VIEW_MODE_KEY = 'mma-findings-view';
 function getStoredViewMode(): ViewMode {
   try {
     const stored = localStorage.getItem(VIEW_MODE_KEY);
-    if (stored === 'flat' || stored === 'by-rule') return stored;
+    if (stored === 'flat' || stored === 'by-rule' || stored === 'by-repo') return stored;
   } catch {
     // ignore
   }
@@ -75,6 +75,31 @@ function groupByRule(findings: Finding[]): RuleGroup[] {
   return [...map.values()].sort((a, b) => b.count - a.count);
 }
 
+interface RepoGroup {
+  repo: string;
+  count: number;
+  findings: Finding[];
+}
+
+function groupByRepo(findings: Finding[]): RepoGroup[] {
+  const map = new Map<string, RepoGroup>();
+  for (const f of findings) {
+    // repo may be in properties, or derived from location
+    const repoKey =
+      (f.properties?.['repo'] as string | undefined) ??
+      f.locations?.[0]?.logicalLocations?.[0]?.fullyQualifiedName?.split(':')[0] ??
+      '(unknown)';
+    const existing = map.get(repoKey);
+    if (existing) {
+      existing.count++;
+      existing.findings.push(f);
+    } else {
+      map.set(repoKey, { repo: repoKey, count: 1, findings: [f] });
+    }
+  }
+  return [...map.values()].sort((a, b) => b.count - a.count);
+}
+
 export default function FindingsTable() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [repos, setRepos] = useState<string[]>([]);
@@ -114,7 +139,7 @@ export default function FindingsTable() {
       qs.set('offset', String(page * PAGE_SIZE));
       qs.set('limit', String(PAGE_SIZE));
     } else {
-      // Fetch up to 500 for group-by-rule mode
+      // Fetch up to 500 for group-by-rule / group-by-repo modes
       qs.set('offset', '0');
       qs.set('limit', '500');
     }
@@ -204,6 +229,7 @@ export default function FindingsTable() {
   const end = Math.min((page + 1) * PAGE_SIZE, total);
 
   const ruleGroups = viewMode === 'by-rule' ? groupByRule(findings) : [];
+  const repoGroups = viewMode === 'by-repo' ? groupByRepo(findings) : [];
 
   return (
     <div className="space-y-4">
@@ -282,13 +308,23 @@ export default function FindingsTable() {
             >
               By Rule
             </button>
+            <button
+              onClick={() => switchViewMode('by-repo')}
+              className={`px-3 py-1 text-sm font-medium transition-colors ${
+                viewMode === 'by-repo'
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'
+              }`}
+            >
+              By Repo
+            </button>
           </div>
         </div>
       </div>
 
       {/* Content */}
       {viewMode === 'flat' ? (
-        /* Flat table */
+        /* --- Flat table --- */
         <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 overflow-hidden">
           {loading ? (
             <p className="p-4 text-slate-500 dark:text-slate-400 text-sm">Loading...</p>
@@ -411,8 +447,8 @@ export default function FindingsTable() {
             </div>
           )}
         </div>
-      ) : (
-        /* Group by Rule accordion */
+      ) : viewMode === 'by-rule' ? (
+        /* --- Group by Rule accordion --- */
         <div className="space-y-2">
           {loading ? (
             <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 p-4">
@@ -477,6 +513,81 @@ export default function FindingsTable() {
           {total > 0 && (
             <p className="text-xs text-slate-500 dark:text-slate-400 text-right">
               {total} total findings · {ruleGroups.length} rules
+            </p>
+          )}
+          {total > 500 && (
+            <p className="text-xs text-amber-600 dark:text-amber-400 text-right">
+              Showing first 500 of {total} findings. Use filters to narrow results.
+            </p>
+          )}
+        </div>
+      ) : (
+        /* --- Group by Repo accordion --- */
+        <div className="space-y-2">
+          {loading ? (
+            <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 p-4">
+              <p className="text-slate-500 dark:text-slate-400 text-sm">Loading...</p>
+            </div>
+          ) : repoGroups.length === 0 ? (
+            <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 p-4">
+              <p className="text-slate-500 dark:text-slate-400 text-sm">No findings found.</p>
+            </div>
+          ) : (
+            repoGroups.map((group) => {
+              const isExpanded = expandedRules.has(group.repo);
+              return (
+                <div
+                  key={group.repo}
+                  className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 overflow-hidden"
+                >
+                  {/* Accordion header */}
+                  <button
+                    onClick={() => toggleRule(group.repo)}
+                    className="w-full flex items-center justify-between px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors text-left"
+                  >
+                    <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+                      {group.repo}
+                    </span>
+                    <div className="flex items-center gap-3 shrink-0 ml-4">
+                      <span className="bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400 text-xs font-semibold px-2 py-0.5 rounded-full">
+                        {group.count}
+                      </span>
+                      <span className="text-slate-400 dark:text-slate-500 text-sm">
+                        {isExpanded ? '▲' : '▼'}
+                      </span>
+                    </div>
+                  </button>
+
+                  {/* Expanded findings list */}
+                  {isExpanded && (
+                    <div className="border-t dark:border-slate-700">
+                      {group.findings.map((f, i) => (
+                        <div
+                          key={i}
+                          className="px-4 py-2 border-b dark:border-slate-700 last:border-0 text-sm hover:bg-slate-50 dark:hover:bg-slate-700"
+                        >
+                          <div className="flex items-center gap-2">
+                            <SeverityBadge severity={f.level} />
+                            <span className="font-mono text-xs text-slate-500 dark:text-slate-400">{f.ruleId ?? '-'}</span>
+                          </div>
+                          <div className="text-slate-700 dark:text-slate-300 truncate max-w-2xl mt-0.5">
+                            {getMessage(f)}
+                          </div>
+                          <div className="text-xs text-slate-400 dark:text-slate-500 font-mono mt-0.5 truncate">
+                            {getLocation(f)}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
+
+          {total > 0 && (
+            <p className="text-xs text-slate-500 dark:text-slate-400 text-right">
+              {total} total findings · {repoGroups.length} repos
             </p>
           )}
           {total > 500 && (
