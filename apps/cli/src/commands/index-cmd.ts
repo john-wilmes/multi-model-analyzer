@@ -289,12 +289,12 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     };
   }
 
-  // Load previous commit hashes
+  // Load previous commit hashes (parallel KV reads)
   const previousCommits = new Map<string, string>();
-  for (const repo of repos) {
+  await Promise.all(repos.map(async (repo) => {
     const prev = await kvStore.get(`commit:${repo.name}`);
     if (prev) previousCommits.set(repo.name, prev);
-  }
+  }));
 
   // Phase 1: Ingestion
   log("Phase 1: Detecting changes...");
@@ -302,8 +302,9 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
   const phase1Start = performance.now();
   const changeSets: ChangeSet[] = [];
   const isTTY = process.stderr.isTTY;
-  for (let i = 0; i < repos.length; i++) {
-    const repo = repos[i]!;
+  let ingestionDone = 0;
+  const ingestionLimit = pLimit(4);
+  await Promise.all(repos.map((repo, i) => ingestionLimit(async () => {
     if (!verbose) {
       const progress = `[${i + 1}/${repos.length}] ${repo.name}`;
       if (isTTY) {
@@ -323,7 +324,11 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       console.error(`  Failed to index ${repo.name}:`, error);
       failedRepoNames.add(repo.name);
     }
-  }
+    ingestionDone++;
+    if (!verbose && isTTY) {
+      process.stderr.write(`\r[${ingestionDone}/${repos.length}] done\x1b[K`);
+    }
+  })));
   // Clear progress line when done (TTY only)
   if (!verbose && isTTY && repos.length > 0) {
     process.stderr.write(`\r\x1b[K`);
@@ -335,28 +340,24 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
   // Phase 0: Cleanup stale data for deleted files
   tracer.startPhase("Cleanup");
   const phase0Start = performance.now();
-  for (const changeSet of changeSets) {
+  await Promise.all(changeSets.map(async (changeSet) => {
     if (changeSet.deletedFiles.length > 0) {
       log(`Phase 0: Cleaning up ${changeSet.deletedFiles.length} deleted files from ${changeSet.repo}...`);
-      const deletedIds: string[] = [];
-      for (const filePath of changeSet.deletedFiles) {
-        deletedIds.push(filePath);
-      }
 
       // Remove from search index
-      await options.searchStore.delete(deletedIds);
+      await options.searchStore.delete(changeSet.deletedFiles);
 
       // Remove stale graph edges sourced from deleted files
       await options.graphStore.deleteEdgesForFiles(changeSet.repo, changeSet.deletedFiles);
 
       // Remove KV entries associated with deleted files
-      for (const filePath of changeSet.deletedFiles) {
-        await kvStore.deleteByPrefix(`symbols:${changeSet.repo}:${filePath}`);
-      }
+      await Promise.all(changeSet.deletedFiles.map(filePath =>
+        kvStore.deleteByPrefix(`symbols:${changeSet.repo}:${filePath}`)
+      ));
 
       log(`  Removed stale data for ${changeSet.deletedFiles.length} files`);
     }
-  }
+  }));
   tracer.endPhase();
   log(`  Phase 0: ${Math.round(performance.now() - phase0Start)}ms`);
 
@@ -389,7 +390,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     }
     // If cache was empty (e.g., first run after upgrade), scan repos via git
     if (packageRoots.size === 0) {
-      for (const repo of repos) {
+      await Promise.all(repos.map(async (repo) => {
         try {
           const isBare = await checkBareRepo(repo.localPath);
           const commit = await resolveCommitForBare(repo.localPath, changeSets, repo.name);
@@ -399,7 +400,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
             { cwd: repo.localPath, encoding: "utf-8", timeout: 10000 },
           );
           const pjPaths = lsOutput.split("\n").filter(p => p.endsWith("/package.json") || p === "package.json");
-          for (const pjPath of pjPaths) {
+          await Promise.all(pjPaths.map(async (pjPath) => {
             try {
               const raw = isBare
                 ? await getFileContent(repo.localPath, commit, pjPath)
@@ -410,23 +411,23 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
                 packageRoots.set(name, join(repo.localPath, dirname(pjPath)));
               }
             } catch { /* skip unreadable */ }
-          }
+          }));
         } catch { /* skip repos that fail git ls-tree */ }
-      }
+      }));
       if (packageRoots.size > 0) {
         await kvStore.set("_packageRoots", JSON.stringify([...packageRoots.entries()]));
         log(`  Built packageRoots from git scan: ${packageRoots.size} packages`);
       }
     }
   } else {
-    for (const repo of repos) {
+    await Promise.all(repos.map(async (repo) => {
       const classified = classifiedByRepo.get(repo.name);
-      if (!classified) continue;
+      if (!classified) return;
       const packageJsonFiles = classified.filter(
         (f) => f.kind === "json" && f.path.endsWith("package.json"),
       );
       const isBare = await checkBareRepo(repo.localPath);
-      for (const pjFile of packageJsonFiles) {
+      await Promise.all(packageJsonFiles.map(async (pjFile) => {
         try {
           const raw = isBare
             ? await getFileContent(repo.localPath, await resolveCommitForBare(repo.localPath, changeSets, repo.name), pjFile.path)
@@ -443,8 +444,8 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         } catch {
           // Skip unreadable package.json files
         }
-      }
-    }
+      }));
+    }));
     if (packageRoots.size > 0) {
       await kvStore.set("_packageRoots", JSON.stringify([...packageRoots.entries()]));
       log(`  Built packageRoots map: ${packageRoots.size} packages across all repos`);
@@ -851,7 +852,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
 
         const packageJsons = new Map<string, PackageJsonInfo>();
         const isBare = await checkBareRepo(repo.localPath);
-        for (const pjFile of packageJsonFiles) {
+        await Promise.all(packageJsonFiles.map(async (pjFile) => {
           try {
             const raw = isBare
               ? await getFileContent(repo.localPath, await resolveCommitForBare(repo.localPath, changeSets, repo.name), pjFile.path)
@@ -868,7 +869,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
           } catch {
             log(`    warning: could not read ${pjFile.path}`);
           }
-        }
+        }));
 
         const filePaths = parsedFiles && parsedFiles.length > 0
           ? parsedFiles.map((pf) => pf.path)
@@ -1499,7 +1500,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
   const allSarifResults: import("@mma/core").SarifResult[] = [];
   const sarifRepoNames: string[] = [];
   const repoSarifCounts = new Map<string, Record<string, number>>();
-  for (const repo of repos) {
+  await Promise.all(repos.map(async (repo) => {
     const repoResults: import("@mma/core").SarifResult[] = [];
     const counts: Record<string, number> = {};
     for (const key of ["config", "fault", "deadExports", "arch", "instability", "blastRadius", "hotspot", "temporal-coupling", "vuln"] as const) {
@@ -1520,7 +1521,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       sarifRepoNames.push(repo.name);
     }
     allSarifResults.push(...repoResults);
-  }
+  }));
   // Add cross-repo correlation SARIF (not per-repo)
   for (const crossRepoKey of ["sarif:correlation", "sarif:cross-repo-models"] as const) {
     const json = await kvStore.get(crossRepoKey);
@@ -1656,7 +1657,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
   tracer.startPhase("ATDI");
   {
     const repoAtdiScores: import("@mma/diagnostics").AtdiScore[] = [];
-    for (const repo of repos) {
+    await Promise.all(repos.map(async (repo) => {
       // Read metrics summary (pain/uselessness zone counts + avgDistance)
       const summaryJson = await kvStore.get(`metricsSummary:${repo.name}`);
       let moduleCount = 0;
@@ -1703,7 +1704,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       repoAtdiScores.push(atdi);
       await kvStore.set(`atdi:${repo.name}`, JSON.stringify(atdi));
       log(`  [ATDI] ${repo.name}: ${atdi.score}/100 (modules=${atdi.moduleCount}, errors=${errorCount}, warnings=${warningCount}, notes=${noteCount})`);
-    }
+    }));
 
     const systemAtdi = computeSystemAtdi(repoAtdiScores);
     await kvStore.set("atdi:system", JSON.stringify(systemAtdi));
