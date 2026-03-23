@@ -367,9 +367,9 @@ function runInWorker(
       done(null);
     });
 
-    worker.on("exit", (code) => {
+    worker.on("exit", () => {
       clearTimeout(timer);
-      if (code !== 0) done(null);
+      done(null); // settled guard prevents double resolution
     });
   });
 }
