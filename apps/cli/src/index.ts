@@ -78,6 +78,9 @@ async function main(): Promise<void> {
       force: { type: "boolean", default: false },
       "force-full-reindex": { type: "boolean", default: false },
       enrich: { type: "boolean", default: false },
+      local: { type: "boolean", default: false },
+      "ollama-url": { type: "string" },
+      "ollama-model": { type: "string" },
       port: { type: "string", default: "3000" },
       host: { type: "string", default: "127.0.0.1" },
       "cors-origin": { type: "string", multiple: true },
@@ -305,8 +308,9 @@ async function main(): Promise<void> {
       process.exit(1);
     }
     const anthropicApiKey = values["api-key"] || process.env.ANTHROPIC_API_KEY;
-    if (!anthropicApiKey) {
-      console.error("enrich requires --api-key or ANTHROPIC_API_KEY environment variable.");
+    const localMode = values.local;
+    if (!localMode && !anthropicApiKey) {
+      console.error("enrich requires --api-key or ANTHROPIC_API_KEY (or use --local for Ollama).");
       process.exit(1);
     }
     const maxApiCalls = values["max-api-calls"] ? parseInt(values["max-api-calls"], 10) : undefined;
@@ -319,10 +323,13 @@ async function main(): Promise<void> {
       const result = await enrichCommand({
         kvStore: stores.kvStore,
         searchStore: stores.searchStore,
-        apiKey: anthropicApiKey,
+        apiKey: anthropicApiKey ?? "",
         maxApiCalls,
         repo: values.repo,
         verbose,
+        local: localMode,
+        ollamaUrl: values["ollama-url"],
+        ollamaModel: values["ollama-model"],
       });
       console.log(`Enriched ${result.reposEnriched} repo(s): ${result.tier3Count} tier-3, ${result.tier4Count} tier-4 summaries (${result.apiCallsMade} API calls)`);
     } finally {
@@ -838,8 +845,8 @@ async function main(): Promise<void> {
           console.error("--narrate-only requires --api-key or ANTHROPIC_API_KEY environment variable.");
           process.exit(1);
         }
-        if (values.enrich && !anthropicApiKey) {
-          console.error("--enrich requires --api-key or ANTHROPIC_API_KEY environment variable.");
+        if (values.enrich && !values.local && !anthropicApiKey) {
+          console.error("--enrich requires --api-key or ANTHROPIC_API_KEY (or use --local for Ollama).");
           process.exit(1);
         }
         const indexOpts = {
@@ -858,6 +865,9 @@ async function main(): Promise<void> {
           narrateForce: values["force"],
           forceFullReindex: values["force-full-reindex"],
           advisories: config.advisories,
+          local: values.local,
+          ollamaUrl: values["ollama-url"],
+          ollamaModel: values["ollama-model"],
         } as const;
 
         if (values.watch) {

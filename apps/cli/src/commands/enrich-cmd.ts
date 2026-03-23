@@ -17,18 +17,23 @@ import {
   tier3BatchSummarize,
   tier4BatchSummarize,
   SONNET_DEFAULTS,
+  tier3Summarize as ollamaTier3Summarize,
+  isOllamaAvailable,
 } from "@mma/summarization";
-import type { HaikuOptions, ServiceSummaryInput } from "@mma/summarization";
+import type { HaikuOptions, ServiceSummaryInput, OllamaOptions } from "@mma/summarization";
 import type { Summary, ServiceCatalogEntry } from "@mma/core";
 
 export interface EnrichOptions {
   readonly kvStore: KVStore;
   readonly searchStore: SearchStore;
-  readonly apiKey: string;
+  readonly apiKey?: string;
   readonly maxApiCalls?: number;
   /** When set, only enrich this single repo. */
   readonly repo?: string;
   readonly verbose: boolean;
+  readonly local?: boolean;
+  readonly ollamaUrl?: string;
+  readonly ollamaModel?: string;
 }
 
 export interface EnrichResult {
@@ -60,6 +65,16 @@ function extractRepoNames(keys: string[]): string[] {
 
 export async function enrichCommand(options: EnrichOptions): Promise<EnrichResult> {
   const log = options.verbose ? console.log.bind(console) : () => {};
+
+  // Ollama availability check (when --local is set)
+  if (options.local) {
+    const ollamaUrl = options.ollamaUrl ?? "http://localhost:11434";
+    const available = await isOllamaAvailable(ollamaUrl);
+    if (!available) {
+      throw new Error(`Ollama is not reachable at ${ollamaUrl}. Start Ollama or specify --ollama-url.`);
+    }
+    log(`[enrich] Ollama available at ${ollamaUrl}`);
+  }
 
   // Discover all repos that have been indexed (have t1 cache entries)
   const allT1Keys = await options.kvStore.keys(T1_PREFIX);
@@ -114,7 +129,7 @@ export async function enrichCommand(options: EnrichOptions): Promise<EnrichResul
 
     log(`[enrich]   Loaded ${summaryMap.size} tier-1 summaries`);
 
-    // Tier 3: Haiku for low-confidence entities not already t3-cached
+    // Tier 3: LLM for low-confidence entities not already t3-cached
     let tier3Count = 0;
     if (budgetRemaining === undefined || budgetRemaining > 0) {
       const tier3Candidates = (
@@ -122,7 +137,6 @@ export async function enrichCommand(options: EnrichOptions): Promise<EnrichResul
           [...summaryMap.entries()]
             .filter(([, s]) => shouldEscalateToTier3(s, undefined))
             .map(async ([entityId, s]) => {
-              // Skip if already t3-cached
               const alreadyCached = await options.kvStore.has(T3_PREFIX + entityId);
               if (alreadyCached) return null;
               return { entityId, description: s.description, context: entityId };
@@ -136,26 +150,47 @@ export async function enrichCommand(options: EnrichOptions): Promise<EnrichResul
           : tier3Candidates;
 
       if (capped.length > 0) {
-        log(`[enrich]   Tier 3 (Haiku): upgrading ${capped.length} low-confidence summaries`);
-
-        const haikuOptions: HaikuOptions = {
-          kvStore: options.kvStore,
-        };
-
-        const tier3Results = await tier3BatchSummarize(capped, options.apiKey, haikuOptions);
-
-        for (const s of tier3Results) {
-          if (s.confidence > 0) {
-            summaryMap.set(s.entityId, s);
-            tier3Count++;
+        if (options.local) {
+          log(`[enrich]   Tier 3 (Ollama): upgrading ${capped.length} low-confidence summaries`);
+          const ollamaOpts: Partial<OllamaOptions> = {
+            ...(options.ollamaUrl ? { baseUrl: options.ollamaUrl } : {}),
+            ...(options.ollamaModel ? { model: options.ollamaModel } : {}),
+          };
+          const ollamaEntities = capped.map((c) => ({
+            entityId: c.entityId,
+            sourceCode: c.description,
+            context: c.context,
+          }));
+          const tier3Results = await ollamaTier3Summarize(ollamaEntities, ollamaOpts);
+          for (const s of tier3Results) {
+            if (s.confidence > 0) {
+              summaryMap.set(s.entityId, s);
+              tier3Count++;
+            }
           }
-        }
+          // No API budget tracking for local mode
+        } else {
+          log(`[enrich]   Tier 3 (Haiku): upgrading ${capped.length} low-confidence summaries`);
 
-        // Each tier3 call is 1 API call per entity (no batching overhead)
-        const tier3ApiCalls = tier3Results.filter((s) => s.confidence > 0).length;
-        totalApiCallsMade += tier3ApiCalls;
-        if (budgetRemaining !== undefined) {
-          budgetRemaining = Math.max(0, budgetRemaining - tier3ApiCalls);
+          const haikuOptions: HaikuOptions = {
+            kvStore: options.kvStore,
+          };
+
+          const tier3Results = await tier3BatchSummarize(capped, options.apiKey!, haikuOptions);
+
+          for (const s of tier3Results) {
+            if (s.confidence > 0) {
+              summaryMap.set(s.entityId, s);
+              tier3Count++;
+            }
+          }
+
+          // Each tier3 call is 1 API call per entity (no batching overhead)
+          const tier3ApiCalls = tier3Results.filter((s) => s.confidence > 0).length;
+          totalApiCallsMade += tier3ApiCalls;
+          if (budgetRemaining !== undefined) {
+            budgetRemaining = Math.max(0, budgetRemaining - tier3ApiCalls);
+          }
         }
       }
     }
@@ -165,7 +200,7 @@ export async function enrichCommand(options: EnrichOptions): Promise<EnrichResul
 
     // Tier 4: Sonnet for service-level summaries
     let tier4Count = 0;
-    if (budgetRemaining === undefined || budgetRemaining > 0) {
+    if (!options.local && (budgetRemaining === undefined || budgetRemaining > 0)) {
       const catalogRaw = await options.kvStore.get(`catalog:${repoName}`);
       if (catalogRaw) {
         const catalog = JSON.parse(catalogRaw) as ServiceCatalogEntry[];
@@ -187,7 +222,7 @@ export async function enrichCommand(options: EnrichOptions): Promise<EnrichResul
 
           const tier4Result = await tier4BatchSummarize(inputs, {
             ...SONNET_DEFAULTS,
-            apiKey: options.apiKey,
+            apiKey: options.apiKey!,
             kvStore: options.kvStore,
             maxApiCalls: budgetRemaining,
           });
