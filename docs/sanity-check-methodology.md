@@ -3,10 +3,11 @@
 How we validate that MMA's analysis output matches reality. Each dimension has a
 test corpus, a validation procedure, and accuracy metrics.
 
-**Test Corpus**: Novu split-repo (4 repos: novu-api, novu-dashboard, novu-libs,
-novu-worker). Indexed with `--enrich` flag for full tier-1 through
-tier-4 summarization + narrations. DB at `data-novu/mma-novu.db`, mirrors at
-`data-novu/mirrors/`.
+**Test Corpus**: Supabase ecosystem (10 repos: supabase monorepo, supabase-js,
+ssr, auth-helpers, postgres-meta, storage, shared-types, embeddings-generator,
+multiplayer.dev, pg-toolbelt). Indexed with `--enrich` flag for full tier-1
+through tier-4 summarization + narrations. DB at
+`data-supabase/mma-supabase.db`, mirrors at `data-supabase/mirrors/`.
 
 ---
 
@@ -62,17 +63,14 @@ separate services (over-segmentation). Dependencies field always `undefined`
 
 **Metrics**: Top-5 precision, external package filtering correctness.
 
-**Last result**: Mostly accurate. `@/` path aliases in novu-dashboard unresolved
-(~4x PageRank underestimation for aliased files). External package filtering
-works after PR #52 fix. `directcss:` loader syntax creates one phantom edge
-(`symbol-id.ts:80` false positive on `extractRepo`).
+**Last result**: Not yet re-run against Supabase corpus. Previous run (Novu corpus) was mostly accurate: `@/` path aliases unresolved in one repo caused ~4x PageRank underestimation for aliased files. External package filtering works correctly. `directcss:` loader syntax created one phantom edge (`symbol-id.ts:80` false positive on `extractRepo`).
 
 ---
 
 ## 4. Cross-Repo Correlation
 
 **What**: Edges connecting files across repos via npm package imports (e.g.,
-novu-api imports `@novu/shared` from novu-libs).
+supabase-js imports `@supabase/shared-types` from shared-types).
 
 **How to test**:
 1. Query: `SELECT count(*) FROM ... WHERE kind='imports' AND
@@ -84,13 +82,13 @@ novu-api imports `@novu/shared` from novu-libs).
 
 **Metrics**: Edge count vs expected, false positive rate.
 
-**Last result**: **CRITICAL BUG** found. `packageRoots` stores relative paths
-(`packages/shared`) but `findRepoForPath` needs absolute paths
+**Last result**: **CRITICAL BUG** found (original corpus). `packageRoots` stored relative paths
+(`packages/shared`) but `findRepoForPath` needed absolute paths
 (`/path/to/mirror/packages/shared`). Result: 0 cross-repo edges resolved out of
 ~2,645 expected. Fix: `join(repo.localPath, dirname(pjFile.path))` at
 `index-cmd.ts:394`.
 
-**Update (2026-03-20):** This bug has been fixed. Cross-repo edges now resolve correctly (2,864 edges in Novu corpus).
+**Update (2026-03-20):** This bug has been fixed. Cross-repo edges now resolve correctly (349 cross-repo edges in Supabase corpus).
 
 ---
 
@@ -201,11 +199,7 @@ via naming conventions and structural signatures.
 
 **Metrics**: Precision (true positives / detected), recall estimate.
 
-**Last result**: 74 detections across 7 pattern types. 73/74 correct (98.6%
-precision). 1 marginal case (WebhookFilterBackoffStrategy — named correctly but
-no polymorphic dispatch visible). Major recall gap: NestJS decorator patterns
-(`@Module`, `@Controller`, `@Injectable`) entirely undetected — 400+ missed
-instances in novu-api alone.
+**Last result**: Not yet re-run against Supabase corpus. Previous run (Novu corpus): 74 detections across 7 pattern types, 73/74 correct (98.6% precision). 1 marginal case. Major recall gap: NestJS decorator patterns (`@Module`, `@Controller`, `@Injectable`) entirely undetected — 400+ missed instances in that corpus.
 
 ---
 
@@ -219,20 +213,12 @@ LaunchDarkly `getFlag` calls.
 2. For each flag, verify in source:
    - Does the flag name match a real enum member or env var?
    - Is it used in a runtime conditional (if/ternary)?
-3. Check for cross-repo double-counting (same flag in novu-api and novu-libs)
+3. Check for cross-repo double-counting (same flag defined in multiple repos)
 4. Check for false positives (UI component enums, non-flag constants)
 
 **Metrics**: Precision, cross-repo dedup accuracy.
 
-**Last result**: 75 flags detected (67 novu-libs, 7 novu-api, 1 novu-worker).
-63 from `FeatureFlagsKeysEnum` are real LaunchDarkly runtime flags (true
-positives). 3 `process.env` flags confirmed real (`ENABLE_OTEL`,
-`IS_IN_MEMORY_CLUSTER_MODE_ENABLED`, `DISABLE_TTL`). 1 false positive:
-`DISABLE_SANITIZATION_SWITCH` is a `UiComponentEnum` member, not a feature flag.
-5 of 7 novu-api flags overlap with novu-libs (cross-repo double-counting from
-same FeatureFlagsKeysEnum). `IS_LEGACY_SELECTOR_BUTTON_VISIBLE` correctly
-excluded (doesn't match `IS_*_ENABLED` pattern). Overall: ~98.7% precision
-(74/75), but cross-repo dedup needed.
+**Last result**: Not yet re-run against Supabase corpus. Previous run (Novu corpus): 75 flags detected, ~98.7% precision (74/75). Main issues: UI component enum members misclassified as feature flags, and cross-repo double-counting for flags shared across repos via a common enum.
 
 ---
 
@@ -250,17 +236,7 @@ excluded (doesn't match `IS_*_ENABLED` pattern). Overall: ~98.7% precision
 
 **Metrics**: True positive rate, barrel-mediated fraction.
 
-**Last result**: 127 cycles detected (14 novu-api, 17 novu-dashboard, 96
-novu-libs). 105/127 (83%) are real circular dependencies. 22/127 (17%) are
-barrel-mediated artifacts (cycle only exists because files import via parent
-`index.ts` barrels that re-export them). Verified examples:
-- Real: `member.repository.ts` ↔ `member-repository.interface.ts` (mutual type
-  imports confirmed in source)
-- Real: `variable.ts` ↔ `variable-provider.ts` (direct mutual imports)
-- Artifact: `responses.schema.ts` → barrel → `responses.decorator.ts` → barrel
-  → back (would not cycle with direct imports)
-Recommendation: suppress cycles where a non-index node imports from a barrel
-that re-exports it.
+**Last result**: Not yet re-run against Supabase corpus. Previous run (Novu corpus): 127 cycles detected, 105/127 (83%) real circular dependencies, 22/127 (17%) barrel-mediated artifacts. The `suppressBarrelCycles` option (added in PR #76) addresses the barrel artifact class. Recommend enabling it to reduce false positives.
 
 ---
 
@@ -295,17 +271,17 @@ targets it. Compare against manual spot-checks of 10 exports.
 
 ```bash
 # 1. Index with enrichment
-rm -f data-novu/mma-novu.db
+rm -f data-supabase/mma-supabase.db
 ANTHROPIC_API_KEY=sk-ant-... node apps/cli/dist/index.js index \
-  -c data-novu/mma-novu.config.json --enrich -v
+  -c data-supabase/mma-supabase.config.json --enrich -v
 
 # 2. Start dashboard for interactive verification
-node apps/cli/dist/index.js dashboard --db data-novu/mma-novu.db
+node apps/cli/dist/index.js dashboard --db data-supabase/mma-supabase.db
 
 # 3. Run automated checks (examples)
 node -e "
 const Database = require('better-sqlite3');
-const db = new Database('data-novu/mma-novu.db');
+const db = new Database('data-supabase/mma-supabase.db');
 
 // Count by category
 for (const prefix of ['summary:tier3:', 'summary:tier4:', 'sarif:patterns:',

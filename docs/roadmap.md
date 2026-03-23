@@ -10,7 +10,27 @@ No existing tool combines all of what mma does: tree-sitter + ts-morph dual pars
 
 ### MCP Server ✓
 
-Implemented in `packages/mcp`. Exposes mma's query layer as MCP tools over stdio transport for AI agent integration (Claude Code, Codex, Cursor, etc.). Run via `npx mma serve`.
+Implemented in `packages/mcp`. Exposes mma's query layer as MCP tools over stdio or HTTP transport for AI agent integration (Claude Code, Codex, Cursor, etc.). Run via `mma serve`. Use `--transport http` to switch to HTTP mode (default port 3001).
+
+### MCP Tools Modularization ✓
+
+Split the monolithic `tools.ts` into focused modules (PR #73). Each tool category lives in its own file under `packages/mcp/src/tools/`, reducing merge conflicts and making it easier to add new tools.
+
+### Worker Thread Blast Radius ✓
+
+Implemented in PR #74. `computeReachCounts` (SCC + bitset) runs in a worker thread with a 30-second timeout and graceful fallback. Prevents large-repo blast radius computation from blocking the main thread.
+
+### Lazy SARIF Pagination ✓
+
+Implemented in PR #75. `getSarifResultsPaginated` iterates repos lazily, stopping as soon as the requested page is filled. Performance is O(max_per_repo + limit) instead of O(total_findings), enabling fast pagination over large result sets.
+
+### Barrel Cycle Suppression ✓
+
+Implemented in PR #76. A new `suppressBarrelCycles` option filters circular dependency findings where the cycle is mediated by barrel (`index.ts`) re-exports rather than a genuine mutual dependency. Reduces false positives by ~17% in measured corpora.
+
+### Interactive Indexing ✓
+
+Implemented as `mma explore`. Guided repo discovery with incremental indexing — add and index repos one at a time without a full config file. Useful for exploratory analysis.
 
 ### Instability Metrics ✓
 

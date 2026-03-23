@@ -151,11 +151,11 @@ These rules analyze control flow graphs to find gaps in error handling. The faul
 
 **What it means:** An async operation (Promise, async/await) has no `.catch()` handler, no try/catch wrapper, and no error boundary component (in React contexts).
 
-**Trigger:** Defined in `FAULT_RULES`. Detection is part of gap analysis expansion.
+**Trigger:** Defined in `FAULT_RULES` with `enabled: false` — detection is not yet implemented. This rule is declared but does not currently fire; no findings are emitted for it.
 
-**Action:** Add error handling around the async operation. Unhandled promise rejections crash Node.js processes and create silent failures in browsers.
+**Action:** When implemented, add error handling around the async operation. Unhandled promise rejections crash Node.js processes and create silent failures in browsers.
 
-**When to ignore:** If a global unhandled rejection handler exists and is intentionally the catch-all strategy, individual handlers may be redundant. This is a valid architecture choice but should be documented.
+**When to ignore:** Not applicable — the rule is currently disabled.
 
 ### `fault/cascading-failure-risk`
 
@@ -547,7 +547,7 @@ Stored as structured `FaultTree` objects. Each tree has:
 - **Basic events:** Leaf conditions (root causes).
 - **Code flows:** SARIF `codeFlow` objects showing the trace path with nesting levels.
 
-Access: `kvStore.get("sarif:faultTree:<repo>")`
+Access: `kvStore.get("faultTrees:<repo>")`
 
 ### Service Catalog
 
