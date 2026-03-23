@@ -20,10 +20,11 @@
 - [Contributing](#contributing)
 - [License](#license)
 
-Point `mma` at your TypeScript repos. Get back a health report with structural problems, fault risks, and dead code -- in seconds, with no LLM required.
+Point `mma` at your TypeScript repos. Get back a health report with structural problems, fault risks, and dead code -- no LLM required.
 
-```
-$ mma index -c repos.json && mma practices
+```text
+$ node apps/cli/dist/index.js index -c repos.json
+$ node apps/cli/dist/index.js practices
 
 Practices Report — Grade: F (0/100) — 1 repo(s)
 
@@ -43,7 +44,7 @@ structural/dead-export              structural  note     186    75
 structural/pain-zone-module         structural  note     222    75
 ```
 
-That output is real -- [TypeORM](https://github.com/typeorm/typeorm) (3,371 modules, 61k call graph edges), indexed in 26 seconds on a laptop.
+That output is real -- [TypeORM](https://github.com/typeorm/typeorm) (3,371 modules, 61k call graph edges).
 
 ## What It Finds
 
@@ -51,13 +52,13 @@ That output is real -- [TypeORM](https://github.com/typeorm/typeorm) (3,371 modu
 |----------|------|---------|
 | **Structural** | Unstable dependencies, dead exports, pain zone modules | "Module A (stable) depends on module B (unstable) -- inverted dependency direction" |
 | **Fault** | Unhandled error paths, silent catch blocks, missing re-throws | "Catch block in `handler` has no logging or re-throw" |
-| **Blast radius** | High-PageRank modules where changes ripple widely | "This module's public API affects 40% of the import graph" |
+| **Blast radius** | High-PageRank modules where changes ripple widely | "Changes to this file affect many dependents" |
 
 All findings are SARIF v2.1.0 with logical locations only -- no source code leaves your machine.
 
 ## Key Features
 
-- Cross-repo analysis across hundreds of TypeScript repositories
+- Cross-repo analysis across multiple TypeScript repositories
 - SARIF v2.1.0 output with built-in anonymization for safe sharing
 - MCP server for IDE/agent integration (`mma serve`) — stdio or HTTP transport
 - Web dashboard with dependency graphs, blast radius, and service catalog views
@@ -65,16 +66,13 @@ All findings are SARIF v2.1.0 with logical locations only -- no source code leav
 - Design pattern detection (adapter, facade, observer, factory, singleton, repository, middleware, decorator)
 - Baseline sharing for incremental reindexing across teams — see [docs/baseline-sharing.md](docs/baseline-sharing.md)
 - Pluggable storage backends: SQLite (default) and Kuzu graph DB (`--backend kuzu`)
-- Barrel cycle suppression (`suppressBarrelCycles`) to filter index-mediated false positive cycles
-- Worker-thread blast radius computation for large graphs (with timeout fallback)
-- Lazy SARIF pagination for O(limit) result streaming across large repos
 - No LLM required for core analysis — everything runs locally
 
 See [where MMA fits in the ecosystem](docs/ecosystem-venn.svg) for a capability map across related tools.
 
 ### Dashboard
 
-The web dashboard provides interactive dependency graphs, blast radius visualization, service health overview, cross-repo correlation views, feature flag inventory, and fault tree exploration. Launch it with `mma dashboard` (default port 3000).
+The web dashboard provides interactive dependency graphs, blast radius visualization, service health overview, cross-repo correlation views, feature flag inventory, and cascading fault analysis. Launch it with `mma dashboard` (default port 3000).
 
 ## Quick Start
 
@@ -106,31 +104,33 @@ node apps/cli/dist/index.js practices
 
 ## Commands
 
-```
-mma index      Index repositories (clone, parse, analyze)
-mma practices  Health report with prioritized findings and grades
-mma query      Natural language queries ("what calls auth?", "dependencies of scheduler")
-mma report     Anonymized field trial report (JSON, markdown, SARIF)
-mma export     Export SQLite DB (anonymized by default, --raw for baseline sharing)
-mma import     Import a raw baseline export into local DB
-mma merge      Combine multiple anonymized export DBs
-mma validate   Statistical validation of SARIF findings quality
-mma affected   Blast radius for a rev range
-mma serve      MCP server for IDE integration (stdio by default; --transport http for HTTP mode, port 3001)
+After `npm link` you can use the short form `mma <command>`. Otherwise substitute `node apps/cli/dist/index.js` for `mma` below.
+
+```text
+mma index            Index repositories (clone, parse, analyze)
+mma practices        Health report with prioritized findings and grades
+mma query            Natural language queries ("what calls auth?", "dependencies of scheduler")
+mma report           Anonymized field trial report (JSON, markdown, SARIF)
+mma export           Export SQLite DB (anonymized by default, --raw for baseline sharing)
+mma import           Import a raw baseline export into local DB
+mma merge            Combine multiple anonymized export DBs
+mma validate         Statistical validation of SARIF findings quality
+mma affected         Blast radius for a rev range
+mma serve            MCP server for IDE integration (stdio default, --transport http on port 3001)
 mma baseline create  Snapshot findings as known-violations baseline
 mma baseline check   Check for new violations against baseline (exit 1 if found)
-mma delta      Show diff of findings between two runs
-mma catalog    Inspect the inferred service catalog
-mma dashboard  Launch the web dashboard UI (default port 3000)
-mma compress   Compress/prune the SQLite DB to reduce disk usage
-mma audit      Parse npm audit JSON and check vulnerability reachability
-mma enrich     Enrich summaries with LLM (Tier 3/4) outside of index
-mma explore    Interactive incremental indexing (guided repo discovery)
+mma delta            Show diff of findings between two runs
+mma catalog          Inspect the inferred service catalog
+mma dashboard        Launch the web dashboard UI (port 3000)
+mma compress         Compress/prune the SQLite DB to reduce disk usage
+mma audit            Parse npm audit JSON and check vulnerability reachability
+mma enrich           Standalone LLM enrichment (Tier 3/4 summaries)
+mma explore          Interactive incremental indexing with guided repo discovery
 ```
 
 Key flags that apply across commands:
 
-```
+```text
 --backend kuzu   Use Kuzu graph DB instead of SQLite (applies to index, serve, explore, and others)
 --transport http  Use HTTP transport for MCP server instead of stdio (applies to serve, default port 3001)
 --enrich          Enable LLM enrichment (Tier 3/4) during indexing (requires --api-key or ANTHROPIC_API_KEY)
@@ -187,7 +187,7 @@ No source code, no file paths, no service names -- just the structural finding.
 
 Index-heavy, query-cheap. All analysis runs at index time; queries are lookups and graph traversals.
 
-```
+```text
 Repos --> Ingestion --> Parsing --> Structural Analysis --> Heuristic Analysis
                                                                |
                                           Summarization (tiers 1-4) --> Storage
@@ -205,8 +205,8 @@ Repos --> Ingestion --> Parsing --> Structural Analysis --> Heuristic Analysis
 |------|--------|------|---------|
 | 1 | Templates from AST | Free | "Accepts (patientId: string), returns Promise" |
 | 2 | Heuristics from naming | Free | "Fetches appointments for a patient" |
-| 3 | Claude Haiku API | API tokens | "Queries appointment table, maps results, handles pagination" |
-| 4 | Claude Sonnet API | API tokens | "The Scheduler service manages appointment booking across provider calendars" |
+| 3 | Claude Haiku 4.5 | ~$0.001/file | "Queries appointment table, maps results, handles pagination" |
+| 4 | Claude Sonnet 4 | ~$0.01/service | "The Scheduler service manages appointment booking across provider calendars" |
 
 ## Architecture
 
