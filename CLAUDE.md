@@ -15,7 +15,7 @@ Monorepo with npm workspaces — 15 `packages/*` workspaces + 2 apps (`apps/cli`
 | `packages/parsing` | Symbol extraction via tree-sitter (WASM) and ts-morph |
 | `packages/structural` | Dependency graphs, call graphs, control flow graphs |
 | `packages/heuristics` | Service inference, pattern detection, feature flags |
-| `packages/summarization` | 4-tier summary generation |
+| `packages/summarization` | 3-tier summary generation |
 | `packages/storage` | Graph, search (FTS5/BM25), KV stores (SQLite + in-memory) |
 | `packages/storage-kuzu` | Kuzu-backed graph, search, and KV stores |
 | `packages/correlation` | Cross-repo correlation and service grouping |

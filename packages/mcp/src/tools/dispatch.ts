@@ -143,7 +143,7 @@ export async function dispatchRoute(
       if (narrations.length === 0) {
         return {
           narrations: [],
-          message: "No narrations found. Run 'mma index' with --api-key to generate narrations.",
+          message: "No narrations found. Narrations are no longer generated automatically.",
         };
       }
       return { narrations };

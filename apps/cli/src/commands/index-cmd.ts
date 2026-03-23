@@ -61,14 +61,10 @@ import {
   tier1Summarize,
   tier2Summarize,
   shouldEscalateToTier3,
-  tier3BatchSummarize,
-  tier4BatchSummarize,
-  SONNET_DEFAULTS,
-  narrateAll,
   tier3Summarize as ollamaTier3Summarize,
   isOllamaAvailable,
 } from "@mma/summarization";
-import type { ServiceSummaryInput, RepoNarrationInput, SystemNarrationInput, OllamaOptions } from "@mma/summarization";
+import type { OllamaOptions } from "@mma/summarization";
 import { computeAffectedScope } from "./affected-scope.js";
 import type { AffectedScope } from "./affected-scope.js";
 import { PipelineTracer } from "../tracer.js";
@@ -122,16 +118,12 @@ export interface IndexOptions {
   readonly searchStore: SearchStore;
   readonly verbose: boolean;
   readonly enableTsMorph?: boolean;
-  readonly anthropicApiKey?: string;
   readonly maxApiCalls?: number;
   readonly rules?: readonly ArchitecturalRule[];
   readonly affected?: boolean;
-  readonly narrateOnly?: boolean;
-  readonly narrateForce?: boolean;
   readonly forceFullReindex?: boolean;
   readonly advisories?: readonly Advisory[];
   readonly enrich?: boolean;
-  readonly local?: boolean;
   readonly ollamaUrl?: string;
   readonly ollamaModel?: string;
 }
@@ -153,155 +145,14 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
 
   log(`Indexing ${repos.length} repositories...`);
 
-  // Ollama availability check (when --local is set)
-  if (options.local) {
+  // Ollama availability check (when --enrich is set)
+  if (options.enrich) {
     const ollamaUrl = options.ollamaUrl ?? "http://localhost:11434";
     const available = await isOllamaAvailable(ollamaUrl);
     if (!available) {
       throw new Error(`Ollama is not reachable at ${ollamaUrl}. Start Ollama or specify --ollama-url.`);
     }
     log(`Ollama available at ${ollamaUrl}`);
-  }
-
-  // Narrate-only mode: skip Phases 1-7, regenerate narrations from stored data
-  if (options.narrateOnly) {
-    if (!options.anthropicApiKey) {
-      throw new Error("--narrate-only requires an Anthropic API key");
-    }
-    log("Narrate-only mode: skipping analysis, regenerating narrations from stored data...");
-
-    // Reconstruct repoSarifCounts from stored per-category SARIF keys
-    const repoSarifCounts = new Map<string, Record<string, number>>();
-    let totalFindings = 0;
-    for (const repo of repos) {
-      const counts: Record<string, number> = {};
-      for (const key of ["config", "fault", "deadExports", "arch", "instability", "blastRadius", "hotspot", "temporal-coupling", "vuln"] as const) {
-        const json = await kvStore.get(`sarif:${key}:${repo.name}`);
-        if (json) {
-          try {
-            const results = JSON.parse(json) as unknown[];
-            counts[key] = results.length;
-            totalFindings += results.length;
-          } catch { /* skip malformed */ }
-        }
-      }
-      repoSarifCounts.set(repo.name, counts);
-    }
-    // Add cross-repo SARIF counts
-    for (const crossRepoKey of ["sarif:correlation", "sarif:cross-repo-models"] as const) {
-      const json = await kvStore.get(crossRepoKey);
-      if (json) {
-        try {
-          totalFindings += (JSON.parse(json) as unknown[]).length;
-        } catch { /* skip */ }
-      }
-    }
-
-    // Build narration inputs (same logic as Phase 8 in the full pipeline)
-    tracer.startPhase("Narration");
-    const narrationStart = performance.now();
-    const repoInputs: RepoNarrationInput[] = [];
-
-    for (const repo of repos) {
-      const patternsJson = await kvStore.get(`patterns:${repo.name}`);
-      const patterns: string[] = patternsJson
-        ? (JSON.parse(patternsJson) as Array<{ kind: string }>).map((p) => p.kind)
-        : [];
-
-      const summaryJson = await kvStore.get(`metricsSummary:${repo.name}`);
-      const metricsSummary = summaryJson ? JSON.parse(summaryJson) as RepoNarrationInput["metricsSummary"] : null;
-
-      const sarifCounts = repoSarifCounts.get(repo.name) ?? {};
-
-      // Recover service names + summaries from tier-4 cache
-      const services: string[] = [];
-      const serviceSummaries: string[] = [];
-      const t4Keys = await kvStore.keys("summary:t4:");
-      for (const k of t4Keys) {
-        const val = await kvStore.get(k);
-        if (val) {
-          try {
-            const s = JSON.parse(val) as { entityId: string; description: string };
-            const repoServicePrefix = `service:${repo.name}/`;
-            if (s.entityId.startsWith(repoServicePrefix)) {
-              services.push(s.entityId.slice(repoServicePrefix.length));
-              if (s.description) serviceSummaries.push(s.description);
-            }
-          } catch { /* skip malformed */ }
-        }
-      }
-
-      // Cross-repo edge count for this repo
-      let crossRepoEdges = 0;
-      const corrGraphJson = await kvStore.get("correlation:graph");
-      if (corrGraphJson) {
-        try {
-          const cg = JSON.parse(corrGraphJson) as { edges: Array<{ source: string; target: string }> };
-          crossRepoEdges = cg.edges.filter(
-            (e) => e.source.startsWith(repo.name) || e.target.startsWith(repo.name),
-          ).length;
-        } catch { /* skip */ }
-      }
-
-      repoInputs.push({ repo: repo.name, patterns, metricsSummary, sarifCounts, services, serviceSummaries, crossRepoEdges });
-    }
-
-    // System overview input
-    let systemInput: SystemNarrationInput | undefined;
-    if (repos.length > 1) {
-      const corrServicesJson = await kvStore.get("correlation:services");
-      const linchpins: string[] = [];
-      let crossRepoEdgeCount = 0;
-      if (corrServicesJson) {
-        try {
-          const cs = JSON.parse(corrServicesJson) as { linchpins: string[] };
-          linchpins.push(...cs.linchpins);
-        } catch { /* skip */ }
-      }
-      const corrGraphJson = await kvStore.get("correlation:graph");
-      if (corrGraphJson) {
-        try {
-          const cg = JSON.parse(corrGraphJson) as { edges: unknown[] };
-          crossRepoEdgeCount = cg.edges.length;
-        } catch { /* skip */ }
-      }
-      systemInput = {
-        repoNames: repos.map((r) => r.name),
-        totalFindings,
-        crossRepoEdgeCount,
-        linchpins,
-      };
-    }
-
-    const narrationResults = await narrateAll(repoInputs, systemInput, {
-      apiKey: options.anthropicApiKey,
-      kvStore,
-      force: options.narrateForce,
-    });
-
-    const cached = narrationResults.filter((r) => r.cached).length;
-    const generated = narrationResults.length - cached;
-    const narrationMs = Math.round(performance.now() - narrationStart);
-    log(`  Narration: ${narrationResults.length} total (${generated} generated, ${cached} cached) in ${narrationMs}ms`);
-    tracer.record("narrationsGenerated", generated);
-    tracer.record("narrationsCached", cached);
-    tracer.endPhase();
-
-    // Store pipeline trace
-    const trace = tracer.finalize();
-    await kvStore.set("pipeline:trace:latest", JSON.stringify(trace));
-    if (verbose) {
-      log(PipelineTracer.formatSummary(trace));
-    }
-
-    log("Narration complete.");
-    return {
-      hadChanges: false,
-      repoCount: repos.length,
-      totalFiles: 0,
-      totalSarifResults: totalFindings,
-      failedRepos: 0,
-    };
   }
 
   // Load previous commit hashes (parallel KV reads)
@@ -1216,8 +1067,8 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         let tier1ReadErrors = 0;
         let tier1CacheHits = 0;
         const BATCH_SIZE = 20;
-        // Source snippets for tier-3 context (only needed when --enrich is set and API budget allows)
-        const needSnippets = !!(options.enrich && options.anthropicApiKey && options.maxApiCalls !== 0);
+        // Source snippets for tier-3 context (only needed when --enrich is set and budget allows)
+        const needSnippets = !!(options.enrich && options.maxApiCalls !== 0);
         const sourceContextMap = new Map<string, string>();
         const MAX_SNIPPET_LINES = 30;
         const isBareForTier1 = await checkBareRepo(repo.localPath);
@@ -1326,105 +1177,37 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
           }
         }
 
-        // Tier 3: LLM for low-confidence method summaries
+        // Tier 3: Ollama for low-confidence method summaries
         let tier3Count = 0;
-        if (options.enrich && (options.local || (options.anthropicApiKey && (!sharedApiBudget || sharedApiBudget.remaining > 0)))) {
+        if (options.enrich && (!sharedApiBudget || sharedApiBudget.remaining > 0)) {
           let tier3Candidates = [...summaryMap.entries()]
             .filter(([, s]) => shouldEscalateToTier3(s, undefined));
-          // Atomically reserve budget before async work (only for API mode)
-          if (!options.local && sharedApiBudget) {
+          // Atomically reserve budget before async work
+          if (sharedApiBudget) {
             const granted = sharedApiBudget.reserve(tier3Candidates.length);
             tier3Candidates = tier3Candidates.slice(0, granted);
           }
           if (tier3Candidates.length > 0) {
-            if (options.local) {
-              log(`    Tier 3 (Ollama): upgrading ${tier3Candidates.length} low-confidence summaries`);
-              const ollamaEntities = tier3Candidates.map(([entityId]) => ({
-                entityId,
-                sourceCode: sourceContextMap.get(entityId) ?? entityId,
-                context: entityId,
-              }));
-              const ollamaOpts: Partial<OllamaOptions> = {
-                ...(options.ollamaUrl ? { baseUrl: options.ollamaUrl } : {}),
-                ...(options.ollamaModel ? { model: options.ollamaModel } : {}),
-              };
-              const tier3Results = await ollamaTier3Summarize(ollamaEntities, ollamaOpts);
-              for (const s of tier3Results) {
-                if (s.confidence > 0) {
-                  summaryMap.set(s.entityId, s);
-                  tier3Count++;
-                }
-              }
-            } else {
-              const haikuCandidates = tier3Candidates.map(([entityId, s]) => ({
-                entityId,
-                description: s.description,
-                context: sourceContextMap.get(entityId) ?? entityId,
-              }));
-              log(`    Tier 3 (Haiku): upgrading ${haikuCandidates.length} low-confidence summaries`);
-              const tier3Results = await tier3BatchSummarize(
-                haikuCandidates,
-                options.anthropicApiKey!,
-              );
-              for (const s of tier3Results) {
-                if (s.confidence > 0) {
-                  summaryMap.set(s.entityId, s);
-                  tier3Count++;
-                }
+            log(`    Tier 3 (Ollama): upgrading ${tier3Candidates.length} low-confidence summaries`);
+            const ollamaEntities = tier3Candidates.map(([entityId]) => ({
+              entityId,
+              sourceCode: sourceContextMap.get(entityId) ?? entityId,
+              context: entityId,
+            }));
+            const ollamaOpts: Partial<OllamaOptions> = {
+              ...(options.ollamaUrl ? { baseUrl: options.ollamaUrl } : {}),
+              ...(options.ollamaModel ? { model: options.ollamaModel } : {}),
+            };
+            const tier3Results = await ollamaTier3Summarize(ollamaEntities, ollamaOpts);
+            for (const s of tier3Results) {
+              if (s.confidence > 0) {
+                summaryMap.set(s.entityId, s);
+                tier3Count++;
               }
             }
           }
         }
         sourceContextMap.clear(); // free snippet memory after tier-3
-
-        // Tier 4: Sonnet for service-level summaries
-        let tier4Count = 0;
-        if (options.enrich && options.anthropicApiKey && !options.local) {
-          const services6b = servicesByRepo.get(repo.name);
-          if (services6b && services6b.length > 0) {
-            const inputs: ServiceSummaryInput[] = services6b.map((svc) => ({
-              entityId: `service:${repo.name}/${svc.rootPath}`,
-              serviceName: svc.name,
-              methodSummaries: [...summaryMap!.values()]
-                .filter((s) => s.entityId.startsWith(svc.rootPath))
-                .slice(0, 20)
-                .map((s) => s.description),
-              dependencies: [...svc.dependencies],
-              entryPoints: [...svc.entryPoints],
-            }));
-            // Atomically reserve budget before async work
-            const tier4Budget = sharedApiBudget ? sharedApiBudget.reserve(inputs.length) : undefined;
-            if (sharedApiBudget && tier4Budget === 0) {
-              log(`    Tier 4: no API budget remaining, skipping`);
-            } else {
-              log(`    Tier 4 (Sonnet): summarizing ${inputs.length} services`);
-              const tier4Result = await tier4BatchSummarize(inputs, {
-                ...SONNET_DEFAULTS,
-                apiKey: options.anthropicApiKey,
-                kvStore,
-                maxApiCalls: tier4Budget,
-              });
-              for (const s of tier4Result.summaries) {
-                if (s.confidence > 0) {
-                  summaryMap.set(s.entityId, s);
-                  tier4Count++;
-                }
-              }
-              // Refund unused budget
-              if (sharedApiBudget && tier4Budget !== undefined) {
-                const unused = tier4Budget - tier4Result.apiCallsMade;
-                if (unused > 0) sharedApiBudget.refund(unused);
-              }
-              if (tier4Result.cacheHits > 0) {
-                log(`    Tier 4: ${tier4Result.cacheHits} cache hits, ${tier4Result.apiCallsMade} API calls`);
-              }
-            }
-          }
-        }
-
-        if (options.local && !options.anthropicApiKey) {
-          log(`    Tier 4 and narration skipped (requires --api-key)`);
-        }
 
         // Index summaries in search store for query support (batched to limit memory)
         const SEARCH_BATCH = 1000;
@@ -1452,7 +1235,6 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
           `${tier1Count} tier-1`,
           `${tier2Total} tier-2 (${tier2Upgraded} upgraded)`,
           tier3Count > 0 ? `${tier3Count} tier-3` : null,
-          tier4Count > 0 ? `${tier4Count} tier-4` : null,
         ].filter(Boolean).join(", ");
         log(`  [${repo.name}] Summaries: ${tierBreakdown}, ${summaryMap.size} total`);
       } catch (error) {
@@ -1756,98 +1538,6 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
   await kvStore.set("pipeline:trace:latest", JSON.stringify(trace));
   if (verbose) {
     log(PipelineTracer.formatSummary(trace));
-  }
-
-  // Phase 8: LLM narration (optional, requires Anthropic API key)
-  if (options.anthropicApiKey) {
-    tracer.startPhase("Narration");
-    const narrationStart = performance.now();
-    const repoInputs: RepoNarrationInput[] = [];
-
-    for (const repo of repos) {
-      const patternsJson = await kvStore.get(`patterns:${repo.name}`);
-      const patterns: string[] = patternsJson
-        ? (JSON.parse(patternsJson) as Array<{ kind: string }>).map((p) => p.kind)
-        : [];
-
-      const summaryJson = await kvStore.get(`metricsSummary:${repo.name}`);
-      const metricsSummary = summaryJson ? JSON.parse(summaryJson) as RepoNarrationInput["metricsSummary"] : null;
-
-      const sarifCounts = repoSarifCounts.get(repo.name) ?? {};
-
-      // Recover service names + summaries from tier-4 cache
-      const services: string[] = [];
-      const serviceSummaries: string[] = [];
-      const t4Keys = await kvStore.keys("summary:t4:");
-      for (const k of t4Keys) {
-        const val = await kvStore.get(k);
-        if (val) {
-          try {
-            const s = JSON.parse(val) as { entityId: string; description: string };
-            const repoServicePrefix = `service:${repo.name}/`;
-            if (s.entityId.startsWith(repoServicePrefix)) {
-              services.push(s.entityId.slice(repoServicePrefix.length));
-              if (s.description) serviceSummaries.push(s.description);
-            }
-          } catch { /* skip malformed */ }
-        }
-      }
-
-      // Cross-repo edge count for this repo
-      let crossRepoEdges = 0;
-      const corrGraphJson = await kvStore.get("correlation:graph");
-      if (corrGraphJson) {
-        try {
-          const cg = JSON.parse(corrGraphJson) as { edges: Array<{ source: string; target: string }> };
-          crossRepoEdges = cg.edges.filter(
-            (e) => e.source.startsWith(repo.name) || e.target.startsWith(repo.name),
-          ).length;
-        } catch { /* skip */ }
-      }
-
-      repoInputs.push({ repo: repo.name, patterns, metricsSummary, sarifCounts, services, serviceSummaries, crossRepoEdges });
-    }
-
-    // System overview input
-    let systemInput: SystemNarrationInput | undefined;
-    if (repos.length > 1) {
-      const corrServicesJson = await kvStore.get("correlation:services");
-      const linchpins: string[] = [];
-      let crossRepoEdgeCount = 0;
-      if (corrServicesJson) {
-        try {
-          const cs = JSON.parse(corrServicesJson) as { linchpins: string[] };
-          linchpins.push(...cs.linchpins);
-        } catch { /* skip */ }
-      }
-      const corrGraphJson = await kvStore.get("correlation:graph");
-      if (corrGraphJson) {
-        try {
-          const cg = JSON.parse(corrGraphJson) as { edges: unknown[] };
-          crossRepoEdgeCount = cg.edges.length;
-        } catch { /* skip */ }
-      }
-      systemInput = {
-        repoNames: repos.map((r) => r.name),
-        totalFindings: allSarifResults.length,
-        crossRepoEdgeCount,
-        linchpins,
-      };
-    }
-
-    const narrationResults = await narrateAll(repoInputs, systemInput, {
-      apiKey: options.anthropicApiKey,
-      kvStore,
-      force: options.narrateForce,
-    });
-
-    const cached = narrationResults.filter((r) => r.cached).length;
-    const generated = narrationResults.length - cached;
-    const narrationMs = Math.round(performance.now() - narrationStart);
-    log(`  Phase 8 narration: ${narrationResults.length} total (${generated} generated, ${cached} cached) in ${narrationMs}ms`);
-    tracer.record("narrationsGenerated", generated);
-    tracer.record("narrationsCached", cached);
-    tracer.endPhase();
   }
 
   // Determine if any repo had actual file changes

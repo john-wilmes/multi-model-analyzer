@@ -623,7 +623,7 @@ export async function queryCommand(
         console.log("Narrations are not available in SARIF format.");
       } else {
         if (narrations.length === 0) {
-          console.log("No narrations found. Run 'mma index' with --api-key to generate narrations.");
+          console.log("No narrations found. Narrations are no longer generated automatically.");
         } else {
           for (const n of narrations) {
             const label = n.repo ? `${n.type}:${n.repo}` : n.type;

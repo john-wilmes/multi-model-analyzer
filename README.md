@@ -74,7 +74,7 @@ All findings are SARIF v2.1.0 with logical locations only -- no source code leav
 - SARIF v2.1.0 output with built-in anonymization for safe sharing
 - MCP server for IDE/agent integration (`mma serve`) — stdio or HTTP transport
 - Web dashboard with dependency graphs, blast radius, and service catalog views
-- 4-tier summarization (2 free local tiers + 2 optional LLM tiers)
+- 3-tier summarization (2 free local tiers + optional Ollama LLM tier)
 - Design pattern detection (adapter, facade, observer, factory, singleton, repository, middleware, decorator)
 - Baseline sharing for incremental reindexing across teams — see [docs/baseline-sharing.md](docs/baseline-sharing.md)
 - Pluggable storage backends: SQLite (default) and Kuzu graph DB (`--backend kuzu`)
@@ -139,7 +139,7 @@ mma catalog          Inspect the inferred service catalog
 mma dashboard        Launch the web dashboard UI (port 3000)
 mma compress         Compress/prune the SQLite DB to reduce disk usage
 mma audit            Parse npm audit JSON and check vulnerability reachability
-mma enrich           Standalone LLM enrichment (Tier 3/4 summaries)
+mma enrich           Standalone LLM enrichment (Tier 3 summaries via Ollama)
 mma explore          Interactive incremental indexing with guided repo discovery
 ```
 
@@ -148,7 +148,9 @@ Key flags that apply across commands:
 ```text
 --backend kuzu   Use Kuzu graph DB instead of SQLite (applies to index, serve, explore, and others)
 --transport http  Use HTTP transport for MCP server instead of stdio (applies to serve, default port 3001)
---enrich          Enable LLM enrichment (Tier 3/4) during indexing (requires --api-key or ANTHROPIC_API_KEY)
+--enrich          Enable LLM enrichment (Tier 3) via local Ollama (requires Ollama running)
+--ollama-url URL  Custom Ollama endpoint (default: http://localhost:11434)
+--ollama-model M  Custom Ollama model (default: qwen2.5-coder:1.5b)
 ```
 
 ## Examples
@@ -214,14 +216,13 @@ Repos --> Ingestion --> Parsing --> Structural Analysis --> Heuristic Analysis
 
 **Parsing** uses [tree-sitter](https://tree-sitter.github.io/tree-sitter/) (WASM) for fast syntax-only parsing, with optional [ts-morph](https://ts-morph.com/) for type-resolved symbols.
 
-**Summarization** has 4 tiers -- the first 2 are free and local; tiers 3–4 use the Anthropic API:
+**Summarization** has 3 tiers -- the first 2 are free and local; tier 3 uses local Ollama:
 
 | Tier | Source | Cost | Example |
 |------|--------|------|---------|
 | 1 | Templates from AST | Free | "Accepts (patientId: string), returns Promise" |
 | 2 | Heuristics from naming | Free | "Fetches appointments for a patient" |
-| 3 | Claude Haiku 4.5 | ~$0.001/file | "Queries appointment table, maps results, handles pagination" |
-| 4 | Claude Sonnet 4 | ~$0.01/service | "The Scheduler service manages appointment booking across provider calendars" |
+| 3 | Ollama (local LLM) | Free | "Queries appointment table, maps results, handles pagination" |
 
 ## Architecture
 
@@ -234,7 +235,7 @@ Monorepo with npm workspaces:
 | `packages/parsing` | AST parsing (tree-sitter WASM + ts-morph) |
 | `packages/structural` | Call graphs, dependency graphs, control flow graphs |
 | `packages/heuristics` | Service inference, pattern detection, feature flags, log mining |
-| `packages/summarization` | 4-tier description generation |
+| `packages/summarization` | 3-tier description generation |
 | `packages/storage` | Graph DB, search (FTS5/BM25), KV store (SQLite) |
 | `packages/storage-kuzu` | Graph DB backend (Kuzu, optional) |
 | `packages/correlation` | Cross-repo service correlation |
@@ -251,7 +252,7 @@ Monorepo with npm workspaces:
 - macOS, Linux, or Windows (WSL2)
 
 Optional:
-- Anthropic API key for tier 3 (Haiku) and tier 4 (Sonnet) summarization
+- [Ollama](https://ollama.com/) for tier-3 LLM summarization (free, runs locally)
 
 ## Data Handling
 
