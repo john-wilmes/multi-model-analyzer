@@ -1200,8 +1200,8 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         let tier1ReadErrors = 0;
         let tier1CacheHits = 0;
         const BATCH_SIZE = 20;
-        // Source snippets for tier-3 context (only needed when --enrich is set)
-        const needSnippets = !!(options.enrich && options.anthropicApiKey);
+        // Source snippets for tier-3 context (only needed when --enrich is set and API budget allows)
+        const needSnippets = !!(options.enrich && options.anthropicApiKey && options.maxApiCalls !== 0);
         const sourceContextMap = new Map<string, string>();
         const MAX_SNIPPET_LINES = 30;
         const isBareForTier1 = await checkBareRepo(repo.localPath);
