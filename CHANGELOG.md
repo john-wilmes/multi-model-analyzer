@@ -6,6 +6,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-03-23
+
 ### Added
 - Sanity check framework (`mma validate`) with 12 corpus-agnostic checks
 - Architectural Technical Debt Index (ATDI) per-repo and system-wide scoring

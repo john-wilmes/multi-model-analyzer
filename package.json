@@ -1,6 +1,6 @@
 {
   "name": "multi-model-analyzer",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Static analysis toolchain for large TypeScript/JavaScript codebases. Extracts symbols, dependency graphs, call graphs, and architectural patterns without runtime LLM calls.",
   "license": "MIT",
   "repository": {
@@ -60,7 +60,7 @@
     "build:dashboard": "npm run build -w apps/dashboard",
     "type-check": "tsc --build --noEmit",
     "lint": "eslint packages/ apps/",
-    "test": "vitest run && cd apps/dashboard && npx vitest run",
+    "test": "node --import ./suppress-ipc-close.mjs node_modules/.bin/vitest run && cd apps/dashboard && npx vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
     "validate:models": "vitest run --config validation/vitest.validation.ts",

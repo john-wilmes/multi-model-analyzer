@@ -1,6 +1,6 @@
 {
   "name": "@mma/mcp",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -18,7 +18,7 @@
   },
   "dependencies": {
     "@mma/core": "*",
-    "@mma/correlation": "1.0.0",
+    "@mma/correlation": "*",
     "@mma/ingestion": "*",
     "@mma/query": "*",
     "@mma/storage": "*",
