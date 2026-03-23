@@ -55,7 +55,13 @@ interface RuleGroup {
 }
 
 function isFindingRecord(value: unknown): value is Finding {
-  return typeof value === 'object' && value !== null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const v = value as Record<string, unknown>;
+  if (v.ruleId !== undefined && typeof v.ruleId !== 'string') return false;
+  if (v.level !== undefined && typeof v.level !== 'string') return false;
+  if (v.location !== undefined && typeof v.location !== 'string') return false;
+  if (v.repo !== undefined && typeof v.repo !== 'string') return false;
+  return true;
 }
 
 function groupByRule(findings: Finding[]): RuleGroup[] {
