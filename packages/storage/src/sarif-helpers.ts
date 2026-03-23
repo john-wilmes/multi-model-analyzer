@@ -53,6 +53,33 @@ export async function getSarifResultsForRepo(
  * Paginated SARIF results with optional repo filter.
  * Uses per-repo keys when available for dramatically smaller reads.
  */
+/** Accumulator for lazy pagination: filters results and collects only the page window. */
+interface PageAccumulator {
+  total: number;
+  readonly pageResults: SarifResult[];
+  readonly offset: number;
+  readonly limit: number;
+  readonly ruleId?: string;
+  readonly level?: string | string[];
+}
+
+function accumulateResults(acc: PageAccumulator, results: Iterable<SarifResult>): void {
+  for (const result of results) {
+    if (acc.ruleId && result.ruleId !== acc.ruleId) continue;
+    if (acc.level) {
+      if (Array.isArray(acc.level)) {
+        if (!acc.level.includes(result.level ?? "")) continue;
+      } else {
+        if (result.level !== acc.level) continue;
+      }
+    }
+    if (acc.total >= acc.offset && acc.pageResults.length < acc.limit) {
+      acc.pageResults.push(result);
+    }
+    acc.total++;
+  }
+}
+
 export async function getSarifResultsPaginated(
   kvStore: KVStore,
   options: {
@@ -64,27 +91,11 @@ export async function getSarifResultsPaginated(
   },
 ): Promise<PaginatedSarifResults> {
   const { repo, ruleId, level, limit = 50, offset = 0 } = options;
+  const acc: PageAccumulator = { total: 0, pageResults: [], offset, limit, ruleId, level };
 
   if (repo) {
-    // Single-repo path: already efficient — filter then slice without a separate array
-    const repoResults = await getSarifResultsForRepo(kvStore, repo);
-    let total = 0;
-    const pageResults: SarifResult[] = [];
-    for (const result of repoResults) {
-      if (ruleId && result.ruleId !== ruleId) continue;
-      if (level) {
-        if (Array.isArray(level)) {
-          if (!level.includes(result.level ?? "")) continue;
-        } else {
-          if (result.level !== level) continue;
-        }
-      }
-      if (total >= offset && pageResults.length < limit) {
-        pageResults.push(result);
-      }
-      total++;
-    }
-    return { results: pageResults, total };
+    accumulateResults(acc, await getSarifResultsForRepo(kvStore, repo));
+    return { results: acc.pageResults, total: acc.total };
   }
 
   // No repo filter: iterate repos lazily to avoid loading all findings into memory at once.
@@ -93,52 +104,18 @@ export async function getSarifResultsPaginated(
   if (indexJson) {
     try {
       const index = JSON.parse(indexJson) as SarifLatestIndex;
-      let total = 0;
-      const pageResults: SarifResult[] = [];
-
       for (const r of index.repos) {
-        const repoResults = await getSarifResultsForRepo(kvStore, r);
-        for (const result of repoResults) {
-          if (ruleId && result.ruleId !== ruleId) continue;
-          if (level) {
-            if (Array.isArray(level)) {
-              if (!level.includes(result.level ?? "")) continue;
-            } else {
-              if (result.level !== level) continue;
-            }
-          }
-          if (total >= offset && pageResults.length < limit) {
-            pageResults.push(result);
-          }
-          total++;
-        }
+        accumulateResults(acc, await getSarifResultsForRepo(kvStore, r));
       }
-
-      return { results: pageResults, total };
+      return { results: acc.pageResults, total: acc.total };
     } catch {
       // Fall through to legacy sarif:latest path
     }
   }
 
   // Legacy fallback: sarif:latest monolithic blob (no per-repo keys, no index)
-  const allResults = await getAllFromSarifLatest(kvStore);
-  let total = 0;
-  const pageResults: SarifResult[] = [];
-  for (const result of allResults) {
-    if (ruleId && result.ruleId !== ruleId) continue;
-    if (level) {
-      if (Array.isArray(level)) {
-        if (!level.includes(result.level ?? "")) continue;
-      } else {
-        if (result.level !== level) continue;
-      }
-    }
-    if (total >= offset && pageResults.length < limit) {
-      pageResults.push(result);
-    }
-    total++;
-  }
-  return { results: pageResults, total };
+  accumulateResults(acc, await getAllFromSarifLatest(kvStore));
+  return { results: acc.pageResults, total: acc.total };
 }
 
 async function filterSarifLatestByRepo(
