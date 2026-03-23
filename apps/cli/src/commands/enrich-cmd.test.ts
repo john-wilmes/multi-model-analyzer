@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { InMemoryKVStore, InMemorySearchStore } from "@mma/storage";
-import type { Summary, ServiceCatalogEntry } from "@mma/core";
+import type { Summary } from "@mma/core";
 import { enrichCommand } from "./enrich-cmd.js";
 
 // ---------------------------------------------------------------------------
@@ -13,8 +13,8 @@ vi.mock("@mma/summarization", async (importOriginal) => {
     ...real,
     // shouldEscalateToTier3 uses real implementation so the tests exercise
     // the actual escalation logic based on confidence values.
-    tier3BatchSummarize: vi.fn(async () => []),
-    tier4BatchSummarize: vi.fn(async () => ({ summaries: [], apiCallsMade: 0 })),
+    isOllamaAvailable: vi.fn(async () => true),
+    tier3Summarize: vi.fn(async () => []),
   };
 });
 
@@ -36,7 +36,6 @@ function makeOptions(
   return {
     kvStore,
     searchStore,
-    apiKey: "test-key",
     verbose: false,
     ...overrides,
   };
@@ -57,13 +56,11 @@ async function seedT1(
 
 describe("enrichCommand", () => {
   let tier3Mock: ReturnType<typeof vi.fn>;
-  let tier4Mock: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     vi.clearAllMocks();
     const mod = await import("@mma/summarization");
-    tier3Mock = mod.tier3BatchSummarize as ReturnType<typeof vi.fn>;
-    tier4Mock = mod.tier4BatchSummarize as ReturnType<typeof vi.fn>;
+    tier3Mock = mod.tier3Summarize as ReturnType<typeof vi.fn>;
   });
 
   // -------------------------------------------------------------------------
@@ -80,7 +77,6 @@ describe("enrichCommand", () => {
       apiCallsMade: 0,
     });
     expect(tier3Mock).not.toHaveBeenCalled();
-    expect(tier4Mock).not.toHaveBeenCalled();
   });
 
   // -------------------------------------------------------------------------
@@ -99,7 +95,7 @@ describe("enrichCommand", () => {
     };
     await seedT1(kvStore, "repo-a", [lowConfSummary]);
 
-    // Pre-populate the t3 cache so enrich should skip the API call
+    // Pre-populate the t3 cache so enrich should skip the LLM call
     const cachedT3: Summary = {
       entityId,
       tier: 3,
@@ -108,7 +104,7 @@ describe("enrichCommand", () => {
     };
     await kvStore.set(`summary:t3:${entityId}`, JSON.stringify(cachedT3));
 
-    const result = await enrichCommand({ kvStore, searchStore, apiKey: "k", verbose: false });
+    const result = await enrichCommand({ kvStore, searchStore, verbose: false });
 
     expect(tier3Mock).not.toHaveBeenCalled();
     expect(result.reposEnriched).toBe(1);
@@ -118,7 +114,7 @@ describe("enrichCommand", () => {
   // -------------------------------------------------------------------------
   // Case 3: low-confidence entity without cache → tier3 is called
   // -------------------------------------------------------------------------
-  it("calls tier3BatchSummarize for low-confidence entities not yet cached", async () => {
+  it("calls tier3Summarize for low-confidence entities not yet cached", async () => {
     const { kvStore, searchStore } = makeStores();
     const entityId = "repo-b/src/svc.ts::MyService";
 
@@ -134,11 +130,10 @@ describe("enrichCommand", () => {
     const upgraded: Summary = { entityId, tier: 3, description: "My upgraded desc", confidence: 0.85 };
     tier3Mock.mockResolvedValueOnce([upgraded]);
 
-    const result = await enrichCommand({ kvStore, searchStore, apiKey: "k", verbose: false });
+    const result = await enrichCommand({ kvStore, searchStore, verbose: false });
 
     expect(tier3Mock).toHaveBeenCalledOnce();
     expect(result.tier3Count).toBe(1);
-    expect(result.apiCallsMade).toBe(1);
     expect(result.reposEnriched).toBe(1);
   });
 
@@ -161,7 +156,6 @@ describe("enrichCommand", () => {
     const result = await enrichCommand({
       kvStore,
       searchStore,
-      apiKey: "k",
       verbose: false,
       repo: "repo-a",
     });
@@ -189,7 +183,6 @@ describe("enrichCommand", () => {
     const result = await enrichCommand({
       kvStore,
       searchStore,
-      apiKey: "k",
       verbose: false,
       repo: "no-such-repo",
     });
@@ -201,7 +194,7 @@ describe("enrichCommand", () => {
   // -------------------------------------------------------------------------
   // Case 6: maxApiCalls budget is respected
   // -------------------------------------------------------------------------
-  it("caps tier3 candidates to the remaining API budget", async () => {
+  it("caps tier3 candidates to the remaining budget", async () => {
     const { kvStore, searchStore } = makeStores();
 
     // 5 low-confidence entities
@@ -228,7 +221,6 @@ describe("enrichCommand", () => {
     const result = await enrichCommand({
       kvStore,
       searchStore,
-      apiKey: "k",
       verbose: false,
       maxApiCalls: 2,
     });
@@ -240,47 +232,7 @@ describe("enrichCommand", () => {
   });
 
   // -------------------------------------------------------------------------
-  // Case 7: tier4 is called when a service catalog exists
-  // -------------------------------------------------------------------------
-  it("calls tier4BatchSummarize when a service catalog is present", async () => {
-    const { kvStore, searchStore } = makeStores();
-    const repo = "repo-d";
-
-    // A high-confidence t1 summary (won't escalate to tier3)
-    await seedT1(kvStore, repo, [
-      { entityId: `${repo}/src/svc.ts::SvcA`, tier: 1, description: "SvcA", confidence: 0.9 },
-    ]);
-
-    // Catalog for the repo
-    const catalog: ServiceCatalogEntry[] = [
-      {
-        name: "SvcA",
-        rootPath: "src/svc-a",
-        purpose: "Provides SvcA functionality",
-        dependencies: ["dep-x"],
-        apiSurface: [{ method: "GET", path: "/api/svc-a", description: "Get SvcA" }],
-        errorHandlingSummary: "Returns 500 on failure",
-      },
-    ];
-    await kvStore.set(`catalog:${repo}`, JSON.stringify(catalog));
-
-    const tier4Summary: Summary = {
-      entityId: "service:SvcA",
-      tier: 4,
-      description: "SvcA — exposes a REST API",
-      confidence: 0.95,
-    };
-    tier4Mock.mockResolvedValueOnce({ summaries: [tier4Summary], apiCallsMade: 1 });
-
-    const result = await enrichCommand({ kvStore, searchStore, apiKey: "k", verbose: false });
-
-    expect(tier4Mock).toHaveBeenCalledOnce();
-    expect(result.tier4Count).toBe(1);
-    expect(result.apiCallsMade).toBe(1);
-  });
-
-  // -------------------------------------------------------------------------
-  // Case 8: enriched summaries are indexed into the search store
+  // Case 7: enriched summaries are indexed into the search store
   // -------------------------------------------------------------------------
   it("re-indexes all summaries into the search store after enrichment", async () => {
     const { kvStore, searchStore } = makeStores();
@@ -294,7 +246,7 @@ describe("enrichCommand", () => {
 
     const indexSpy = vi.spyOn(searchStore, "index");
 
-    await enrichCommand({ kvStore, searchStore, apiKey: "k", verbose: false });
+    await enrichCommand({ kvStore, searchStore, verbose: false });
 
     expect(indexSpy).toHaveBeenCalledOnce();
     const docs = indexSpy.mock.calls[0]![0] as unknown as Array<{ id: string }>;

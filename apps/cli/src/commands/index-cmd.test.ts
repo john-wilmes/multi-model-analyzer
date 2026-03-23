@@ -68,8 +68,9 @@ vi.mock("@mma/heuristics", () => ({
 vi.mock("@mma/summarization", () => ({
   tier1Summarize: vi.fn().mockReturnValue([]),
   tier2Summarize: vi.fn().mockReturnValue([]),
-  tier4BatchSummarize: vi.fn().mockResolvedValue([]),
-  SONNET_DEFAULTS: {},
+  isOllamaAvailable: vi.fn().mockResolvedValue(true),
+  shouldEscalateToTier3: vi.fn().mockReturnValue(false),
+  tier3Summarize: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("@mma/model-config", () => ({

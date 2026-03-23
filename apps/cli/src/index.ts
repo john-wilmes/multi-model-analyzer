@@ -72,13 +72,9 @@ async function main(): Promise<void> {
       "watch-interval": { type: "string", default: "30" },
       raw: { type: "boolean", default: false },
       baseline: { type: "string" },
-      "api-key": { type: "string" },
       "max-api-calls": { type: "string" },
-      "narrate-only": { type: "boolean", default: false },
-      force: { type: "boolean", default: false },
       "force-full-reindex": { type: "boolean", default: false },
       enrich: { type: "boolean", default: false },
-      local: { type: "boolean", default: false },
       "ollama-url": { type: "string" },
       "ollama-model": { type: "string" },
       port: { type: "string", default: "3000" },
@@ -300,17 +296,11 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  // enrich command: standalone LLM enrichment (Tier 3/4) outside of index
+  // enrich command: standalone LLM enrichment (Tier 3) outside of index
   if (command === "enrich") {
     if (!existsSync(dbPath)) {
       console.error(`Database not found: ${dbPath}`);
       console.error("Run 'mma index' first to create the analysis database.");
-      process.exit(1);
-    }
-    const anthropicApiKey = values["api-key"] || process.env.ANTHROPIC_API_KEY;
-    const localMode = values.local;
-    if (!localMode && !anthropicApiKey) {
-      console.error("enrich requires --api-key or ANTHROPIC_API_KEY (or use --local for Ollama).");
       process.exit(1);
     }
     const maxApiCalls = values["max-api-calls"] ? parseInt(values["max-api-calls"], 10) : undefined;
@@ -323,15 +313,13 @@ async function main(): Promise<void> {
       const result = await enrichCommand({
         kvStore: stores.kvStore,
         searchStore: stores.searchStore,
-        apiKey: anthropicApiKey ?? "",
         maxApiCalls,
         repo: values.repo,
         verbose,
-        local: localMode,
         ollamaUrl: values["ollama-url"],
         ollamaModel: values["ollama-model"],
       });
-      console.log(`Enriched ${result.reposEnriched} repo(s): ${result.tier3Count} tier-3, ${result.tier4Count} tier-4 summaries (${result.apiCallsMade} API calls)`);
+      console.log(`Enriched ${result.reposEnriched} repo(s): ${result.tier3Count} tier-3 summaries`);
     } finally {
       stores.close();
     }
@@ -835,18 +823,9 @@ async function main(): Promise<void> {
     switch (command) {
       case "index": {
         const indexFormat = validateFormat(values.format, "table");
-        const anthropicApiKey = values["api-key"] || process.env.ANTHROPIC_API_KEY;
         const maxApiCalls = values["max-api-calls"] ? parseInt(values["max-api-calls"], 10) : undefined;
         if (maxApiCalls !== undefined && (isNaN(maxApiCalls) || maxApiCalls < 0)) {
           console.error(`Invalid --max-api-calls: "${values["max-api-calls"]}". Must be a non-negative integer.`);
-          process.exit(1);
-        }
-        if (values["narrate-only"] && !anthropicApiKey) {
-          console.error("--narrate-only requires --api-key or ANTHROPIC_API_KEY environment variable.");
-          process.exit(1);
-        }
-        if (values.enrich && !values.local && !anthropicApiKey) {
-          console.error("--enrich requires --api-key or ANTHROPIC_API_KEY (or use --local for Ollama).");
           process.exit(1);
         }
         const indexOpts = {
@@ -858,14 +837,10 @@ async function main(): Promise<void> {
           verbose,
           rules: validatedRules,
           affected: values.affected,
-          anthropicApiKey,
           enrich: values.enrich,
           maxApiCalls,
-          narrateOnly: values["narrate-only"],
-          narrateForce: values["force"],
           forceFullReindex: values["force-full-reindex"],
           advisories: config.advisories,
-          local: values.local,
           ollamaUrl: values["ollama-url"],
           ollamaModel: values["ollama-model"],
         } as const;
@@ -942,8 +917,7 @@ Multi-Model Analyzer (mma)
 Usage:
   mma index [-c config.json] [-v] [--affected] [--enrich] [--baseline file.db]
             [--format json|table|sarif] [--watch [-w] [--watch-interval N]]
-            [--narrate-only] [--force] [--force-full-reindex]
-                                          Index repositories (default: table)
+            [--force-full-reindex]         Index repositories (default: table)
   mma query [-c config.json] "..." [--format json|table|sarif]
                                                 Query the index (default: table)
   mma affected <rev-range> [--db path] [--repo name] [--max-depth N]
@@ -973,8 +947,8 @@ Usage:
                                                 Export Backstage catalog-info.yaml (default: stdout)
   mma audit [--audit-file file.json] [--repo name] [--db path] [-v]
                                                 Parse npm audit JSON and check vulnerability reachability
-  mma enrich [--db path] [--api-key KEY] [--max-api-calls N] [--repo name] [-v]
-                                                Enrich summaries with LLM (Tier 3/4)
+  mma enrich [--db path] [--max-api-calls N] [--ollama-url URL] [--ollama-model M] [--repo name] [-v]
+                                                Enrich summaries with Ollama (Tier 3)
   mma compress [--db path]                      Gzip the analysis database
   mma dashboard [--db path] [--port 3000] [--host 127.0.0.1]
                                                 Serve local web dashboard
@@ -1001,9 +975,10 @@ Options:
   --port          Port for dashboard server (default: 3000)
   --host          Host/IP to bind dashboard server (default: 127.0.0.1)
   --cors-origin   Allowed CORS origin(s) for the dashboard API (repeatable, e.g. --cors-origin http://localhost:5173)
-  --force         Bypass narration cache (use with --narrate-only or --api-key)
   --force-full-reindex  Clear and rebuild graph for each repo (default: incremental)
-  --enrich        Enable LLM enrichment (Tier 3/4) during indexing (requires --api-key)
+  --enrich        Enable LLM enrichment (Tier 3) via local Ollama
+  --ollama-url    Custom Ollama endpoint (default: http://localhost:11434)
+  --ollama-model  Custom Ollama model (default: qwen2.5-coder:1.5b)
   --backend       Storage backend: sqlite (default) or kuzu
   --transport     MCP transport: stdio (default) or http (use with serve)
   --exit-code     Exit with code 1 if new/updated findings exist (use with delta)
