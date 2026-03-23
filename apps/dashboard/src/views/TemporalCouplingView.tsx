@@ -53,6 +53,14 @@ export default function TemporalCouplingView() {
       .finally(() => setLoading(false));
   }, []);
 
+  const repoCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const p of pairs) {
+      counts.set(p.repo, (counts.get(p.repo) ?? 0) + 1);
+    }
+    return counts;
+  }, [pairs]);
+
   const { filtered, totalBeforeFilter, hiddenCount } = useMemo(() => {
     const repoFiltered = selectedRepo ? pairs.filter((p) => p.repo === selectedRepo) : pairs;
     const total = repoFiltered.length;
@@ -121,7 +129,7 @@ export default function TemporalCouplingView() {
             <option value="">All repos ({pairs.length} pairs)</option>
             {repos.map((r) => (
               <option key={r} value={r}>
-                {r} ({pairs.filter((p) => p.repo === r).length})
+                {r} ({repoCounts.get(r) ?? 0})
               </option>
             ))}
           </select>
