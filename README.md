@@ -22,7 +22,7 @@
 
 Point `mma` at your TypeScript repos. Get back a health report with structural problems, fault risks, and dead code -- no LLM required.
 
-```
+```text
 $ node apps/cli/dist/index.js index -c repos.json
 $ node apps/cli/dist/index.js practices
 
@@ -106,7 +106,7 @@ node apps/cli/dist/index.js practices
 
 After `npm link` you can use the short form `mma <command>`. Otherwise substitute `node apps/cli/dist/index.js` for `mma` below.
 
-```
+```text
 mma index            Index repositories (clone, parse, analyze)
 mma practices        Health report with prioritized findings and grades
 mma query            Natural language queries ("what calls auth?", "dependencies of scheduler")
@@ -130,7 +130,7 @@ mma explore          Interactive incremental indexing with guided repo discovery
 
 Key flags that apply across commands:
 
-```
+```text
 --backend kuzu   Use Kuzu graph DB instead of SQLite (applies to index, serve, explore, and others)
 --transport http  Use HTTP transport for MCP server instead of stdio (applies to serve, default port 3001)
 --enrich          Enable LLM enrichment (Tier 3/4) during indexing (requires --api-key or ANTHROPIC_API_KEY)
@@ -187,7 +187,7 @@ No source code, no file paths, no service names -- just the structural finding.
 
 Index-heavy, query-cheap. All analysis runs at index time; queries are lookups and graph traversals.
 
-```
+```text
 Repos --> Ingestion --> Parsing --> Structural Analysis --> Heuristic Analysis
                                                                |
                                           Summarization (tiers 1-4) --> Storage
