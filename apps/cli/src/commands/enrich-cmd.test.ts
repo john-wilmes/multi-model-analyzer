@@ -73,8 +73,6 @@ describe("enrichCommand", () => {
     expect(result).toEqual({
       reposEnriched: 0,
       tier3Count: 0,
-      tier4Count: 0,
-      apiCallsMade: 0,
     });
     expect(tier3Mock).not.toHaveBeenCalled();
   });
@@ -187,7 +185,7 @@ describe("enrichCommand", () => {
       repo: "no-such-repo",
     });
 
-    expect(result).toEqual({ reposEnriched: 0, tier3Count: 0, tier4Count: 0, apiCallsMade: 0 });
+    expect(result).toEqual({ reposEnriched: 0, tier3Count: 0 });
     expect(tier3Mock).not.toHaveBeenCalled();
   });
 
@@ -232,7 +230,19 @@ describe("enrichCommand", () => {
   });
 
   // -------------------------------------------------------------------------
-  // Case 7: enriched summaries are indexed into the search store
+  // Case 7: Ollama not reachable → throws descriptive error
+  // -------------------------------------------------------------------------
+  it("throws when Ollama is not reachable", async () => {
+    const mod = await import("@mma/summarization");
+    const isOllamaAvailableMock = mod.isOllamaAvailable as ReturnType<typeof vi.fn>;
+    isOllamaAvailableMock.mockResolvedValueOnce(false);
+
+    const opts = makeOptions();
+    await expect(enrichCommand(opts)).rejects.toThrow("Ollama is not reachable");
+  });
+
+  // -------------------------------------------------------------------------
+  // Case 8: enriched summaries are indexed into the search store
   // -------------------------------------------------------------------------
   it("re-indexes all summaries into the search store after enrichment", async () => {
     const { kvStore, searchStore } = makeStores();

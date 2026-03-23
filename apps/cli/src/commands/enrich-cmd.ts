@@ -33,8 +33,6 @@ export interface EnrichOptions {
 export interface EnrichResult {
   readonly reposEnriched: number;
   readonly tier3Count: number;
-  readonly tier4Count: number;
-  readonly apiCallsMade: number;
 }
 
 const T1_PREFIX = "summary:t1:";
@@ -76,7 +74,7 @@ export async function enrichCommand(options: EnrichOptions): Promise<EnrichResul
     repos = repos.filter((r) => r === options.repo);
     if (repos.length === 0) {
       log(`[enrich] No cached summaries found for repo: ${options.repo}`);
-      return { reposEnriched: 0, tier3Count: 0, tier4Count: 0, apiCallsMade: 0 };
+      return { reposEnriched: 0, tier3Count: 0 };
     }
   }
 
@@ -182,7 +180,5 @@ export async function enrichCommand(options: EnrichOptions): Promise<EnrichResul
   return {
     reposEnriched,
     tier3Count: totalTier3Count,
-    tier4Count: 0,
-    apiCallsMade: 0,
   };
 }

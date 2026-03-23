@@ -216,14 +216,13 @@ Repos --> Ingestion --> Parsing --> Structural Analysis --> Heuristic Analysis
 
 **Parsing** uses [tree-sitter](https://tree-sitter.github.io/tree-sitter/) (WASM) for fast syntax-only parsing, with optional [ts-morph](https://ts-morph.com/) for type-resolved symbols.
 
-**Summarization** has 4 tiers -- the first 2 are free and local; tiers 3–4 use the Anthropic API:
+**Summarization** has 3 tiers -- the first 2 are free and local; tier 3 uses local Ollama:
 
 | Tier | Source | Cost | Example |
 |------|--------|------|---------|
 | 1 | Templates from AST | Free | "Accepts (patientId: string), returns Promise" |
 | 2 | Heuristics from naming | Free | "Fetches appointments for a patient" |
-| 3 | Claude Haiku 4.5 | ~$0.001/file | "Queries appointment table, maps results, handles pagination" |
-| 4 | Claude Sonnet 4 | ~$0.01/service | "The Scheduler service manages appointment booking across provider calendars" |
+| 3 | Ollama (local LLM) | Free | "Queries appointment table, maps results, handles pagination" |
 
 ## Architecture
 
