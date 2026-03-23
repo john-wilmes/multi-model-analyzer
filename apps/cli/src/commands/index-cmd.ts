@@ -65,8 +65,10 @@ import {
   tier4BatchSummarize,
   SONNET_DEFAULTS,
   narrateAll,
+  tier3Summarize as ollamaTier3Summarize,
+  isOllamaAvailable,
 } from "@mma/summarization";
-import type { ServiceSummaryInput, RepoNarrationInput, SystemNarrationInput } from "@mma/summarization";
+import type { ServiceSummaryInput, RepoNarrationInput, SystemNarrationInput, OllamaOptions } from "@mma/summarization";
 import { computeAffectedScope } from "./affected-scope.js";
 import type { AffectedScope } from "./affected-scope.js";
 import { PipelineTracer } from "../tracer.js";
@@ -129,6 +131,9 @@ export interface IndexOptions {
   readonly forceFullReindex?: boolean;
   readonly advisories?: readonly Advisory[];
   readonly enrich?: boolean;
+  readonly local?: boolean;
+  readonly ollamaUrl?: string;
+  readonly ollamaModel?: string;
 }
 
 export interface IndexResult {
@@ -147,6 +152,16 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
   const failedRepoNames = new Set<string>();
 
   log(`Indexing ${repos.length} repositories...`);
+
+  // Ollama availability check (when --local is set)
+  if (options.local) {
+    const ollamaUrl = options.ollamaUrl ?? "http://localhost:11434";
+    const available = await isOllamaAvailable(ollamaUrl);
+    if (!available) {
+      throw new Error(`Ollama is not reachable at ${ollamaUrl}. Start Ollama or specify --ollama-url.`);
+    }
+    log(`Ollama available at ${ollamaUrl}`);
+  }
 
   // Narrate-only mode: skip Phases 1-7, regenerate narrations from stored data
   if (options.narrateOnly) {
@@ -1311,31 +1326,51 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
           }
         }
 
-        // Tier 3: Haiku LLM for low-confidence method summaries
+        // Tier 3: LLM for low-confidence method summaries
         let tier3Count = 0;
-        if (options.enrich && options.anthropicApiKey && (!sharedApiBudget || sharedApiBudget.remaining > 0)) {
+        if (options.enrich && (options.local || (options.anthropicApiKey && (!sharedApiBudget || sharedApiBudget.remaining > 0)))) {
           let tier3Candidates = [...summaryMap.entries()]
-            .filter(([, s]) => shouldEscalateToTier3(s, undefined))
-            .map(([entityId, s]) => ({
-              entityId,
-              description: s.description,
-              context: sourceContextMap.get(entityId) ?? entityId,
-            }));
-          // Atomically reserve budget before async work
-          if (sharedApiBudget) {
+            .filter(([, s]) => shouldEscalateToTier3(s, undefined));
+          // Atomically reserve budget before async work (only for API mode)
+          if (!options.local && sharedApiBudget) {
             const granted = sharedApiBudget.reserve(tier3Candidates.length);
             tier3Candidates = tier3Candidates.slice(0, granted);
           }
           if (tier3Candidates.length > 0) {
-            log(`    Tier 3 (Haiku): upgrading ${tier3Candidates.length} low-confidence summaries`);
-            const tier3Results = await tier3BatchSummarize(
-              tier3Candidates,
-              options.anthropicApiKey,
-            );
-            for (const s of tier3Results) {
-              if (s.confidence > 0) {
-                summaryMap.set(s.entityId, s);
-                tier3Count++;
+            if (options.local) {
+              log(`    Tier 3 (Ollama): upgrading ${tier3Candidates.length} low-confidence summaries`);
+              const ollamaEntities = tier3Candidates.map(([entityId]) => ({
+                entityId,
+                sourceCode: sourceContextMap.get(entityId) ?? entityId,
+                context: entityId,
+              }));
+              const ollamaOpts: Partial<OllamaOptions> = {
+                ...(options.ollamaUrl ? { baseUrl: options.ollamaUrl } : {}),
+                ...(options.ollamaModel ? { model: options.ollamaModel } : {}),
+              };
+              const tier3Results = await ollamaTier3Summarize(ollamaEntities, ollamaOpts);
+              for (const s of tier3Results) {
+                if (s.confidence > 0) {
+                  summaryMap.set(s.entityId, s);
+                  tier3Count++;
+                }
+              }
+            } else {
+              const haikuCandidates = tier3Candidates.map(([entityId, s]) => ({
+                entityId,
+                description: s.description,
+                context: sourceContextMap.get(entityId) ?? entityId,
+              }));
+              log(`    Tier 3 (Haiku): upgrading ${haikuCandidates.length} low-confidence summaries`);
+              const tier3Results = await tier3BatchSummarize(
+                haikuCandidates,
+                options.anthropicApiKey!,
+              );
+              for (const s of tier3Results) {
+                if (s.confidence > 0) {
+                  summaryMap.set(s.entityId, s);
+                  tier3Count++;
+                }
               }
             }
           }
@@ -1344,7 +1379,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
 
         // Tier 4: Sonnet for service-level summaries
         let tier4Count = 0;
-        if (options.enrich && options.anthropicApiKey) {
+        if (options.enrich && options.anthropicApiKey && !options.local) {
           const services6b = servicesByRepo.get(repo.name);
           if (services6b && services6b.length > 0) {
             const inputs: ServiceSummaryInput[] = services6b.map((svc) => ({
@@ -1385,6 +1420,10 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
               }
             }
           }
+        }
+
+        if (options.local && !options.anthropicApiKey) {
+          log(`    Tier 4 and narration skipped (requires --api-key)`);
         }
 
         // Index summaries in search store for query support (batched to limit memory)
