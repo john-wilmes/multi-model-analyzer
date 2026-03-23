@@ -7,6 +7,17 @@ type SortDir = 'asc' | 'desc';
 
 const PAGE_SIZE = 25;
 
+function isSharedFlag(value: unknown): value is SharedFlag {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Partial<SharedFlag>;
+  return (
+    typeof v.name === 'string' &&
+    typeof v.coordinated === 'boolean' &&
+    Array.isArray(v.repos) &&
+    v.repos.every((r) => typeof r === 'string')
+  );
+}
+
 interface Props {
   repo?: string;
 }
@@ -22,7 +33,9 @@ export default function FeatureFlagsTable({ repo }: Props) {
     setLoading(true);
     setPage(0);
     fetchCrossRepoFeatures(repo)
-      .then((data) => setFlags(data.flags))
+      .then((data) =>
+        setFlags(Array.isArray(data?.flags) ? data.flags.filter(isSharedFlag) : [])
+      )
       .catch(() => setFlags([]))
       .finally(() => setLoading(false));
   }, [repo]);

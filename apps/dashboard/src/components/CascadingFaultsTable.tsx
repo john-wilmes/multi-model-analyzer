@@ -7,6 +7,18 @@ type SortDir = 'asc' | 'desc';
 
 const PAGE_SIZE = 25;
 
+function isCrossRepoFaultLink(value: unknown): value is CrossRepoFaultLink {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Partial<CrossRepoFaultLink>;
+  return (
+    typeof v.sourceRepo === 'string' &&
+    typeof v.targetRepo === 'string' &&
+    typeof v.endpoint === 'string' &&
+    typeof v.sourceFaultTreeCount === 'number' &&
+    typeof v.targetFaultTreeCount === 'number'
+  );
+}
+
 interface Props {
   repo?: string;
 }
@@ -22,7 +34,11 @@ export default function CascadingFaultsTable({ repo }: Props) {
     setLoading(true);
     setPage(0);
     fetchCrossRepoFaults(repo)
-      .then((data) => setFaultLinks(data.faultLinks))
+      .then((data) =>
+        setFaultLinks(
+          Array.isArray(data?.faultLinks) ? data.faultLinks.filter(isCrossRepoFaultLink) : []
+        )
+      )
       .catch(() => setFaultLinks([]))
       .finally(() => setLoading(false));
   }, [repo]);

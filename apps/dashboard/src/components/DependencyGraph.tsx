@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import cytoscape from 'cytoscape';
 import cytoscapeDagre from 'cytoscape-dagre';
@@ -35,6 +35,7 @@ export default function DependencyGraph() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedKind, setSelectedKind] = useState<string>('imports');
+  const [topN, setTopN] = useState(50);
   const cyRef = useRef<HTMLDivElement>(null);
   const cyInstanceRef = useRef<cytoscape.Core | null>(null);
 
@@ -50,22 +51,28 @@ export default function DependencyGraph() {
     return () => { cancelled = true; };
   }, [name, selectedKind]);
 
-  useEffect(() => {
-    if (!cyRef.current || edges.length === 0) return;
+  // Compute degree map and filtered nodes/edges based on topN
+  const { filteredNodes, filteredEdges, totalNodeCount } = useMemo(() => {
+    if (edges.length === 0) return { filteredNodes: [], filteredEdges: [], totalNodeCount: 0 };
 
-    // Build nodes from unique source/target IDs
     const degreeMap = new Map<string, number>();
     for (const e of edges) {
       degreeMap.set(e.source, (degreeMap.get(e.source) ?? 0) + 1);
       degreeMap.set(e.target, (degreeMap.get(e.target) ?? 0) + 1);
     }
 
+    const total = degreeMap.size;
+
+    // Keep only top N nodes by degree
+    const sorted = [...degreeMap.entries()].sort((a, b) => b[1] - a[1]);
+    const kept = new Set(sorted.slice(0, topN).map(([id]) => id));
+
     let maxDegree = 1;
-    for (const d of degreeMap.values()) {
+    for (const [, d] of sorted.slice(0, topN)) {
       if (d > maxDegree) maxDegree = d;
     }
 
-    const nodes = [...degreeMap.entries()].map(([id, degree]) => ({
+    const nodes = sorted.slice(0, topN).map(([id, degree]) => ({
       data: {
         id,
         label: lastSegment(id),
@@ -74,17 +81,21 @@ export default function DependencyGraph() {
       },
     }));
 
-    const cyEdges = edges.map((e, i) => ({
-      data: {
-        id: `e${i}`,
-        source: e.source,
-        target: e.target,
-      },
-    }));
+    const cyEdges = edges
+      .filter((e) => kept.has(e.source) && kept.has(e.target))
+      .map((e, i) => ({
+        data: { id: `e${i}`, source: e.source, target: e.target },
+      }));
+
+    return { filteredNodes: nodes, filteredEdges: cyEdges, totalNodeCount: total };
+  }, [edges, topN]);
+
+  useEffect(() => {
+    if (!cyRef.current || filteredNodes.length === 0) return;
 
     const cy = cytoscape({
       container: cyRef.current,
-      elements: [...nodes, ...cyEdges],
+      elements: [...filteredNodes, ...filteredEdges],
       style: [
         {
           selector: 'node',
@@ -93,9 +104,11 @@ export default function DependencyGraph() {
             label: 'data(label)',
             width: 'data(size)',
             height: 'data(size)',
-            'font-size': '10px',
-            color: '#1e293b',
+            'font-size': '11px',
+            color: '#e2e8f0',
             'text-valign': 'bottom',
+            'text-outline-color': '#0f172a',
+            'text-outline-width': 1,
             'text-margin-y': 5,
             'border-width': 2,
             'border-color': '#2563eb',
@@ -173,7 +186,7 @@ export default function DependencyGraph() {
       cy.destroy();
       cyInstanceRef.current = null;
     };
-  }, [edges, navigate, name]);
+  }, [filteredNodes, filteredEdges, navigate, name]);
 
   if (loading) return <p className="text-slate-500 dark:text-slate-400">Loading dependency graph...</p>;
   if (error) return (
@@ -182,23 +195,29 @@ export default function DependencyGraph() {
     </div>
   );
 
-  // Count unique nodes from edges
-  const nodeIds = new Set<string>();
-  for (const e of edges) {
-    nodeIds.add(e.source);
-    nodeIds.add(e.target);
-  }
-
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <h2 className="text-xl font-semibold text-slate-800 dark:text-slate-100">
           Dependency Graph — {name}
         </h2>
         <div className="flex items-center gap-4">
           <span className="text-sm text-slate-500 dark:text-slate-400">
-            {nodeIds.size} nodes · {edges.length} edges
+            Showing {filteredNodes.length} of {totalNodeCount} nodes · {filteredEdges.length} edges
           </span>
+          <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
+            Top N:
+            <input
+              type="range"
+              min={10}
+              max={200}
+              step={10}
+              value={topN}
+              onChange={(e) => setTopN(Number(e.target.value))}
+              className="w-24"
+            />
+            <span className="w-8 text-right font-mono dark:text-slate-300">{topN}</span>
+          </label>
           <select
             value={selectedKind}
             onChange={(e) => setSelectedKind(e.target.value)}
