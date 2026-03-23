@@ -5,6 +5,9 @@
  * (following who-imports-me edges) to identify all transitively affected files.
  */
 
+import { fileURLToPath } from "node:url";
+import { join, dirname } from "node:path";
+import { Worker } from "node:worker_threads";
 import { parseSymbolId } from "@mma/core";
 import type { GraphEdge } from "@mma/core";
 import type { GraphStore, SearchStore } from "@mma/storage";
@@ -306,13 +309,112 @@ function tarjanSCC(V: number, adj: number[][]): number[][] {
   return sccs; // reverse topo order (sinks first)
 }
 
+/** Worker timeout for computeReachCounts offloading (milliseconds). */
+const WORKER_TIMEOUT_MS = 30_000;
+
+/**
+ * Resolve the path to the compiled reach-worker.js file.
+ * In production the file lives alongside this module in dist/.
+ * In test runs (ts-node / vitest with source maps) it lives in dist/ after build.
+ */
+function resolveWorkerPath(): string {
+  const thisFile = fileURLToPath(import.meta.url);
+  return join(dirname(thisFile), "reach-worker.js");
+}
+
+/**
+ * Run the SCC + bitset computation in a worker thread.
+ * Returns null if the worker fails or times out.
+ */
+function runInWorker(
+  importEdges: ReadonlyArray<{ source: string; target: string }>,
+): Promise<Map<string, number> | null> {
+  return new Promise((resolve) => {
+    let settled = false;
+    let worker: Worker;
+
+    const done = (result: Map<string, number> | null): void => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+
+    try {
+      worker = new Worker(resolveWorkerPath(), {
+        workerData: { edges: importEdges },
+      });
+    } catch {
+      done(null);
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      void worker.terminate();
+      done(null);
+    }, WORKER_TIMEOUT_MS);
+
+    worker.on("message", (msg: { ok: boolean; result?: [string, number][]; error?: string }) => {
+      clearTimeout(timer);
+      if (msg.ok && msg.result) {
+        done(new Map(msg.result));
+      } else {
+        done(null);
+      }
+    });
+
+    worker.on("error", () => {
+      clearTimeout(timer);
+      done(null);
+    });
+
+    worker.on("exit", (code) => {
+      clearTimeout(timer);
+      if (code !== 0) done(null);
+    });
+  });
+}
+
 /**
  * Compute transitive fan-in (reach count) for each file in the dependency graph.
  *
- * Uses SCC condensation + bitset propagation for O(V+E + numSCCs*E_condensed*V/32).
- * Falls back to BFS when V > 20,000 nodes.
+ * For graphs up to 20,000 nodes: offloads SCC condensation + bitset propagation
+ * to a worker thread (with 30s timeout and in-process fallback).
+ * For graphs over 20,000 nodes: falls back to the yielding BFS implementation.
  */
 export async function computeReachCounts(
+  edges: readonly GraphEdge[],
+): Promise<Map<string, number>> {
+  // Pre-filter to import edges only; collect node count to decide strategy
+  const importEdges: Array<{ source: string; target: string }> = [];
+  const allNodes = new Set<string>();
+
+  for (const edge of edges) {
+    if (edge.kind !== "imports") continue;
+    allNodes.add(edge.source);
+    allNodes.add(edge.target);
+    importEdges.push({ source: edge.source, target: edge.target });
+  }
+
+  const V = allNodes.size;
+  if (V === 0) return new Map();
+
+  // Fallback to BFS for very large graphs (until HyperLogLog is added)
+  if (V > 20_000) {
+    return computeReachCountsBFS(edges);
+  }
+
+  // Try worker thread first; fall back to in-process on failure
+  const workerResult = await runInWorker(importEdges);
+  if (workerResult !== null) return workerResult;
+
+  return computeReachCountsInProcess(edges);
+}
+
+/**
+ * In-process SCC + bitset reach-count computation (used as worker fallback).
+ * Uses setImmediate yields to avoid blocking the event loop on large graphs.
+ */
+async function computeReachCountsInProcess(
   edges: readonly GraphEdge[],
 ): Promise<Map<string, number>> {
   // Build reverse adjacency: for each target, who imports it?
@@ -334,11 +436,6 @@ export async function computeReachCounts(
 
   const V = allNodes.size;
   if (V === 0) return new Map();
-
-  // Fallback to BFS for very large graphs (until HyperLogLog is added)
-  if (V > 20_000) {
-    return computeReachCountsBFS(edges);
-  }
 
   // Map node names to integer IDs
   const nodeToId = new Map<string, number>();
