@@ -6,6 +6,8 @@ import type { CrossRepoGraph } from "@mma/correlation";
 import {
   routeQuery,
   executeSearchQuery,
+  executeCallersQuery,
+  executeCalleesQuery,
   executeDependencyQuery,
   executeArchitectureQuery,
   computeBlastRadius,
@@ -74,7 +76,6 @@ export function registerTools(server: McpServer, stores: Stores): void {
       repo: z.string().optional().describe("Filter to a specific repository name"),
     },
   }, async ({ symbol, repo }) => {
-    const { executeCallersQuery } = await import("@mma/query");
     const result = await executeCallersQuery(symbol, graphStore, repo, searchStore);
     return jsonResult(result);
   });
@@ -87,7 +88,6 @@ export function registerTools(server: McpServer, stores: Stores): void {
       repo: z.string().optional().describe("Filter to a specific repository name"),
     },
   }, async ({ symbol, repo }) => {
-    const { executeCalleesQuery } = await import("@mma/query");
     const result = await executeCalleesQuery(symbol, graphStore, repo, searchStore);
     return jsonResult(result);
   });
@@ -376,8 +376,8 @@ export function registerTools(server: McpServer, stores: Stores): void {
       : allResults;
 
     // Paginate
-    const paginated = filtered.slice(skip, skip + maxResults);
-    return jsonResult({ findings: paginated, total: filtered.length, offset: skip, limit: maxResults });
+    const paginatedResults = filtered.slice(skip, skip + maxResults);
+    return jsonResult({ findings: paginatedResults, total: filtered.length, offset: skip, limit: maxResults });
   });
 
   // 13. Feature flag inventory
