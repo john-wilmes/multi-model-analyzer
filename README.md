@@ -1,3 +1,4 @@
+[![npm](https://img.shields.io/npm/v/multi-model-analyzer)](https://www.npmjs.com/package/multi-model-analyzer)
 [![CI](https://github.com/john-wilmes/multi-model-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/john-wilmes/multi-model-analyzer/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node: 22+](https://img.shields.io/badge/Node-22%2B-brightgreen.svg)](https://nodejs.org/)
@@ -18,9 +19,10 @@
 - [Data Handling](#data-handling)
 - [Findings Reference](#findings-reference)
 - [Contributing](#contributing)
+- [Getting Started Guide](#getting-started-guide)
 - [License](#license)
 
-Point `mma` at your TypeScript repos. Get back a health report with structural problems, fault risks, and dead code -- no LLM required.
+Static analysis toolchain for TypeScript monorepos. Index hundreds of repos, surface structural debt, fault risks, and cross-repo coupling -- then explore results in a web dashboard, share baselines with your team, or plug into your IDE via MCP. No LLM required.
 
 <p align="center">
   <img src="docs/ecosystem-venn.svg" alt="MMA ecosystem capability map" width="800">
@@ -29,7 +31,7 @@ Point `mma` at your TypeScript repos. Get back a health report with structural p
 ```text
 $ mma index -c supabase.config.json
 [1/10] supabase-js  [2/10] gotrue-js  ...  [10/10] supabase
-Indexed 10 repos: 9,469 modules, 61,842 edges, 4,488 findings (118s)
+Indexed 10 repos: 7,775 modules, 214,850 edges, 4,488 findings (118s)
 
 $ mma practices
 Practices Report — Grade: F (0/100) — 10 repo(s)
@@ -54,7 +56,7 @@ fault/unhandled-error-path          fault       warning  218
 hotspot/high-churn-complexity       hotspot     note     121
 ```
 
-That output is real — [Supabase](https://github.com/supabase) ecosystem (10 repos, 9,469 modules, 61k edges).
+That output is real — [Supabase](https://github.com/supabase) ecosystem (10 repos, 7,775 modules, 215k edges).
 
 ## What It Finds
 
@@ -84,35 +86,40 @@ The web dashboard provides interactive dependency graphs, blast radius visualiza
 
 ## Quick Start
 
-If installed globally via `npm link` you can use `mma` directly. Otherwise, after cloning, invoke the CLI as `node apps/cli/dist/index.js`:
-
 ```bash
-# Clone and install
-git clone https://github.com/john-wilmes/multi-model-analyzer.git
-cd multi-model-analyzer && npm install && npm run build
+npm install -g multi-model-analyzer
 
 # Create a config pointing at your repos
 cat > mma.config.json << 'EOF'
 {
-  "mirrorDir": "./data/mirrors",
-  "dbPath": "./data/mma.db",
-  "repos": [{
-    "name": "my-service",
-    "url": "https://github.com/org/my-service.git",
-    "branch": "main",
-    "localPath": "./data/mirrors/my-service.git"
-  }]
+  "mirrorDir": "./mirrors",
+  "outputDb": "./mma.db",
+  "repos": [
+    { "url": "https://github.com/supabase/supabase-js.git", "branch": "main" },
+    { "url": "https://github.com/supabase/ssr.git", "branch": "main" }
+  ]
 }
 EOF
 
 # Index and analyze
-node apps/cli/dist/index.js index -v
-node apps/cli/dist/index.js practices
+mma index -c mma.config.json -v
+mma practices
+mma dashboard
 ```
+
+Or skip indexing entirely -- download the [prebuilt Supabase baseline](https://github.com/john-wilmes/multi-model-analyzer/releases/latest) (10 repos, 20 MB compressed) and explore immediately:
+
+```bash
+gunzip supabase-ecosystem-baseline.db.gz
+mma import supabase-ecosystem-baseline.db
+mma dashboard
+```
+
+See [docs/getting-started.md](docs/getting-started.md) for a full walkthrough.
 
 ## Commands
 
-After `npm link` you can use the short form `mma <command>`. Otherwise substitute `node apps/cli/dist/index.js` for `mma` below.
+After `npm install -g multi-model-analyzer`, all commands are available as `mma <command>`.
 
 ```text
 mma index            Index repositories (clone, parse, analyze)
@@ -261,6 +268,10 @@ See [docs/findings-guide.md](docs/findings-guide.md) for all SARIF rule IDs, sev
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
+
+## Getting Started Guide
+
+For a detailed 15-minute walkthrough (install, index, explore, share), see [docs/getting-started.md](docs/getting-started.md).
 
 ## License
 
