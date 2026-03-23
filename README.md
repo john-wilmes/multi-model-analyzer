@@ -22,6 +22,10 @@
 
 Point `mma` at your TypeScript repos. Get back a health report with structural problems, fault risks, and dead code -- no LLM required.
 
+<p align="center">
+  <img src="docs/ecosystem-venn.svg" alt="MMA ecosystem capability map" width="800">
+</p>
+
 ```text
 $ node apps/cli/dist/index.js index -c repos.json
 $ node apps/cli/dist/index.js practices
@@ -67,8 +71,6 @@ All findings are SARIF v2.1.0 with logical locations only -- no source code leav
 - Baseline sharing for incremental reindexing across teams — see [docs/baseline-sharing.md](docs/baseline-sharing.md)
 - Pluggable storage backends: SQLite (default) and Kuzu graph DB (`--backend kuzu`)
 - No LLM required for core analysis — everything runs locally
-
-See [where MMA fits in the ecosystem](docs/ecosystem-venn.svg) for a capability map across related tools.
 
 ### Dashboard
 
