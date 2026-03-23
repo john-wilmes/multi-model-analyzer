@@ -137,7 +137,7 @@ async function main(): Promise<void> {
   const earlyBackend: StorageBackend =
     values.backend === "kuzu" ? "kuzu" : "sqlite";
 
-  // serve command bypasses config -- only needs the DB (read-only)
+  // serve command: reads config for mirrorDir/backend, opens writable stores for index_repo support
   if (command === "serve") {
     if (!existsSync(dbPath)) {
       console.error(`Database not found: ${dbPath}`);
@@ -150,15 +150,20 @@ async function main(): Promise<void> {
       console.error(`Invalid --port: "${values.port}". Must be 1–65535.`);
       process.exit(1);
     }
-    // W24: Respect config.backend for serve command
+    // W24: Respect config.backend for serve command; also read mirrorDir for index_repo
     let serveBackend = earlyBackend;
-    if (!values.backend && values.config) {
+    let serveMirrorDir = resolve("mirrors");
+    if (values.config) {
       try {
         const cfgRaw = JSON.parse(readFileSync(resolve(values.config), "utf-8")) as Record<string, unknown>;
         if (cfgRaw["backend"] === "kuzu") serveBackend = "kuzu";
-      } catch { /* use earlyBackend */ }
+        if (typeof cfgRaw["mirrorDir"] === "string" && cfgRaw["mirrorDir"].trim() !== "") {
+          serveMirrorDir = resolve(dirname(resolve(values.config)), cfgRaw["mirrorDir"]);
+        }
+      } catch { /* use defaults */ }
     }
-    const stores = await createStores({ backend: serveBackend, dbPath, readonly: true });
+    // Open writable stores so index_repo can persist analysis results
+    const stores = await createStores({ backend: serveBackend, dbPath });
     try {
       const transport = values.transport === "http" ? "http" as const : "stdio" as const;
       await serveCommand({
@@ -169,6 +174,22 @@ async function main(): Promise<void> {
         port: servePort,
         host: values.host,
         token: process.env["MMA_MCP_TOKEN"],
+        mirrorDir: serveMirrorDir,
+        indexRepo: async (repoConfig) => {
+          const result = await indexCommand({
+            repos: [{ name: repoConfig.name, localPath: repoConfig.localPath, url: "", branch: "" }],
+            mirrorDir: serveMirrorDir,
+            kvStore: stores.kvStore,
+            graphStore: stores.graphStore,
+            searchStore: stores.searchStore,
+            verbose: false,
+          });
+          return {
+            hadChanges: result.hadChanges,
+            totalFiles: result.totalFiles,
+            totalSarifResults: result.totalSarifResults,
+          };
+        },
       });
     } finally {
       stores.close();

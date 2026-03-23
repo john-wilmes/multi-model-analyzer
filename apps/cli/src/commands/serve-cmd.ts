@@ -1,4 +1,5 @@
 import { startServer } from "@mma/mcp";
+import type { IndexRepoResult } from "@mma/mcp";
 import type { GraphStore, SearchStore, KVStore } from "@mma/storage";
 
 export interface ServeOptions {
@@ -9,6 +10,8 @@ export interface ServeOptions {
   readonly port?: number;
   readonly host?: string;
   readonly token?: string;
+  readonly mirrorDir?: string;
+  readonly indexRepo?: (repoConfig: { name: string; localPath: string; bare: boolean }) => Promise<IndexRepoResult>;
 }
 
 export async function serveCommand(options: ServeOptions): Promise<void> {

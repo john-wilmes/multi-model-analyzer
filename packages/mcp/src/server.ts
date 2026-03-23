@@ -7,6 +7,12 @@ import { registerTools } from "./tools.js";
 import { registerResources } from "./resources.js";
 import { runWakeUpCheck } from "./wake-up.js";
 
+export interface IndexRepoResult {
+  readonly hadChanges: boolean;
+  readonly totalFiles: number;
+  readonly totalSarifResults: number;
+}
+
 export interface ServerOptions {
   readonly graphStore: GraphStore;
   readonly searchStore: SearchStore;
@@ -15,6 +21,9 @@ export interface ServerOptions {
   readonly port?: number; // default: 3001
   readonly host?: string; // default: "127.0.0.1"
   readonly token?: string; // bearer token for HTTP auth
+  readonly mirrorDir?: string; // directory for bare clones (default: "./mirrors")
+  /** Optional callback to run the full indexing pipeline for a single repo. */
+  readonly indexRepo?: (repoConfig: { name: string; localPath: string; bare: boolean }) => Promise<IndexRepoResult>;
 }
 
 function createMcpServer(opts: ServerOptions): McpServer {

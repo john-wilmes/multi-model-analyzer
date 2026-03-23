@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { GraphStore, SearchStore, KVStore } from "@mma/storage";
 import { getSarifResultsPaginated } from "@mma/storage";
@@ -19,10 +20,18 @@ import {
 import type { ModuleMetrics, RepoMetricsSummary } from "@mma/core";
 import { z } from "zod";
 
+export interface IndexRepoResult {
+  readonly hadChanges: boolean;
+  readonly totalFiles: number;
+  readonly totalSarifResults: number;
+}
+
 export interface Stores {
   readonly graphStore: GraphStore;
   readonly searchStore: SearchStore;
   readonly kvStore: KVStore;
+  readonly mirrorDir?: string;
+  readonly indexRepo?: (repoConfig: { name: string; localPath: string; bare: boolean }) => Promise<IndexRepoResult>;
 }
 
 type ContentItem =
@@ -46,7 +55,7 @@ function paginated<T>(items: readonly T[], offset: number, limit: number): { tot
 }
 
 export function registerTools(server: McpServer, stores: Stores): void {
-  const { graphStore, searchStore, kvStore } = stores;
+  const { graphStore, searchStore, kvStore, mirrorDir, indexRepo } = stores;
 
   // 1. Natural language query (catch-all)
   server.registerTool("query", {
@@ -622,16 +631,15 @@ export function registerTools(server: McpServer, stores: Stores): void {
     });
   });
 
-  // 17. Index a single repository (clone + state transition)
+  // 17. Index a single repository (clone + full pipeline)
   server.registerTool("index_repo", {
-    description: "Index a single repository. Clones (if needed), runs the full analysis pipeline, and discovers connections to other repos.",
+    description: "Index a single repository. Clones (if needed), runs the full analysis pipeline, and updates cross-repo correlations.",
     inputSchema: {
       name: z.string().describe("Repository name (must be a registered candidate or provide url)"),
       url: z.string().optional().describe("Clone URL (uses stored URL if repo is already a candidate)"),
       branch: z.string().optional().describe("Branch to index (default: main)"),
-      mirrorDir: z.string().optional().describe("Directory for bare clones (default: ./mirrors)"),
     },
-  }, async ({ name, url, branch, mirrorDir }) => {
+  }, async ({ name, url, branch }) => {
     const { RepoStateManager } = await import("@mma/correlation");
     const stateManager = new RepoStateManager(kvStore);
 
@@ -657,16 +665,29 @@ export function registerTools(server: McpServer, stores: Stores): void {
       const { cloneOrFetch } = await import("@mma/ingestion");
       const resolvedMirrorDir = mirrorDir ?? "./mirrors";
 
-      // Note: Full indexing requires the CLI indexCommand which has many deps.
-      // For MCP context, we do a lightweight version: clone + register state.
-      // The actual indexing pipeline should be triggered via CLI.
+      // Clone or fetch the repository
       await cloneOrFetch(repoUrl, name, { mirrorDir: resolvedMirrorDir, branch });
-      await stateManager.markIndexed(name);
+      const localPath = join(resolvedMirrorDir, `${name}.git`);
 
+      // Run full pipeline if indexRepo callback is wired up by the CLI
+      if (indexRepo) {
+        const result = await indexRepo({ name, localPath, bare: true });
+        await stateManager.markIndexed(name);
+        return jsonResult({
+          status: "indexed",
+          name,
+          hadChanges: result.hadChanges,
+          totalFiles: result.totalFiles,
+          totalSarifResults: result.totalSarifResults,
+        });
+      }
+
+      // Fallback: clone only (MCP server started without an indexRepo callback)
+      await stateManager.markIndexed(name);
       return jsonResult({
-        status: "indexed",
+        status: "cloned",
         name,
-        message: `Repository "${name}" cloned successfully. Run the full index pipeline via CLI for complete analysis.`,
+        message: `Repository "${name}" cloned but full analysis requires the MCP server to be started with indexRepo support. Run "mma index" via CLI for complete analysis.`,
       });
     } catch (err) {
       // Reset state back to "candidate" so the repo can be retried

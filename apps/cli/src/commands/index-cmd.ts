@@ -1200,7 +1200,8 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         let tier1ReadErrors = 0;
         let tier1CacheHits = 0;
         const BATCH_SIZE = 20;
-        // Source snippets for tier-3 context (entityId → first ~30 lines of symbol body)
+        // Source snippets for tier-3 context (only needed when --enrich is set and API budget allows)
+        const needSnippets = !!(options.enrich && options.anthropicApiKey && options.maxApiCalls !== 0);
         const sourceContextMap = new Map<string, string>();
         const MAX_SNIPPET_LINES = 30;
         const isBareForTier1 = await checkBareRepo(repo.localPath);
@@ -1258,7 +1259,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
                 if (summaries.length > 0) {
                   await kvStore.set(cacheKey, JSON.stringify(summaries));
                 }
-                return { summaries, symbols: pf.symbols, sourceLines: sourceText.split("\n"), filePath: pf.path };
+                return { summaries, symbols: pf.symbols, sourceLines: needSnippets ? sourceText.split("\n") : null, filePath: pf.path };
               } catch {
                 tier1ReadErrors++;
                 return { summaries: [] as Summary[], symbols: pf.symbols, sourceLines: null as string[] | null, filePath: pf.path };
@@ -1338,6 +1339,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
             }
           }
         }
+        sourceContextMap.clear(); // free snippet memory after tier-3
 
         // Tier 4: Sonnet for service-level summaries
         let tier4Count = 0;
@@ -1384,13 +1386,27 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
           }
         }
 
-        // Index summaries in search store for query support
-        const searchDocs = [...summaryMap.values()].map((s) => ({
-          id: s.entityId,
-          content: `${s.entityId} ${s.description}`,
-          metadata: { tier: String(s.tier), repo: repo.name },
-        }));
-        await options.searchStore.index(searchDocs);
+        // Index summaries in search store for query support (batched to limit memory)
+        const SEARCH_BATCH = 1000;
+        let searchDocs: Array<{
+          id: string;
+          content: string;
+          metadata: { tier: string; repo: string };
+        }> = [];
+        for (const s of summaryMap.values()) {
+          searchDocs.push({
+            id: s.entityId,
+            content: `${s.entityId} ${s.description}`,
+            metadata: { tier: String(s.tier), repo: repo.name },
+          });
+          if (searchDocs.length === SEARCH_BATCH) {
+            await options.searchStore.index(searchDocs);
+            searchDocs = [];
+          }
+        }
+        if (searchDocs.length > 0) {
+          await options.searchStore.index(searchDocs);
+        }
 
         const tierBreakdown = [
           `${tier1Count} tier-1`,
