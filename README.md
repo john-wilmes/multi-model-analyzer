@@ -22,7 +22,7 @@
 - [Getting Started Guide](#getting-started-guide)
 - [License](#license)
 
-Static analysis toolchain for TypeScript monorepos. Index hundreds of repos, surface structural debt, fault risks, and cross-repo coupling -- then explore results in a web dashboard, share baselines with your team, or plug into your IDE via MCP. No LLM required.
+Static analysis toolchain for TypeScript monorepos. Index hundreds of repos, surface structural debt, fault risks, and cross-repo coupling -- then explore results in a web dashboard, share baselines with your team, or plug into your IDE via MCP. No cloud API required.
 
 <p align="center">
   <img src="docs/ecosystem-venn.svg" alt="MMA ecosystem capability map" width="800">
@@ -78,7 +78,7 @@ All findings are SARIF v2.1.0 with logical locations only -- no source code leav
 - Design pattern detection (adapter, facade, observer, factory, singleton, repository, middleware, decorator)
 - Baseline sharing for incremental reindexing across teams — see [docs/baseline-sharing.md](docs/baseline-sharing.md)
 - Pluggable storage backends: SQLite (default) and Kuzu graph DB (`--backend kuzu`)
-- No LLM required for core analysis — everything runs locally
+- No cloud API required — everything runs locally (including optional Ollama LLM enrichment)
 
 ### Dashboard
 
