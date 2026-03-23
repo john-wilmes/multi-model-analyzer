@@ -35,5 +35,8 @@ coverage/
 # Corpus data (local only)
 data-*/
 
+# Logs
+*.log
+
 # Test results
 test-results/
