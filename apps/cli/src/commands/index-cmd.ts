@@ -1388,13 +1388,23 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
 
         // Index summaries in search store for query support (batched to limit memory)
         const SEARCH_BATCH = 1000;
-        const summaryValues = [...summaryMap.values()];
-        for (let si = 0; si < summaryValues.length; si += SEARCH_BATCH) {
-          const searchDocs = summaryValues.slice(si, si + SEARCH_BATCH).map((s) => ({
+        let searchDocs: Array<{
+          id: string;
+          content: string;
+          metadata: { tier: string; repo: string };
+        }> = [];
+        for (const s of summaryMap.values()) {
+          searchDocs.push({
             id: s.entityId,
             content: `${s.entityId} ${s.description}`,
             metadata: { tier: String(s.tier), repo: repo.name },
-          }));
+          });
+          if (searchDocs.length === SEARCH_BATCH) {
+            await options.searchStore.index(searchDocs);
+            searchDocs = [];
+          }
+        }
+        if (searchDocs.length > 0) {
           await options.searchStore.index(searchDocs);
         }
 
