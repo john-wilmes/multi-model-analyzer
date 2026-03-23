@@ -31,3 +31,9 @@ Thumbs.db
 
 # Test coverage
 coverage/
+
+# Corpus data (local only)
+data-*/
+
+# Test results
+test-results/

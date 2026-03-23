@@ -7,6 +7,9 @@
     "type": "git",
     "url": "https://github.com/john-wilmes/multi-model-analyzer.git"
   },
+  "bugs": {
+    "url": "https://github.com/john-wilmes/multi-model-analyzer/issues"
+  },
   "homepage": "https://github.com/john-wilmes/multi-model-analyzer",
   "keywords": [
     "static-analysis",
@@ -27,7 +30,8 @@
     "apps/cli/dist",
     "apps/dashboard/dist",
     "packages/*/dist",
-    "packages/models/*/dist"
+    "packages/models/*/dist",
+    "packages/parsing/wasm"
   ],
   "engines": {
     "node": ">=22.0.0"

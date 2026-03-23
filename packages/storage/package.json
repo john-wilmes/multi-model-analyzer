@@ -1,6 +1,8 @@
 {
   "name": "@mma/storage",
   "version": "1.0.0",
+  "license": "MIT",
+  "private": true,
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
