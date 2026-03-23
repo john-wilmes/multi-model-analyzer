@@ -52,13 +52,13 @@ That output is real -- [TypeORM](https://github.com/typeorm/typeorm) (3,371 modu
 |----------|------|---------|
 | **Structural** | Unstable dependencies, dead exports, pain zone modules | "Module A (stable) depends on module B (unstable) -- inverted dependency direction" |
 | **Fault** | Unhandled error paths, silent catch blocks, missing re-throws | "Catch block in `handler` has no logging or re-throw" |
-| **Blast radius** | High-PageRank modules where changes ripple widely | "This module's public API affects 40% of the import graph" |
+| **Blast radius** | High-PageRank modules where changes ripple widely | "Changes to this file affect many dependents" |
 
 All findings are SARIF v2.1.0 with logical locations only -- no source code leaves your machine.
 
 ## Key Features
 
-- Cross-repo analysis across hundreds of TypeScript repositories
+- Cross-repo analysis across multiple TypeScript repositories
 - SARIF v2.1.0 output with built-in anonymization for safe sharing
 - MCP server for IDE/agent integration (`mma serve`) — stdio or HTTP transport
 - Web dashboard with dependency graphs, blast radius, and service catalog views
@@ -72,7 +72,7 @@ See [where MMA fits in the ecosystem](docs/ecosystem-venn.svg) for a capability 
 
 ### Dashboard
 
-The web dashboard provides interactive dependency graphs, blast radius visualization, service health overview, cross-repo correlation views, feature flag inventory, and fault tree exploration. Launch it with `mma dashboard` (default port 3000).
+The web dashboard provides interactive dependency graphs, blast radius visualization, service health overview, cross-repo correlation views, feature flag inventory, and cascading fault analysis. Launch it with `mma dashboard` (default port 3000).
 
 ## Quick Start
 
