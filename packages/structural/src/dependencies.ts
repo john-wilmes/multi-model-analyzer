@@ -13,11 +13,20 @@ import type { TreeSitterNode, TreeSitterTree } from "@mma/parsing";
 export interface DependencyGraphOptions {
   readonly detectCircular: boolean;
   readonly ignorePatterns: readonly string[];
+  /**
+   * When true, barrel-mediated cycles are removed from `circularDependencies`
+   * at detection time.  A cycle is barrel-mediated when at least one node in
+   * the cycle is an `index.{ts,tsx,js,jsx}` file whose entire body consists of
+   * re-export statements (see `isBarrelFile`).  Requires `detectCircular: true`
+   * and the `files` argument to `extractDependencyGraph`.
+   */
+  readonly suppressBarrelCycles: boolean;
 }
 
 const DEFAULT_OPTIONS: DependencyGraphOptions = {
   detectCircular: true,
   ignorePatterns: ["node_modules"],
+  suppressBarrelCycles: false,
 };
 
 export function extractDependencyGraph(
@@ -71,9 +80,16 @@ export function extractDependencyGraph(
     }
   }
 
-  const circularDependencies = opts.detectCircular
+  let circularDependencies = opts.detectCircular
     ? findCircularDependencies(edges)
     : [];
+
+  if (opts.suppressBarrelCycles && circularDependencies.length > 0) {
+    const annotated = tagBarrelMediatedCycles(circularDependencies, files, repo);
+    circularDependencies = annotated
+      .filter((a) => !a.barrelMediated)
+      .map((a) => a.cycle);
+  }
 
   return { repo, edges, circularDependencies };
 }
