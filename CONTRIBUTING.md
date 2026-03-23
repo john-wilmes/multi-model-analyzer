@@ -30,7 +30,7 @@ Monorepo with npm workspaces. 15 packages under `packages/` plus 2 apps (`apps/c
 | `packages/parsing` | AST parsing (tree-sitter + ts-morph) |
 | `packages/structural` | Call/dependency/control-flow graphs |
 | `packages/heuristics` | Service inference, pattern detection |
-| `packages/summarization` | 4-tier description generation |
+| `packages/summarization` | 3-tier description generation |
 | `packages/storage` | Graph, search, KV stores (SQLite) |
 | `packages/storage-kuzu` | Kuzu graph DB backend (optional) |
 | `packages/correlation` | Cross-repo service correlation |

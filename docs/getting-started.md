@@ -9,7 +9,7 @@ This guide walks you through your first analysis in about 15 minutes.
 
 ## Installation
 
-### Option 1: Install globally (once published to npm)
+### Option 1: Install globally
 
 ```bash
 npm install -g multi-model-analyzer

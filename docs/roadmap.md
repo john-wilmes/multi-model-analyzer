@@ -4,7 +4,7 @@ Candidate features informed by analysis of comparable open-source projects: [Roa
 
 ## Landscape Summary
 
-No existing tool combines all of what mma does: tree-sitter + ts-morph dual parsing, cross-repo service topology (queue/HTTP/WebSocket), fault tree generation, pattern detection, 4-tier summarization, SARIF output, and natural language query routing -- all without LLM calls at analysis time. Related tools tend to focus on one slice (dependency-cruiser for dep graphs, Jelly for call graphs) or are broader platforms that don't expose raw analytical models (Sourcegraph, CodeScene). The emerging MCP-server tools (Roam Code, Code Pathfinder, CodeMCP) are the most similar in spirit but are younger and primarily designed as AI-agent context providers rather than standalone analysis pipelines.
+No existing tool combines all of what mma does: tree-sitter + ts-morph dual parsing, cross-repo service topology (queue/HTTP/WebSocket), fault tree generation, pattern detection, 3-tier summarization, SARIF output, and natural language query routing -- all without cloud LLM calls at analysis time. Related tools tend to focus on one slice (dependency-cruiser for dep graphs, Jelly for call graphs) or are broader platforms that don't expose raw analytical models (Sourcegraph, CodeScene). The emerging MCP-server tools (Roam Code, Code Pathfinder, CodeMCP) are the most similar in spirit but are younger and primarily designed as AI-agent context providers rather than standalone analysis pipelines.
 
 ## Completed
 
@@ -77,4 +77,4 @@ Areas where mma already has strong capabilities:
 - **Fault tree generation** -- static fault trees derived from call graphs.
 - **SARIF output** -- standardized format with logical locations.
 - **Pattern detection** -- adapter, facade, observer, factory, singleton, repository, middleware, decorator.
-- **4-tier summarization** -- from free AST templates to optional LLM-powered descriptions.
+- **3-tier summarization** -- from free AST templates to optional local Ollama LLM descriptions.

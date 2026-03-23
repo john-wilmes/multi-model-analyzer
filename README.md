@@ -207,7 +207,7 @@ Index-heavy, query-cheap. All analysis runs at index time; queries are lookups a
 ```text
 Repos --> Ingestion --> Parsing --> Structural Analysis --> Heuristic Analysis
                                                                |
-                                          Summarization (tiers 1-4) --> Storage
+                                          Summarization (tiers 1-3) --> Storage
                                                                |
                               Config Model / Fault Model / Functional Model
                                                                |

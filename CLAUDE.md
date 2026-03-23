@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Static analysis toolchain for large TypeScript/JavaScript codebases. Extracts symbols, dependency graphs, call graphs, and architectural patterns without runtime LLM calls. Designed for ~300-repo scale.
+Static analysis toolchain for large TypeScript/JavaScript codebases. Extracts symbols, dependency graphs, call graphs, and architectural patterns without cloud LLM calls. Designed for ~300-repo scale.
 
 ## Architecture
 

@@ -1,5 +1,8 @@
 # MMA Sanity Check Methodology
 
+> **Note:** This methodology was written when tier-4 (Sonnet) and narration layers existed.
+> Those features were removed in PR #88. Sections 2 and 6 are now historical reference only.
+
 How we validate that MMA's analysis output matches reality. Each dimension has a
 test corpus, a validation procedure, and accuracy metrics.
 

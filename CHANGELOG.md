@@ -15,7 +15,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - Hotspot analysis (high churn + complexity detection)
 - Web dashboard (`mma dashboard`) with React 19, Recharts, Cytoscape
 - Baseline sharing via `mma export --raw` and `mma import`
-- LLM narration layer (optional, gated behind API key)
+- Ollama-based LLM enrichment (optional, runs locally)
 - `mma delta` command for PR-level finding diffs
 - `mma catalog` command for service catalog inspection
 - `mma compress` command for DB pruning
@@ -48,12 +48,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - Kuzu graph database backend with automatic migration (v1 -> v2 -> v3)
 - MCP server with 10+ tools for IDE integration (`mma serve`)
 - Flag impact traversal and inventory
-- LLM narration layer (optional, gated behind API key)
+- Ollama-based LLM enrichment (optional, runs locally)
 - Natural language query routing
 - Statistical validation of SARIF findings (`mma validate`)
 - Baseline sharing via `mma export --raw` and `mma import`
 - Local web dashboard (`mma dashboard`)
-- 4-tier summarization (AST templates, heuristics, local LLM, Claude API)
+- 3-tier summarization (AST templates, heuristics, local Ollama LLM)
 - Dual parsing engine: tree-sitter (WASM) + ts-morph (optional)
 - SARIF v2.1.0 diagnostics with built-in redaction
 - SQLite storage (graph, search/FTS5/BM25, KV)
