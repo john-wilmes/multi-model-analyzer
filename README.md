@@ -59,24 +59,26 @@ All findings are SARIF v2.1.0 with logical locations only -- no source code leav
 
 - Cross-repo analysis across hundreds of TypeScript repositories
 - SARIF v2.1.0 output with built-in anonymization for safe sharing
-- MCP server for IDE/agent integration (`mma serve`)
+- MCP server for IDE/agent integration (`mma serve`) — stdio or HTTP transport
 - Web dashboard with dependency graphs, blast radius, and service catalog views
 - 4-tier summarization (2 free local tiers + 2 optional LLM tiers)
 - Design pattern detection (adapter, facade, observer, factory, singleton, repository, middleware, decorator)
 - Baseline sharing for incremental reindexing across teams — see [docs/baseline-sharing.md](docs/baseline-sharing.md)
+- Pluggable storage backends: SQLite (default) and Kuzu graph DB (`--backend kuzu`)
+- Barrel cycle suppression (`suppressBarrelCycles`) to filter index-mediated false positive cycles
+- Worker-thread blast radius computation for large graphs (with timeout fallback)
+- Lazy SARIF pagination for O(limit) result streaming across large repos
 - No LLM required for core analysis — everything runs locally
 
 See [where MMA fits in the ecosystem](docs/ecosystem-venn.svg) for a capability map across related tools.
 
 ### Dashboard
 
-![Dashboard screenshot](docs/dashboard-screenshot.png)
-
-*Web dashboard with dependency graphs, blast radius visualization, and service health overview.*
+The web dashboard provides interactive dependency graphs, blast radius visualization, service health overview, cross-repo correlation views, feature flag inventory, and fault tree exploration. Launch it with `mma dashboard` (default port 3000).
 
 ## Quick Start
 
-If published to npm, you can skip the clone: `npx multi-model-analyzer index -v`. Otherwise:
+If installed globally via `npm link` you can use `mma` directly. Otherwise, after cloning, invoke the CLI as `node apps/cli/dist/index.js`:
 
 ```bash
 # Clone and install
@@ -98,8 +100,8 @@ cat > mma.config.json << 'EOF'
 EOF
 
 # Index and analyze
-npx mma index -v
-npx mma practices
+node apps/cli/dist/index.js index -v
+node apps/cli/dist/index.js practices
 ```
 
 ## Commands
@@ -114,13 +116,24 @@ mma import     Import a raw baseline export into local DB
 mma merge      Combine multiple anonymized export DBs
 mma validate   Statistical validation of SARIF findings quality
 mma affected   Blast radius for a rev range
-mma serve      MCP server for IDE integration (stdio)
+mma serve      MCP server for IDE integration (stdio by default; --transport http for HTTP mode, port 3001)
 mma baseline create  Snapshot findings as known-violations baseline
 mma baseline check   Check for new violations against baseline (exit 1 if found)
 mma delta      Show diff of findings between two runs
 mma catalog    Inspect the inferred service catalog
-mma dashboard  Launch the web dashboard UI
+mma dashboard  Launch the web dashboard UI (default port 3000)
 mma compress   Compress/prune the SQLite DB to reduce disk usage
+mma audit      Parse npm audit JSON and check vulnerability reachability
+mma enrich     Enrich summaries with LLM (Tier 3/4) outside of index
+mma explore    Interactive incremental indexing (guided repo discovery)
+```
+
+Key flags that apply across commands:
+
+```
+--backend kuzu   Use Kuzu graph DB instead of SQLite (applies to index, serve, explore, and others)
+--transport http  Use HTTP transport for MCP server instead of stdio (applies to serve, default port 3001)
+--enrich          Enable LLM enrichment (Tier 3/4) during indexing (requires --api-key or ANTHROPIC_API_KEY)
 ```
 
 ## Examples
