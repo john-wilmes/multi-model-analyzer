@@ -27,28 +27,34 @@ Point `mma` at your TypeScript repos. Get back a health report with structural p
 </p>
 
 ```text
-$ node apps/cli/dist/index.js index -c repos.json
-$ node apps/cli/dist/index.js practices
+$ mma index -c supabase.config.json
+[1/10] supabase-js  [2/10] gotrue-js  ...  [10/10] supabase
+Indexed 10 repos: 9,469 modules, 61,842 edges, 4,488 findings (118s)
 
-Practices Report — Grade: F (0/100) — 1 repo(s)
+$ mma practices
+Practices Report — Grade: F (0/100) — 10 repo(s)
+
+ATDI: 85.1/100 (stable) — 4,488 findings across 10 repos
 
 Category Scorecard:
 Category      Health  Errors  Warnings  Notes  Total
 ------------  ------  ------  --------  -----  -----
-structural    ★☆☆☆☆   0       64        420    484
-fault         ★★☆☆☆   0       15        0      15
-blast-radius  ★★★★★   0       0         10     10
+fault         ★★☆☆☆   0       218       938    1156
+structural    ★☆☆☆☆   0       81        2846   2927
+hotspot       ★★★☆☆   0       0         121    121
+blast-radius  ★★★★★   0       0         93     93
 
 Top Findings:
-Rule                                Category    Level    Count  Score
-----------------------------------  ----------  -------  -----  -----
-structural/unstable-dependency      structural  warning  64     115
-fault/unhandled-error-path          fault       warning  15     95
-structural/dead-export              structural  note     186    75
-structural/pain-zone-module         structural  note     222    75
+Rule                                Category    Level    Count
+----------------------------------  ----------  -------  -----
+structural/dead-export              structural  note     2315
+fault/missing-error-boundary        fault       note     938
+structural/pain-zone-module         structural  note     485
+fault/unhandled-error-path          fault       warning  218
+hotspot/high-churn-complexity       hotspot     note     121
 ```
 
-That output is real -- [TypeORM](https://github.com/typeorm/typeorm) (3,371 modules, 61k call graph edges).
+That output is real — [Supabase](https://github.com/supabase) ecosystem (10 repos, 9,469 modules, 61k edges).
 
 ## What It Finds
 
