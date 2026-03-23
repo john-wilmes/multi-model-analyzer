@@ -22,7 +22,7 @@ export default function FeatureFlagsTable({ repo }: Props) {
     setLoading(true);
     setPage(0);
     fetchCrossRepoFeatures(repo)
-      .then((data) => setFlags(data.flags))
+      .then((data) => setFlags(Array.isArray(data?.flags) ? data.flags : []))
       .catch(() => setFlags([]))
       .finally(() => setLoading(false));
   }, [repo]);

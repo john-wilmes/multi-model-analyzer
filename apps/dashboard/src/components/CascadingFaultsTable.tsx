@@ -22,7 +22,7 @@ export default function CascadingFaultsTable({ repo }: Props) {
     setLoading(true);
     setPage(0);
     fetchCrossRepoFaults(repo)
-      .then((data) => setFaultLinks(data.faultLinks))
+      .then((data) => setFaultLinks(Array.isArray(data?.faultLinks) ? data.faultLinks : []))
       .catch(() => setFaultLinks([]))
       .finally(() => setLoading(false));
   }, [repo]);

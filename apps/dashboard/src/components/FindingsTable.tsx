@@ -124,7 +124,7 @@ export default function FindingsTable() {
 
     fetchFindings(qs)
       .then((data) => {
-        setFindings((data.results ?? []) as Finding[]);
+        setFindings((Array.isArray(data?.results) ? data.results : []) as Finding[]);
         setTotal(data.total ?? 0);
       })
       .catch((err: unknown) => console.error('Failed to fetch findings:', err))
