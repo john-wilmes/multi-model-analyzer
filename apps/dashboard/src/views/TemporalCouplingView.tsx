@@ -19,9 +19,10 @@ const BOILERPLATE_PATTERNS = [
 ];
 
 function isBoilerplate(filePath: string): boolean {
-  const basename = filePath.split('/').pop()?.toLowerCase() ?? '';
+  const normalized = filePath.replace(/\\/g, '/');
+  const basename = normalized.split('/').pop()?.toLowerCase() ?? '';
   if (BOILERPLATE_BASENAMES.has(basename)) return true;
-  const lower = filePath.toLowerCase();
+  const lower = normalized.toLowerCase();
   for (const prefix of BOILERPLATE_PREFIXES) {
     if (lower.includes(`/${prefix}`) || lower.startsWith(prefix)) return true;
   }
