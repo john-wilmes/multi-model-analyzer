@@ -1217,9 +1217,13 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
           metadata: { tier: string; repo: string };
         }> = [];
         for (const s of summaryMap.values()) {
+          // Extract bare symbol name for better BM25 recall (e.g., "signIn" from "src/auth.ts#AuthService.signIn")
+          const hashPart = s.entityId.split("#")[1] ?? "";
+          const symbolName = hashPart.split(".").pop() ?? "";
+          const containerName = hashPart.includes(".") ? hashPart.split(".")[0] ?? "" : "";
           searchDocs.push({
             id: s.entityId,
-            content: `${s.entityId} ${s.description}`,
+            content: [symbolName, containerName, s.entityId, s.description].filter(Boolean).join(" "),
             metadata: { tier: String(s.tier), repo: repo.name },
           });
           if (searchDocs.length === SEARCH_BATCH) {
