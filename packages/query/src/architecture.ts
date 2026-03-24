@@ -82,6 +82,8 @@ export async function executeArchitectureQuery(
   }>();
   const crossEdgeMap = new Map<string, number>();
   const serviceTopology: ServiceLink[] = [];
+  // Cache edges per repo for role inference (avoids double-loading)
+  const repoEdgeCache = new Map<string, { imports: readonly GraphEdge[]; serviceCalls: readonly GraphEdge[] }>();
 
   for (const repoName of reposToProcess) {
     const entry = {
@@ -121,9 +123,24 @@ export async function executeArchitectureQuery(
       });
     }
 
-    // Infer role from per-repo edges (no global scan needed)
-    entry.role = inferRepoRoleFromEdges(repoName, repoImports, repoServiceCalls, allRepoNames);
+    repoEdgeCache.set(repoName, { imports: repoImports, serviceCalls: repoServiceCalls });
     repoMap.set(repoName, entry);
+  }
+
+  // Build fan-in map: how many distinct repos import each target package
+  const packageFanIn = new Map<string, number>();
+  for (const key of crossEdgeMap.keys()) {
+    const [, targetPkg] = key.split("->");
+    if (targetPkg) {
+      packageFanIn.set(targetPkg, (packageFanIn.get(targetPkg) ?? 0) + 1);
+    }
+  }
+
+  // Infer roles now that fan-in data is available
+  for (const repoName of reposToProcess) {
+    const cached = repoEdgeCache.get(repoName)!;
+    const entry = repoMap.get(repoName)!;
+    entry.role = inferRepoRoleFromEdges(repoName, cached.imports, cached.serviceCalls, allRepoNames, packageFanIn, indexedPackages);
   }
 
   // If no repoFilter, also add repos we didn't process (they have zero edges in filter scope)
@@ -178,17 +195,34 @@ export async function executeArchitectureQuery(
   return { repos, crossRepoEdges, serviceTopology, description };
 }
 
+/** Package names that indicate a shared-library repo */
+const LIBRARY_NAME_PATTERNS = ["lib", "shared", "common", "utils", "types", "sdk", "helpers"];
+
+/** HTTP server frameworks whose presence signals a backend service */
+const SERVER_FRAMEWORK_IMPORTS = new Set([
+  "express", "fastify", "koa", "hapi", "@hapi/hapi",
+  "@hapi/server", "restify", "polka", "micro",
+]);
+
+/** Frontend framework imports */
+const FRONTEND_FRAMEWORK_IMPORTS = new Set([
+  "react", "react-dom", "vue", "next", "@angular/core",
+  "svelte", "solid-js", "@remix-run/react",
+]);
+
 /**
- * Infer repo role using only the edges for this specific repo.
- * The allRepoNames set is used for the "imported by others" heuristic —
- * we check if the repo name appears in any other repo's import targets.
- * This avoids loading a global edge list.
+ * Infer repo role using the edges for this specific repo plus cross-repo fan-in data.
+ *
+ * @param packageFanIn - map of package name → number of distinct repos that import it
+ * @param indexedPackages - set of package names from indexed repos (used to match repo to package)
  */
 function inferRepoRoleFromEdges(
   repoName: string,
   repoImports: readonly GraphEdge[],
   repoServiceCalls: readonly GraphEdge[],
   _allRepoNames: ReadonlySet<string>,
+  packageFanIn: ReadonlyMap<string, number>,
+  indexedPackages: ReadonlySet<string>,
 ): RepoSummary["role"] {
   // Count producer vs consumer edges
   const producers = repoServiceCalls.filter(
@@ -201,37 +235,70 @@ function inferRepoRoleFromEdges(
     (e) => e.metadata?.protocol === "http",
   ).length;
 
-  // Heuristic: frontend repos have mostly HTTP client calls and import React/Vue/Angular
-  const hasReactImports = repoImports.some(
-    (e) =>
-      e.target === "react" ||
-      e.target === "react-dom" ||
-      e.target === "vue" ||
-      e.target === "next" ||
-      e.target === "@angular/core",
+  // Heuristic: frontend repos import React/Vue/Angular and make HTTP calls
+  const hasFrontendImports = repoImports.some(
+    (e) => FRONTEND_FRAMEWORK_IMPORTS.has(e.target),
   );
 
-  if (hasReactImports && httpClients > 0 && consumers === 0) {
+  if (hasFrontendImports && httpClients > 0 && consumers === 0) {
     return "frontend";
   }
 
-  // Shared libraries: few service calls and name contains "lib"
+  // Frontend can also be detected without HTTP calls if the repo is purely UI
+  // (e.g., component library with React but no service calls at all)
+  if (hasFrontendImports && repoServiceCalls.length === 0) {
+    // If the repo name also suggests a library, prefer shared-library
+    const nameSuggestsLibrary = LIBRARY_NAME_PATTERNS.some(
+      (p) => repoName.toLowerCase().includes(p),
+    );
+    if (!nameSuggestsLibrary) {
+      return "frontend";
+    }
+  }
+
+  // Cross-repo fan-in: if 3+ other repos import a package matching this repo → shared-library
+  // Match the repo name against indexed package names
+  const matchingPackage = [...indexedPackages].find(
+    (pkg) => pkg.includes(repoName) || repoName.includes(pkg.replace(/^@[^/]+\//, "")),
+  );
+  if (matchingPackage) {
+    const fanIn = packageFanIn.get(matchingPackage) ?? 0;
+    if (fanIn >= 3 && producers === 0 && consumers === 0) {
+      return "shared-library";
+    }
+  }
+
+  // Shared libraries: no service calls and name suggests a library
   if (
     producers === 0 &&
     consumers === 0 &&
-    repoName.includes("lib")
+    LIBRARY_NAME_PATTERNS.some((p) => repoName.toLowerCase().includes(p))
   ) {
     return "shared-library";
   }
 
-  // Backend services: have queue producers/consumers or NestJS imports
+  // Backend services: HTTP server frameworks
+  const hasServerFramework = repoImports.some(
+    (e) => SERVER_FRAMEWORK_IMPORTS.has(e.target),
+  );
+  if (hasServerFramework) {
+    return "backend-service";
+  }
+
+  // Backend services: NestJS imports
   const hasNestImports = repoImports.some(
-    (e) =>
-      e.target === "@nestjs/core" ||
-      e.target === "@nestjs/common" ||
-      e.target.startsWith("@nestjs/"),
+    (e) => e.target.startsWith("@nestjs/"),
   );
   if (hasNestImports || producers > 0 || consumers > 0) {
+    return "backend-service";
+  }
+
+  // Node.js builtin imports (node:http, node:fs, etc.) combined with no frontend
+  // signals suggest a backend or CLI tool
+  const nodeBuiltinCount = repoImports.filter(
+    (e) => e.target.startsWith("node:"),
+  ).length;
+  if (nodeBuiltinCount >= 3 && !hasFrontendImports) {
     return "backend-service";
   }
 
