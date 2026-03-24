@@ -4,6 +4,16 @@
 
 import type { GraphEdge, RepoConfig, SarifResult, ServiceCatalogEntry } from "@mma/core";
 
+/** A symbol imported from another repo, resolved to its definition. */
+export interface ResolvedImportedSymbol {
+  /** Imported name (e.g. "createClient", "default", "*"). */
+  readonly name: string;
+  /** Canonical file ID where the symbol is actually defined (repo:path). */
+  readonly targetFileId: string;
+  /** SymbolKind from the export (function, class, type, etc.). */
+  readonly kind: string;
+}
+
 /** A cross-repo edge with resolved source and target repos. */
 export interface ResolvedCrossRepoEdge {
   readonly edge: GraphEdge;

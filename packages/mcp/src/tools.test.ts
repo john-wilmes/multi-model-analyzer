@@ -99,6 +99,7 @@ describe("registerTools", () => {
       "scan_org", "get_repo_candidates", "index_repo",
       "ignore_repo", "get_indexing_state", "check_new_repos",
       "get_hotspots", "get_temporal_coupling", "get_patterns",
+      "get_symbol_importers",
     ];
 
     for (const tool of expectedTools) {
@@ -633,6 +634,7 @@ const ALL_TOOL_NAMES = [
   "scan_org", "get_repo_candidates", "index_repo",
   "ignore_repo", "get_indexing_state", "check_new_repos",
   "get_hotspots", "get_temporal_coupling", "get_patterns",
+  "get_symbol_importers",
 ] as const;
 
 /** Minimal valid args for every tool so we can invoke them without crashes. */
@@ -662,6 +664,7 @@ const MINIMAL_ARGS: Record<string, Record<string, unknown>> = {
   get_hotspots:           {},
   get_temporal_coupling:  {},
   get_patterns:           {},
+  get_symbol_importers:   { symbol: "createClient" },
 };
 
 function makeSarifStoresWithRepoMetadata(count: number) {
@@ -693,7 +696,7 @@ function makeInvoker(server: ReturnType<typeof createMockServer>) {
 // ---------------------------------------------------------------------------
 
 describe("MCP tool sanity checks", () => {
-  it("all 25 tools return valid JSON content with text entry", async () => {
+  it("all 26 tools return valid JSON content with text entry", async () => {
     const server = createMockServer();
     register(server, makeStores());
     const invoker = makeInvoker(server);
@@ -1148,10 +1151,10 @@ describe("MCP tool sanity checks", () => {
 // ---------------------------------------------------------------------------
 
 describe("MCP meta-sanity checks", () => {
-  it("exactly 25 tools are registered", () => {
+  it("exactly 26 tools are registered", () => {
     const server = createMockServer();
     register(server, makeStores());
-    expect(server.tools.size).toBe(25);
+    expect(server.tools.size).toBe(26);
   });
 
   it("all registered tools have non-empty descriptions", () => {
@@ -1635,5 +1638,257 @@ describe("get_patterns", () => {
     expect(parsed.repo).toBe("missing-repo");
     expect(parsed.patterns).toEqual({});
     expect(parsed.note).toContain("missing-repo");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// get_symbol_importers
+// ---------------------------------------------------------------------------
+
+/** Build a serialized correlation:graph with resolved and/or importedNames metadata. */
+function makeGraphWithSymbols() {
+  return JSON.stringify({
+    edges: [
+      {
+        edge: {
+          source: "repo-a:src/app.ts",
+          target: "repo-b:src/client.ts",
+          kind: "imports",
+          metadata: {
+            importedNames: ["createClient"],
+            resolvedSymbols: [
+              { name: "createClient", targetFileId: "repo-b:src/client.ts", kind: "function" },
+            ],
+          },
+        },
+        sourceRepo: "repo-a",
+        targetRepo: "repo-b",
+        packageName: "@acme/supabase-js",
+      },
+      {
+        edge: {
+          source: "repo-c:src/index.ts",
+          target: "repo-b:src/client.ts",
+          kind: "imports",
+          metadata: {
+            importedNames: ["SupabaseClient"],
+            resolvedSymbols: [
+              { name: "SupabaseClient", targetFileId: "repo-b:src/client.ts", kind: "class" },
+            ],
+          },
+        },
+        sourceRepo: "repo-c",
+        targetRepo: "repo-b",
+        packageName: "@acme/supabase-js",
+      },
+      {
+        edge: {
+          source: "repo-d:src/helper.ts",
+          target: "repo-b:src/client.ts",
+          kind: "imports",
+          metadata: {
+            // Only importedNames, no resolvedSymbols (unresolved edge)
+            importedNames: ["createClient"],
+          },
+        },
+        sourceRepo: "repo-d",
+        targetRepo: "repo-b",
+        packageName: "@acme/supabase-js",
+      },
+    ],
+    repoPairs: ["repo-a->repo-b", "repo-c->repo-b", "repo-d->repo-b"],
+    downstreamMap: [["repo-a", ["repo-b"]], ["repo-c", ["repo-b"]], ["repo-d", ["repo-b"]]],
+    upstreamMap: [["repo-b", ["repo-a", "repo-c", "repo-d"]]],
+  });
+}
+
+describe("get_symbol_importers", () => {
+  it("returns error when no correlation data exists", async () => {
+    const server = createMockServer();
+    register(server, makeStores());
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_symbol_importers", { symbol: "createClient" });
+    const parsed = JSON.parse(result.content[0]!.text!) as { error: string };
+    expect(parsed.error).toContain("No correlation data");
+  });
+
+  it("finds importers by resolvedSymbols match", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("correlation:graph", makeGraphWithSymbols());
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_symbol_importers", { symbol: "createClient" });
+    const parsed = JSON.parse(result.content[0]!.text!) as {
+      symbol: string;
+      importerCount: number;
+      importers: Array<{ sourceRepo: string; resolvedSymbols: unknown[] }>;
+    };
+    expect(parsed.symbol).toBe("createClient");
+    // repo-a has resolvedSymbols match; repo-d has no resolvedSymbols but importedNames match (fallback)
+    // resolvedSymbols take priority — only repo-a returned in primary pass
+    expect(parsed.importerCount).toBeGreaterThanOrEqual(1);
+    const sourceRepos = parsed.importers.map((i) => i.sourceRepo);
+    expect(sourceRepos).toContain("repo-a");
+  });
+
+  it("finds SupabaseClient importer via resolvedSymbols", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("correlation:graph", makeGraphWithSymbols());
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_symbol_importers", { symbol: "SupabaseClient" });
+    const parsed = JSON.parse(result.content[0]!.text!) as {
+      importerCount: number;
+      importers: Array<{ sourceRepo: string }>;
+    };
+    expect(parsed.importerCount).toBe(1);
+    expect(parsed.importers[0]!.sourceRepo).toBe("repo-c");
+  });
+
+  it("falls back to importedNames when no resolvedSymbols match", async () => {
+    // Build a graph with only importedNames (no resolvedSymbols at all)
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("correlation:graph", JSON.stringify({
+      edges: [
+        {
+          edge: {
+            source: "repo-a:src/app.ts",
+            target: "repo-b:src/lib.ts",
+            kind: "imports",
+            metadata: { importedNames: ["helperFn"] },
+          },
+          sourceRepo: "repo-a",
+          targetRepo: "repo-b",
+          packageName: "@acme/lib",
+        },
+      ],
+      repoPairs: ["repo-a->repo-b"],
+      downstreamMap: [["repo-a", ["repo-b"]]],
+      upstreamMap: [["repo-b", ["repo-a"]]],
+    }));
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_symbol_importers", { symbol: "helperFn" });
+    const parsed = JSON.parse(result.content[0]!.text!) as {
+      importerCount: number;
+      importers: Array<{ sourceRepo: string; resolvedSymbols: unknown[] }>;
+    };
+    expect(parsed.importerCount).toBe(1);
+    expect(parsed.importers[0]!.sourceRepo).toBe("repo-a");
+    // Fallback match has empty resolvedSymbols
+    expect(parsed.importers[0]!.resolvedSymbols).toEqual([]);
+  });
+
+  it("returns empty importers when symbol not found", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("correlation:graph", makeGraphWithSymbols());
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_symbol_importers", { symbol: "nonExistentSymbol" });
+    const parsed = JSON.parse(result.content[0]!.text!) as { importerCount: number; importers: unknown[] };
+    expect(parsed.importerCount).toBe(0);
+    expect(parsed.importers).toHaveLength(0);
+  });
+
+  it("filters importers by package name", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("correlation:graph", JSON.stringify({
+      edges: [
+        {
+          edge: {
+            source: "repo-a:src/app.ts",
+            target: "repo-b:src/client.ts",
+            kind: "imports",
+            metadata: {
+              importedNames: ["createClient"],
+              resolvedSymbols: [{ name: "createClient", targetFileId: "repo-b:src/client.ts", kind: "function" }],
+            },
+          },
+          sourceRepo: "repo-a",
+          targetRepo: "repo-b",
+          packageName: "@acme/supabase-js",
+        },
+        {
+          edge: {
+            source: "repo-x:src/app.ts",
+            target: "repo-y:src/lib.ts",
+            kind: "imports",
+            metadata: {
+              importedNames: ["createClient"],
+              resolvedSymbols: [{ name: "createClient", targetFileId: "repo-y:src/lib.ts", kind: "function" }],
+            },
+          },
+          sourceRepo: "repo-x",
+          targetRepo: "repo-y",
+          packageName: "@other/lib",
+        },
+      ],
+      repoPairs: ["repo-a->repo-b", "repo-x->repo-y"],
+      downstreamMap: [["repo-a", ["repo-b"]], ["repo-x", ["repo-y"]]],
+      upstreamMap: [["repo-b", ["repo-a"]], ["repo-y", ["repo-x"]]],
+    }));
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_symbol_importers", { symbol: "createClient", package: "@acme/supabase-js" });
+    const parsed = JSON.parse(result.content[0]!.text!) as {
+      importerCount: number;
+      importers: Array<{ sourceRepo: string; packageName: string }>;
+    };
+    expect(parsed.importerCount).toBe(1);
+    expect(parsed.importers[0]!.sourceRepo).toBe("repo-a");
+    expect(parsed.importers[0]!.packageName).toBe("@acme/supabase-js");
+  });
+
+  it("filters importers by target repo", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("correlation:graph", makeGraphWithSymbols());
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    // Filter to edges targeting repo-b — createClient is imported from repo-a and repo-d
+    const result = await invoker("get_symbol_importers", { symbol: "createClient", repo: "repo-b" });
+    const parsed = JSON.parse(result.content[0]!.text!) as {
+      importerCount: number;
+      importers: Array<{ targetRepo: string }>;
+    };
+    // All returned importers should target repo-b
+    expect(parsed.importers.every((i) => i.targetRepo === "repo-b")).toBe(true);
+  });
+
+  it("returns symbol and package in response", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("correlation:graph", makeGraphWithSymbols());
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_symbol_importers", { symbol: "createClient", package: "@acme/supabase-js" });
+    const parsed = JSON.parse(result.content[0]!.text!) as { symbol: string; package: string | null };
+    expect(parsed.symbol).toBe("createClient");
+    expect(parsed.package).toBe("@acme/supabase-js");
+  });
+
+  it("returns null package when no package filter given", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("correlation:graph", makeGraphWithSymbols());
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_symbol_importers", { symbol: "createClient" });
+    const parsed = JSON.parse(result.content[0]!.text!) as { package: string | null };
+    expect(parsed.package).toBeNull();
   });
 });

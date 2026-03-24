@@ -31,7 +31,7 @@ import { createSarifResult, createLogicalLocation } from "@mma/core";
 import { detectChanges, classifyFiles, getFileContent, getFileContentBatch, getHeadCommit, isBareRepo, getCommitHistory } from "@mma/ingestion";
 import { parseFiles } from "@mma/parsing";
 import type { TreeSitterTree } from "@mma/parsing";
-import { extractDependencyGraph, buildControlFlowGraph, createCfgIdCounter, extractCallEdgesFromTreeSitter, computeModuleMetrics, summarizeRepoMetrics, detectDeadExports, detectInstabilityViolations, extractHeritageEdges, tagBarrelMediatedCycles } from "@mma/structural";
+import { extractDependencyGraph, buildControlFlowGraph, createCfgIdCounter, extractCallEdgesFromTreeSitter, computeModuleMetrics, summarizeRepoMetrics, detectDeadExports, detectInstabilityViolations, extractHeritageEdges, tagBarrelMediatedCycles, getBarrelPaths } from "@mma/structural";
 import type { TreeSitterNode } from "@mma/parsing";
 import { buildFeatureModel, extractConstraintsFromCode, validateFeatureModel } from "@mma/model-config";
 import { identifyLogRoots, traceBackwardFromLog, buildFaultTree, analyzeGaps, analyzeCascadingRisk, FAULT_RULES } from "@mma/model-fault";
@@ -537,6 +537,11 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         const annotated = tagBarrelMediatedCycles(graph.circularDependencies, trees, repo.name);
         const barrelFlags = annotated.map((a) => a.barrelMediated);
         await kvStore.set(`circularDepsBarrel:${repo.name}`, JSON.stringify(barrelFlags));
+        // Persist barrel file paths for cross-repo symbol resolution.
+        const barrelPaths = getBarrelPaths(trees);
+        if (barrelPaths.length > 0) {
+          await kvStore.set(`barrelFiles:${repo.name}`, JSON.stringify(barrelPaths));
+        }
         if (graph.circularDependencies.length > 0) {
           const barrelCount = barrelFlags.filter(Boolean).length;
           log(`    ${graph.circularDependencies.length} circular dependencies found (${barrelCount} barrel-mediated)`);

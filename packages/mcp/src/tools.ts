@@ -2,7 +2,7 @@ import { join } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getSarifResultsPaginated } from "@mma/storage";
 import { findDependencyPaths, computeCrossRepoImpact } from "@mma/correlation";
-import type { CrossRepoGraph } from "@mma/correlation";
+import type { CrossRepoGraph, ResolvedImportedSymbol } from "@mma/correlation";
 import {
   routeQuery,
   executeSearchQuery,
@@ -1012,5 +1012,81 @@ export function registerTools(server: McpServer, stores: Stores): void {
     }
 
     return jsonResult({ repos: result });
+  });
+
+  // 24. Cross-repo symbol importers
+  server.registerTool("get_symbol_importers", {
+    description: "Find which repositories import a specific symbol from a package. Requires cross-repo correlation data with symbol resolution.",
+    inputSchema: {
+      symbol: z.string().describe("Symbol name to search for (e.g. 'createClient', 'SupabaseClient')"),
+      package: z.string().optional().describe("Package name to filter by (e.g. '@supabase/supabase-js')"),
+      repo: z.string().optional().describe("Filter to edges targeting this repo"),
+    },
+  }, async ({ symbol, package: pkg, repo }) => {
+    const raw = await kvStore.get("correlation:graph");
+    if (!raw) {
+      return jsonResult({ error: "No correlation data. Run 'mma index' with 2+ repos first." });
+    }
+    const parsed = JSON.parse(raw) as {
+      edges: CrossRepoGraph["edges"];
+      repoPairs: string[];
+      downstreamMap: [string, string[]][];
+      upstreamMap: [string, string[]][];
+    };
+    const graph = deserializeGraph(parsed);
+
+    const matches: Array<{
+      sourceRepo: string;
+      sourceFile: string;
+      targetRepo: string;
+      targetFile: string;
+      packageName: string;
+      resolvedSymbols: ResolvedImportedSymbol[];
+    }> = [];
+
+    for (const resolved of graph.edges) {
+      if (pkg && resolved.packageName !== pkg) continue;
+      if (repo && resolved.targetRepo !== repo) continue;
+
+      const syms = (resolved.edge.metadata?.resolvedSymbols ?? []) as ResolvedImportedSymbol[];
+      const matching = syms.filter((s) => s.name === symbol);
+      if (matching.length > 0) {
+        matches.push({
+          sourceRepo: resolved.sourceRepo,
+          sourceFile: resolved.edge.source,
+          targetRepo: resolved.targetRepo,
+          targetFile: resolved.edge.target,
+          packageName: resolved.packageName,
+          resolvedSymbols: matching,
+        });
+      }
+    }
+
+    // Fall back to unresolved name matching when no resolved symbols found.
+    if (matches.length === 0) {
+      for (const resolved of graph.edges) {
+        if (pkg && resolved.packageName !== pkg) continue;
+        if (repo && resolved.targetRepo !== repo) continue;
+
+        const names = (resolved.edge.metadata?.importedNames ?? []) as string[];
+        if (names.includes(symbol)) {
+          matches.push({
+            sourceRepo: resolved.sourceRepo,
+            sourceFile: resolved.edge.source,
+            targetRepo: resolved.targetRepo,
+            targetFile: resolved.edge.target,
+            packageName: resolved.packageName,
+            resolvedSymbols: [], // unresolved but name-matched
+          });
+        }
+      }
+    }
+
+    return jsonResult({
+      symbol,
+      package: pkg ?? null,
+      importerCount: matches.length,
+      importers: matches,
+    });
   });
 }
