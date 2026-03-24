@@ -383,4 +383,30 @@ describe("resolveSymbolsOnEdges", () => {
     expect(count).toBe(0);
     expect(edges[0]!.edge.metadata!.resolvedSymbols).toBeUndefined();
   });
+
+  it("resolves deep import with out/ → src/ remapping", () => {
+    const exportIndex = makeExportIndex([
+      ["repo-b:src/constants.ts", [["MAX_RETRIES", "const"], ["TIMEOUT", "const"]]],
+    ]);
+    const edges = [makeEdge("repo-a:src/app.ts", "@acme/lib/out/constants", { importedNames: ["MAX_RETRIES"] })];
+
+    const count = resolveSymbolsOnEdges(edges, exportIndex, new Map(), new Map());
+
+    expect(count).toBe(1);
+    const resolved = edges[0]!.edge.metadata!.resolvedSymbols as Array<{ name: string; targetFileId: string }>;
+    expect(resolved[0]!.targetFileId).toBe("repo-b:src/constants.ts");
+  });
+
+  it("resolves deep import with dist/module/ stripping", () => {
+    const exportIndex = makeExportIndex([
+      ["repo-b:src/lib/types.ts", [["DatabaseType", "interface"]]],
+    ]);
+    const edges = [makeEdge("repo-a:src/app.ts", "@acme/lib/dist/module/lib/types", { importedNames: ["DatabaseType"] })];
+
+    const count = resolveSymbolsOnEdges(edges, exportIndex, new Map(), new Map());
+
+    expect(count).toBe(1);
+    const resolved = edges[0]!.edge.metadata!.resolvedSymbols as Array<{ name: string; targetFileId: string }>;
+    expect(resolved[0]!.targetFileId).toBe("repo-b:src/lib/types.ts");
+  });
 });

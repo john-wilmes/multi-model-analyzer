@@ -78,6 +78,26 @@ export async function runCorrelation(
     }
   }
 
+  // Fallback: for packages with no barrel entries, look for common entry points in exportIndex.
+  for (const [pkgName, dirPath] of packageRoots.entries()) {
+    if (packageEntryMap.has(pkgName)) continue;
+    // Find which repo owns this package
+    const repo = repos.find((r) => dirPath === r.localPath || dirPath.startsWith(r.localPath + "/"));
+    if (!repo) continue;
+    const relPrefix = dirPath === repo.localPath ? "" : dirPath.slice(repo.localPath.length + 1) + "/";
+    const candidatePaths = ["src/index.ts", "index.ts", "src/index.tsx", "index.tsx", "src/index.js", "index.js"];
+    const entryIds: string[] = [];
+    for (const cp of candidatePaths) {
+      const fileId = makeFileId(repo.name, relPrefix + cp);
+      if (exportIndex.has(fileId)) {
+        entryIds.push(fileId);
+      }
+    }
+    if (entryIds.length > 0) {
+      packageEntryMap.set(pkgName, entryIds);
+    }
+  }
+
   const resolvedCount = resolveSymbolsOnEdges(
     crossRepoGraph.edges as import("./types.js").ResolvedCrossRepoEdge[],
     exportIndex,
