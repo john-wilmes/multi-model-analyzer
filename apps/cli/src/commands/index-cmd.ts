@@ -1223,7 +1223,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
           const containerName = hashPart.includes(".") ? hashPart.split(".")[0] ?? "" : "";
           searchDocs.push({
             id: s.entityId,
-            content: `${symbolName} ${containerName} ${s.entityId} ${s.description}`,
+            content: [symbolName, containerName, s.entityId, s.description].filter(Boolean).join(" "),
             metadata: { tier: String(s.tier), repo: repo.name },
           });
           if (searchDocs.length === SEARCH_BATCH) {
