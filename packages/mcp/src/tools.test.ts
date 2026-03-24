@@ -310,6 +310,80 @@ describe("get_cross_repo_graph", () => {
     expect(parsed.paths).toBeDefined();
     expect(parsed.paths["repo-a->repo-b"]).toBeDefined();
   });
+
+  it("repoCount reflects filtered edges, not full graph", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    // Two disjoint repo pairs in the graph
+    await stores.kvStore.set("correlation:graph", JSON.stringify({
+      edges: [
+        { edge: { source: "src/a.ts", target: "src/b.ts", kind: "imports", metadata: {} }, sourceRepo: "repo-a", targetRepo: "repo-b", packageName: "@a/b" },
+        { edge: { source: "src/c.ts", target: "src/d.ts", kind: "imports", metadata: {} }, sourceRepo: "repo-c", targetRepo: "repo-d", packageName: "@c/d" },
+      ],
+      repoPairs: ["repo-a->repo-b", "repo-c->repo-d"],
+      downstreamMap: [["repo-a", ["repo-b"]], ["repo-c", ["repo-d"]]],
+      upstreamMap: [["repo-b", ["repo-a"]], ["repo-d", ["repo-c"]]],
+    }));
+    register(server, stores);
+
+    const handler = server.tools.get("get_cross_repo_graph")!.handler;
+    // Filtering to repo-a should only see repo-a + repo-b (2 repos), not all 4
+    const result = await handler({ repo: "repo-a" });
+    const parsed = JSON.parse(result.content[0]!.text) as { repoCount: number; edgeCount: number };
+    expect(parsed.edgeCount).toBe(1);
+    expect(parsed.repoCount).toBe(2); // only repo-a and repo-b, not repo-c/repo-d
+  });
+
+  it("downstreamMap and upstreamMap are filtered when repo is specified", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("correlation:graph", JSON.stringify({
+      edges: [
+        { edge: { source: "src/a.ts", target: "src/b.ts", kind: "imports", metadata: {} }, sourceRepo: "repo-a", targetRepo: "repo-b", packageName: "@a/b" },
+        { edge: { source: "src/c.ts", target: "src/d.ts", kind: "imports", metadata: {} }, sourceRepo: "repo-c", targetRepo: "repo-d", packageName: "@c/d" },
+      ],
+      repoPairs: ["repo-a->repo-b", "repo-c->repo-d"],
+      downstreamMap: [["repo-a", ["repo-b"]], ["repo-c", ["repo-d"]]],
+      upstreamMap: [["repo-b", ["repo-a"]], ["repo-d", ["repo-c"]]],
+    }));
+    register(server, stores);
+
+    const handler = server.tools.get("get_cross_repo_graph")!.handler;
+    const result = await handler({ repo: "repo-a" });
+    const parsed = JSON.parse(result.content[0]!.text) as {
+      downstreamMap: Record<string, string[]>;
+      upstreamMap: Record<string, string[]>;
+    };
+    // repo-c and repo-d should be absent from both maps
+    expect(Object.keys(parsed.downstreamMap)).not.toContain("repo-c");
+    expect(Object.keys(parsed.upstreamMap)).not.toContain("repo-d");
+    // repo-a's downstream entry should be present
+    expect(parsed.downstreamMap["repo-a"]).toEqual(["repo-b"]);
+  });
+
+  it("includePaths uses filteredEdges when repo is specified", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("correlation:graph", JSON.stringify({
+      edges: [
+        { edge: { source: "src/a.ts", target: "src/b.ts", kind: "imports", metadata: {} }, sourceRepo: "repo-a", targetRepo: "repo-b", packageName: "@a/b" },
+        { edge: { source: "src/c.ts", target: "src/d.ts", kind: "imports", metadata: {} }, sourceRepo: "repo-c", targetRepo: "repo-d", packageName: "@c/d" },
+      ],
+      repoPairs: ["repo-a->repo-b", "repo-c->repo-d"],
+      downstreamMap: [["repo-a", ["repo-b"]], ["repo-c", ["repo-d"]]],
+      upstreamMap: [["repo-b", ["repo-a"]], ["repo-d", ["repo-c"]]],
+    }));
+    register(server, stores);
+
+    const handler = server.tools.get("get_cross_repo_graph")!.handler;
+    const result = await handler({ repo: "repo-a", includePaths: true });
+    const parsed = JSON.parse(result.content[0]!.text) as { paths?: Record<string, unknown> };
+    // Paths should only exist between repo-a and repo-b, not involving repo-c/repo-d
+    if (parsed.paths) {
+      expect(Object.keys(parsed.paths).every((k) => k.includes("repo-a") || k.includes("repo-b"))).toBe(true);
+      expect(Object.keys(parsed.paths).some((k) => k.includes("repo-c") || k.includes("repo-d"))).toBe(false);
+    }
+  });
 });
 
 describe("get_service_correlation", () => {
@@ -381,6 +455,48 @@ describe("get_service_correlation", () => {
     };
     expect(parsed.linchpins.results).toHaveLength(1);
     expect(parsed.orphanedServices.results).toHaveLength(0);
+  });
+
+  it("filters template-literal URLs from linchpins", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("correlation:services", JSON.stringify({
+      links: [],
+      linchpins: [
+        { endpoint: "/api/real", producerCount: 1, consumerCount: 1, linkedRepoCount: 2, criticalityScore: 5 },
+        { endpoint: "${BASE_URL}/api/internal", producerCount: 1, consumerCount: 1, linkedRepoCount: 2, criticalityScore: 5 },
+      ],
+      orphanedServices: [],
+    }));
+    register(server, stores);
+
+    const handler = server.tools.get("get_service_correlation")!.handler;
+    const result = await handler({ kind: "linchpins" });
+    const parsed = JSON.parse(result.content[0]!.text) as { linchpins: { results: Array<{ endpoint: string }> } };
+    expect(parsed.linchpins.results).toHaveLength(1);
+    expect(parsed.linchpins.results[0]!.endpoint).toBe("/api/real");
+  });
+
+  it("truncates links to 100 when more than 100 exist", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    const manyLinks = Array.from({ length: 150 }, (_, i) => ({ from: `svc-${i}`, to: `svc-${i + 1}` }));
+    await stores.kvStore.set("correlation:services", JSON.stringify({
+      links: manyLinks,
+      linchpins: [],
+      orphanedServices: [],
+    }));
+    register(server, stores);
+
+    const handler = server.tools.get("get_service_correlation")!.handler;
+    const result = await handler({});
+    const parsed = JSON.parse(result.content[0]!.text) as {
+      links: unknown[];
+      linksTruncated?: { shown: number; total: number };
+    };
+    expect(parsed.links).toHaveLength(100);
+    expect(parsed.linksTruncated).toBeDefined();
+    expect(parsed.linksTruncated!.total).toBe(150);
   });
 });
 
@@ -851,6 +967,24 @@ describe("MCP tool sanity checks", () => {
     const parsed = JSON.parse(result.content[0]!.text!) as { findings: Array<{ ruleId: string }>; total: number };
     expect(parsed.total).toBe(1);
     expect(parsed.findings[0]!.ruleId).toBe("vuln/lodash");
+  });
+
+  it("get_vulnerability severity filter handles uppercase severity values from npm audit", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("sarif:latest:index", JSON.stringify({ repos: ["test-repo"] }));
+    await stores.kvStore.set("sarif:vuln:test-repo", JSON.stringify([
+      { ruleId: "vuln/critical-pkg", level: "error", message: { text: "Critical vuln" }, properties: { severity: "CRITICAL" } },
+      { ruleId: "vuln/low-pkg", level: "note", message: { text: "Low vuln" }, properties: { severity: "low" } },
+    ]));
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    // Filter by "high" — CRITICAL (uppercase) should still be included (CRITICAL >= high)
+    const result = await invoker("get_vulnerability", { severity: "high" });
+    const parsed = JSON.parse(result.content[0]!.text!) as { findings: Array<{ ruleId: string }>; total: number };
+    expect(parsed.total).toBe(1);
+    expect(parsed.findings[0]!.ruleId).toBe("vuln/critical-pkg");
   });
 
   it("get_flag_inventory empty returns empty list", async () => {

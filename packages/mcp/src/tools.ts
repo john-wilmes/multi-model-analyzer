@@ -132,8 +132,14 @@ export function registerTools(server: McpServer, stores: Stores): void {
       truncated["crossRepoEdges"] = result.crossRepoEdges;
     }
     if (result.serviceTopology.length > MAX_TOPOLOGY) {
-      truncated["serviceTopology"] = result.serviceTopology.slice(0, MAX_TOPOLOGY);
-      truncated["serviceTopologyTruncated"] = { shown: MAX_TOPOLOGY, total: result.serviceTopology.length, note: "Use get_service_correlation for full service topology." };
+      // Sort deterministically by sourceRepo+sourceFile before truncating (no count field on ServiceLink)
+      const sortedTopology = [...result.serviceTopology].sort((a, b) => {
+        const aKey = `${(a as { sourceRepo?: string }).sourceRepo ?? ""}:${(a as { sourceFile?: string }).sourceFile ?? ""}`;
+        const bKey = `${(b as { sourceRepo?: string }).sourceRepo ?? ""}:${(b as { sourceFile?: string }).sourceFile ?? ""}`;
+        return aKey.localeCompare(bKey) || JSON.stringify(a).localeCompare(JSON.stringify(b));
+      });
+      truncated["serviceTopology"] = sortedTopology.slice(0, MAX_TOPOLOGY);
+      truncated["serviceTopologyTruncated"] = { shown: MAX_TOPOLOGY, total: result.serviceTopology.length, note: "Results are sorted alphabetically by sourceRepo:sourceFile. Use get_service_correlation for full service topology." };
     } else {
       truncated["serviceTopology"] = result.serviceTopology;
     }
@@ -250,17 +256,50 @@ export function registerTools(server: McpServer, stores: Stores): void {
       ? graph.edges.filter((e) => e.sourceRepo === repo || e.targetRepo === repo)
       : graph.edges;
 
+    // Bug A: repoCount should be derived from filteredEdges, not repoPairs (which is unfiltered)
+    const filteredRepoCount = new Set(filteredEdges.flatMap((e) => [e.sourceRepo, e.targetRepo])).size;
+
+    // Bug B: when repo filter is active, restrict maps to only relevant entries
+    const downstreamEntries = [...graph.downstreamMap.entries()];
+    const upstreamEntries = [...graph.upstreamMap.entries()];
+    const filteredDownstream = repo
+      ? downstreamEntries.filter(([k, v]) => k === repo || v.has(repo))
+      : downstreamEntries;
+    const filteredUpstream = repo
+      ? upstreamEntries.filter(([k, v]) => k === repo || v.has(repo))
+      : upstreamEntries;
+
+    // Filter repoPairs to only include pairs visible in filteredEdges
+    const filteredRepoSet = new Set(filteredEdges.flatMap((e) => [e.sourceRepo, e.targetRepo]));
+    const filteredRepoPairs = repo
+      ? [...graph.repoPairs].filter((pair) => {
+          const [a, b] = pair.split("->");
+          return a && b && filteredRepoSet.has(a) && filteredRepoSet.has(b);
+        })
+      : [...graph.repoPairs];
+
+    // Build a scoped graph for path discovery when filtering by repo
+    const scopedGraph = repo
+      ? {
+          ...graph,
+          edges: filteredEdges,
+          repoPairs: new Set(filteredRepoPairs),
+          downstreamMap: new Map(filteredDownstream),
+          upstreamMap: new Map(filteredUpstream),
+        }
+      : graph;
+
     const result: Record<string, unknown> = {
-      repoCount: new Set([...graph.repoPairs].flatMap((p) => p.split("->"))).size,
+      repoCount: filteredRepoCount,
       edgeCount: filteredEdges.length,
-      repoPairs: [...graph.repoPairs],
+      repoPairs: filteredRepoPairs,
       edges: filteredEdges,
-      downstreamMap: Object.fromEntries([...graph.downstreamMap.entries()].map(([k, v]) => [k, [...v]])),
-      upstreamMap: Object.fromEntries([...graph.upstreamMap.entries()].map(([k, v]) => [k, [...v]])),
+      downstreamMap: Object.fromEntries(filteredDownstream.map(([k, v]) => [k, [...v]])),
+      upstreamMap: Object.fromEntries(filteredUpstream.map(([k, v]) => [k, [...v]])),
     };
 
-    if (includePaths && graph.edges.length > 0) {
-      const repoList = [...new Set(graph.edges.flatMap((e) => [e.sourceRepo, e.targetRepo]))];
+    if (includePaths && filteredEdges.length > 0) {
+      const repoList = [...filteredRepoSet];
       if (repoList.length > 20) {
         result["pathsSkipped"] = true;
         result["pathsSkippedReason"] =
@@ -271,7 +310,7 @@ export function registerTools(server: McpServer, stores: Stores): void {
         for (const src of repoList) {
           for (const tgt of repoList) {
             if (src !== tgt) {
-              const found = findDependencyPaths(src, tgt, graph);
+              const found = findDependencyPaths(src, tgt, scopedGraph);
               if (found.length > 0) {
                 paths[`${src}->${tgt}`] = found;
               }
@@ -305,8 +344,8 @@ export function registerTools(server: McpServer, stores: Stores): void {
       orphanedServices: Array<{ endpoint: string; [key: string]: unknown }>;
     };
 
-    let linchpins = parsed.linchpins;
     // Filter template-literal URLs (test harness noise like ${MAILPIT_URL}/...)
+    let linchpins = parsed.linchpins.filter((l) => !l.endpoint.includes("${"));
     let orphanedServices = parsed.orphanedServices.filter((o) => !o.endpoint.includes("${"));
 
     if (endpoint) {
@@ -325,7 +364,13 @@ export function registerTools(server: McpServer, stores: Stores): void {
       result["orphanedServices"] = paginated(orphanedServices, offset ?? 0, limit ?? 50);
     }
     if (selectedKind === "all") {
-      result["links"] = parsed.links;
+      const MAX_LINKS = 100;
+      result["links"] = parsed.links.length > MAX_LINKS
+        ? parsed.links.slice(0, MAX_LINKS)
+        : parsed.links;
+      if (parsed.links.length > MAX_LINKS) {
+        result["linksTruncated"] = { shown: MAX_LINKS, total: parsed.links.length, note: "Truncated to 100 entries. Request a specific kind (linchpins, orphanedServices) for focused results." };
+      }
     }
 
     return jsonResult(result);
@@ -434,7 +479,7 @@ export function registerTools(server: McpServer, stores: Stores): void {
     const severityOrder = ["low", "moderate", "high", "critical"];
     const minIdx = severity ? severityOrder.indexOf(severity) : 0;
     const filtered = severity
-      ? allResults.filter(r => severityOrder.indexOf(String((r.properties?.severity as string | undefined) ?? "low")) >= minIdx)
+      ? allResults.filter(r => severityOrder.indexOf(String((r.properties?.severity as string | undefined) ?? "low").toLowerCase()) >= minIdx)
       : allResults;
 
     // Paginate
