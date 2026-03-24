@@ -7,6 +7,7 @@
  * @see symbol-resolver.ts for cross-repo symbol resolution logic.
  */
 
+import { posix as path } from "node:path";
 import type { KVStore, GraphStore } from "@mma/storage";
 import { makeFileId } from "@mma/core";
 import type { CorrelationOptions, CorrelationResult } from "./types.js";
@@ -35,6 +36,21 @@ export async function runCorrelation(
 
   // 1b. Resolve imported symbol names on cross-repo edges.
   const exportIndex = await buildExportIndex(kvStore, repos);
+  // Resolve a possibly-relative import target to a canonical file ID.
+  // e.g. source="postgres-meta:src/lib/index.ts", target="./types.js"
+  //   → "postgres-meta:src/lib/types.ts" (or .js if .ts not in exportIndex)
+  const resolveTarget = (source: string, target: string, repo: string): string => {
+    if (!target.startsWith("./") && !target.startsWith("../")) return target;
+    const sourceDir = path.dirname(source.slice(repo.length + 1));
+    const resolved = path.normalize(path.join(sourceDir, target));
+    // Try swapping .js → .ts since sources are typically TypeScript
+    if (resolved.endsWith(".js")) {
+      const tsVariant = makeFileId(repo, resolved.replace(/\.js$/, ".ts"));
+      if (exportIndex.has(tsVariant)) return tsVariant;
+    }
+    return makeFileId(repo, resolved);
+  };
+
   // Build barrel source map: barrelFileId -> file IDs the barrel re-exports from.
   const barrelSourceMap = new Map<string, string[]>();
   const repoBarrelPaths = new Map<string, string[]>();
@@ -49,7 +65,7 @@ export async function runCorrelation(
       const fileId = makeFileId(repo.name, p);
       const sources = importEdges
         .filter((e) => e.source === fileId)
-        .map((e) => e.target);
+        .map((e) => resolveTarget(fileId, e.target, repo.name));
       if (sources.length > 0) {
         barrelSourceMap.set(fileId, sources);
       }
@@ -65,7 +81,7 @@ export async function runCorrelation(
       if (INDEX_RE.test(sourcePath)) {
         const sources = importEdges
           .filter((e) => e.source === edge.source)
-          .map((e) => e.target);
+          .map((e) => resolveTarget(edge.source, e.target, repo.name));
         if (sources.length > 0) {
           barrelSourceMap.set(edge.source, sources);
         }
