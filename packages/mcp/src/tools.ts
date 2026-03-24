@@ -905,7 +905,8 @@ export function registerTools(server: McpServer, stores: Stores): void {
       const json = await kvStore.get(`temporal-coupling:${repo}`);
       if (!json) {
         return jsonResult({
-          pairs: [], total: 0, offset: skip, limit: maxResults, commitsAnalyzed: 0,
+          ...paginated([], skip, maxResults),
+          commitsAnalyzed: 0,
           note: `No temporal coupling data for "${repo}". Temporal coupling requires git history (not available for single-commit bare clones).`,
         });
       }

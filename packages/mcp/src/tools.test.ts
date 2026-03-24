@@ -1522,8 +1522,9 @@ describe("get_temporal_coupling", () => {
     const invoker = makeInvoker(server);
 
     const result = await invoker("get_temporal_coupling", { repo: "nonexistent-repo" });
-    const parsed = JSON.parse(result.content[0]!.text!) as { pairs: unknown[]; commitsAnalyzed: number; note: string };
-    expect(parsed.pairs).toEqual([]);
+    const parsed = JSON.parse(result.content[0]!.text!) as { results: unknown[]; total: number; commitsAnalyzed: number; note: string };
+    expect(parsed.results).toEqual([]);
+    expect(parsed.total).toBe(0);
     expect(parsed.commitsAnalyzed).toBe(0);
     expect(parsed.note).toContain("nonexistent-repo");
   });
