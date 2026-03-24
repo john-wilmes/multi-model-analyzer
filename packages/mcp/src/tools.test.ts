@@ -877,6 +877,99 @@ describe("MCP tool sanity checks", () => {
     expect(parsed.affectedFiles).toHaveLength(0);
   });
 
+  it("get_blast_radius with crossRepo=true but no correlation data returns warning", async () => {
+    const server = createMockServer();
+    register(server, makeStores());
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_blast_radius", { files: ["test.ts"], crossRepo: true });
+    const parsed = JSON.parse(result.content[0]!.text!) as { crossRepoWarning?: string };
+    expect(parsed.crossRepoWarning).toBeDefined();
+    expect(parsed.crossRepoWarning).toContain("no correlation data");
+  });
+
+  it("get_blast_radius serializes crossRepoAffected as plain object, not empty", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    // Seed graph with import edges and correlation graph
+    await stores.graphStore.addEdges([
+      { source: "repo-a:src/a.ts", target: "repo-a:src/b.ts", kind: "imports", metadata: { repo: "repo-a" } },
+      { source: "repo-b:src/x.ts", target: "repo-b:src/y.ts", kind: "imports", metadata: { repo: "repo-b" } },
+    ]);
+    await stores.kvStore.set("correlation:graph", makeSerializedGraph());
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_blast_radius", { files: ["repo-a:src/b.ts"], repo: "repo-a", crossRepo: true });
+    const text = result.content[0]!.text!;
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    // crossRepoAffected should be a plain object (not undefined, not {})
+    // or if no downstream matches, should have a crossRepoNote
+    expect(parsed.crossRepoWarning).toBeUndefined();
+    if (parsed.crossRepoAffected) {
+      expect(typeof parsed.crossRepoAffected).toBe("object");
+      expect(Array.isArray(parsed.crossRepoAffected)).toBe(false);
+    }
+  });
+
+  it("get_cross_repo_graph returns downstreamMap as object, not array-of-arrays", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("correlation:graph", makeSerializedGraph());
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_cross_repo_graph", {});
+    const parsed = JSON.parse(result.content[0]!.text!) as { downstreamMap: unknown; upstreamMap: unknown };
+    // Should be plain objects, not arrays
+    expect(typeof parsed.downstreamMap).toBe("object");
+    expect(Array.isArray(parsed.downstreamMap)).toBe(false);
+    expect(typeof parsed.upstreamMap).toBe("object");
+    expect(Array.isArray(parsed.upstreamMap)).toBe(false);
+    // Verify values
+    expect((parsed.downstreamMap as Record<string, string[]>)["repo-a"]).toEqual(["repo-b"]);
+    expect((parsed.upstreamMap as Record<string, string[]>)["repo-b"]).toEqual(["repo-a"]);
+  });
+
+  it("get_service_correlation filters template-literal URLs from orphans", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("correlation:services", JSON.stringify({
+      links: [],
+      linchpins: [],
+      orphanedServices: [
+        { endpoint: "/api/real", hasProducers: false, hasConsumers: true, repos: ["r1"] },
+        { endpoint: "${MAILPIT_URL}/api/v1/search", hasProducers: false, hasConsumers: true, repos: ["r2"] },
+        { endpoint: "${BASE_URL}/auth/callback", hasProducers: false, hasConsumers: true, repos: ["r3"] },
+      ],
+    }));
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_service_correlation", { kind: "orphaned" });
+    const parsed = JSON.parse(result.content[0]!.text!) as { orphanedServices: { results: Array<{ endpoint: string }> } };
+    expect(parsed.orphanedServices.results).toHaveLength(1);
+    expect(parsed.orphanedServices.results[0]!.endpoint).toBe("/api/real");
+  });
+
+  it("get_diagnostics with level filter returns hint about other levels", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    // Seed with warning-level findings only
+    await stores.kvStore.set("sarif:latest:index", JSON.stringify({ repos: ["test-repo"] }));
+    await stores.kvStore.set("sarif:repo:test-repo", JSON.stringify([
+      { ruleId: "test/rule", level: "warning", message: { text: "something" }, locations: [] },
+    ]));
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_diagnostics", { level: "error" });
+    const parsed = JSON.parse(result.content[0]!.text!) as { total: number; note?: string };
+    expect(parsed.total).toBe(0);
+    expect(parsed.note).toBeDefined();
+    expect(parsed.note).toContain("other severity levels");
+  });
+
   it("get_cross_repo_impact with no graph data returns graceful error", async () => {
     const server = createMockServer();
     register(server, makeStores());

@@ -70,9 +70,9 @@ export function registerTools(server: McpServer, stores: Stores): void {
 
   // 3. Who calls a symbol
   server.registerTool("get_callers", {
-    description: "Find all callers of a symbol. Accepts fully qualified names (file.ts#ClassName) or short names (resolved via BM25 fallback).",
+    description: "Find all callers of a symbol. Best results with fully qualified names like 'src/auth.ts#AuthService.signIn' or 'file.ts#ClassName'. Short names like 'signIn' use BM25 fallback (less precise). Use 'search' first to find the exact symbol ID if unsure.",
     inputSchema: {
-      symbol: z.string().describe("Symbol name or FQN to look up callers for"),
+      symbol: z.string().describe("Symbol FQN (e.g. 'src/auth.ts#AuthService.signIn') or short name (BM25 fallback)"),
       repo: z.string().optional().describe("Filter to a specific repository name"),
     },
   }, async ({ symbol, repo }) => {
@@ -82,9 +82,9 @@ export function registerTools(server: McpServer, stores: Stores): void {
 
   // 4. What does a symbol call
   server.registerTool("get_callees", {
-    description: "Find all symbols called by a given symbol. Accepts fully qualified names or short names.",
+    description: "Find all symbols called by a given symbol. Best results with fully qualified names like 'src/auth.ts#AuthService.signIn'. Short names use BM25 fallback. Use 'search' first to find the exact symbol ID if unsure.",
     inputSchema: {
-      symbol: z.string().describe("Symbol name or FQN to look up callees for"),
+      symbol: z.string().describe("Symbol FQN (e.g. 'src/auth.ts#AuthService.signIn') or short name (BM25 fallback)"),
       repo: z.string().optional().describe("Filter to a specific repository name"),
     },
   }, async ({ symbol, repo }) => {
@@ -116,7 +116,28 @@ export function registerTools(server: McpServer, stores: Stores): void {
     },
   }, async ({ repo }) => {
     const result = await executeArchitectureQuery(graphStore, kvStore, repo);
-    return jsonResult(result);
+    // Truncate large arrays to prevent 20K+ token responses
+    const MAX_EDGES = 50;
+    const MAX_TOPOLOGY = 30;
+    const truncated: Record<string, unknown> = {
+      repos: result.repos,
+      description: result.description,
+    };
+    if (result.crossRepoEdges.length > MAX_EDGES) {
+      // Sort by count descending, keep top N
+      const sorted = [...result.crossRepoEdges].sort((a, b) => b.count - a.count);
+      truncated["crossRepoEdges"] = sorted.slice(0, MAX_EDGES);
+      truncated["crossRepoEdgesTruncated"] = { shown: MAX_EDGES, total: result.crossRepoEdges.length, note: "Sorted by import count desc. Use get_cross_repo_graph for full edge list." };
+    } else {
+      truncated["crossRepoEdges"] = result.crossRepoEdges;
+    }
+    if (result.serviceTopology.length > MAX_TOPOLOGY) {
+      truncated["serviceTopology"] = result.serviceTopology.slice(0, MAX_TOPOLOGY);
+      truncated["serviceTopologyTruncated"] = { shown: MAX_TOPOLOGY, total: result.serviceTopology.length, note: "Use get_service_correlation for full service topology." };
+    } else {
+      truncated["serviceTopology"] = result.serviceTopology;
+    }
+    return jsonResult(truncated);
   });
 
   // 7. SARIF diagnostics
@@ -143,6 +164,17 @@ export function registerTools(server: McpServer, stores: Stores): void {
       const hasData = await kvStore.has("sarif:latest") || await kvStore.has("sarif:latest:index");
       if (!hasData) {
         return jsonResult({ error: "No analysis results available. Run 'mma index' first.", results: [] });
+      }
+    }
+
+    if (total === 0 && level) {
+      // Check if other levels have data for this repo
+      const { total: anyTotal } = await getSarifResultsPaginated(kvStore, { repo, limit: 1, offset: 0 });
+      if (anyTotal > 0) {
+        return jsonResult({
+          total: 0, returned: 0, offset: offset ?? 0, hasMore: false, results: [],
+          note: `No '${level}'-level findings${repo ? ` for ${repo}` : ""}. There are ${anyTotal} findings at other severity levels — try without the level filter.`,
+        });
       }
     }
 
@@ -223,8 +255,8 @@ export function registerTools(server: McpServer, stores: Stores): void {
       edgeCount: filteredEdges.length,
       repoPairs: [...graph.repoPairs],
       edges: filteredEdges,
-      downstreamMap: [...graph.downstreamMap.entries()].map(([k, v]) => [k, [...v]]),
-      upstreamMap: [...graph.upstreamMap.entries()].map(([k, v]) => [k, [...v]]),
+      downstreamMap: Object.fromEntries([...graph.downstreamMap.entries()].map(([k, v]) => [k, [...v]])),
+      upstreamMap: Object.fromEntries([...graph.upstreamMap.entries()].map(([k, v]) => [k, [...v]])),
     };
 
     if (includePaths && graph.edges.length > 0) {
@@ -274,7 +306,8 @@ export function registerTools(server: McpServer, stores: Stores): void {
     };
 
     let linchpins = parsed.linchpins;
-    let orphanedServices = parsed.orphanedServices;
+    // Filter template-literal URLs (test harness noise like ${MAILPIT_URL}/...)
+    let orphanedServices = parsed.orphanedServices.filter((o) => !o.endpoint.includes("${"));
 
     if (endpoint) {
       const lower = endpoint.toLowerCase();
@@ -310,6 +343,7 @@ export function registerTools(server: McpServer, stores: Stores): void {
     },
   }, async ({ files, repo, maxDepth, includeCallGraph, crossRepo }) => {
     let crossRepoGraph: CrossRepoGraph | undefined;
+    let crossRepoWarning: string | undefined;
     if (crossRepo) {
       const raw = await kvStore.get("correlation:graph");
       if (raw) {
@@ -320,6 +354,8 @@ export function registerTools(server: McpServer, stores: Stores): void {
           upstreamMap: [string, string[]][];
         };
         crossRepoGraph = deserializeGraph(parsed);
+      } else {
+        crossRepoWarning = "crossRepo=true but no correlation data found. Run 'mma index' with 2+ repos to enable cross-repo blast radius.";
       }
     }
     // Compute PageRank scores for blast radius annotation
@@ -330,10 +366,29 @@ export function registerTools(server: McpServer, stores: Stores): void {
       pageRankScores: prResult.scores,
     }, searchStore);
     // Sort by score descending
-    const sorted = {
-      ...result,
+    const sorted: Record<string, unknown> = {
+      changedFiles: result.changedFiles,
       affectedFiles: [...result.affectedFiles].sort((a, b) => (b.score ?? 0) - (a.score ?? 0)),
+      totalAffected: result.totalAffected,
+      maxDepth: result.maxDepth,
+      description: result.description,
     };
+    // Serialize crossRepoAffected Map as plain object
+    if (result.crossRepoAffected && result.crossRepoAffected.size > 0) {
+      const crossRepoObj: Record<string, unknown[]> = {};
+      for (const [r, affected] of result.crossRepoAffected) {
+        crossRepoObj[r] = affected;
+      }
+      sorted["crossRepoAffected"] = crossRepoObj;
+      const totalCross = [...result.crossRepoAffected.values()].reduce((s, a) => s + a.length, 0);
+      sorted["description"] = `${result.description} Plus ${totalCross} cross-repo files in ${result.crossRepoAffected.size} downstream repo(s).`;
+    } else if (crossRepo && crossRepoGraph) {
+      sorted["crossRepoAffected"] = {};
+      sorted["crossRepoNote"] = "Cross-repo graph available but no downstream files matched the changed files. The changed files may not be consumed by other repos.";
+    }
+    if (crossRepoWarning) {
+      sorted["crossRepoWarning"] = crossRepoWarning;
+    }
     return jsonResult(sorted);
   });
 
@@ -353,7 +408,7 @@ export function registerTools(server: McpServer, stores: Stores): void {
     // Collect vuln SARIF from matching repos
     const allResults: import("@mma/core").SarifResult[] = [];
     const indexJson = await kvStore.get("sarif:latest:index");
-    if (!indexJson) return jsonResult({ findings: [], total: 0 });
+    if (!indexJson) return jsonResult({ findings: [], total: 0, note: "No analysis data. Run 'mma index' first." });
 
     const index = JSON.parse(indexJson) as { repos: string[] };
     const targetRepos = repo ? [repo] : index.repos;
@@ -366,6 +421,13 @@ export function registerTools(server: McpServer, stores: Stores): void {
           allResults.push(...results);
         } catch { /* skip malformed */ }
       }
+    }
+
+    if (allResults.length === 0) {
+      return jsonResult({
+        findings: [], total: 0, offset: skip, limit: maxResults,
+        note: "No vulnerability findings. Ensure 'npm audit --json' data is available during indexing. Vulnerability reachability requires npm audit output to be present in the repo.",
+      });
     }
 
     // Filter by minimum severity
