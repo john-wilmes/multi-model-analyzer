@@ -57,6 +57,34 @@ function IconClock() {
   );
 }
 
+function IconFlame() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+      <path
+        d="M9 2C9 2 12 5 11 8C13 6 13 4 13 4C15 7 15 11 13 14C12 15 10 16 9 16C8 16 6 15 5 14C3 11 3 7 5 4C5 4 6 7 7 7C6 5 9 2 9 2Z"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function IconPatterns() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+      <rect x="2" y="2" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.5" />
+      <rect x="11" y="2" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.5" />
+      <rect x="2" y="11" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.5" />
+      <rect x="11" y="11" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.5" />
+      <line x1="9" y1="4" x2="11" y2="4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <line x1="9" y1="14" x2="11" y2="14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <line x1="4" y1="9" x2="4" y2="11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <line x1="14" y1="9" x2="14" y2="11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function IconTarget() {
   return (
     <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
@@ -153,6 +181,18 @@ function useBreadcrumbs(): BreadcrumbSegment[] {
   // /temporal-coupling
   if (pathname === '/temporal-coupling') {
     segments.push({ label: 'Temporal Coupling', to: null });
+    return segments;
+  }
+
+  // /hotspots
+  if (pathname === '/hotspots') {
+    segments.push({ label: 'Hotspots', to: null });
+    return segments;
+  }
+
+  // /patterns
+  if (pathname === '/patterns') {
+    segments.push({ label: 'Design Patterns', to: null });
     return segments;
   }
 
@@ -357,6 +397,24 @@ export default function Layout() {
           >
             <IconClock />
             {!collapsed && <span>Temporal Coupling</span>}
+          </Link>
+
+          <Link
+            to="/hotspots"
+            className={navClass('/hotspots')}
+            title={collapsed ? 'Hotspots' : undefined}
+          >
+            <IconFlame />
+            {!collapsed && <span>Hotspots</span>}
+          </Link>
+
+          <Link
+            to="/patterns"
+            className={navClass('/patterns')}
+            title={collapsed ? 'Design Patterns' : undefined}
+          >
+            <IconPatterns />
+            {!collapsed && <span>Design Patterns</span>}
           </Link>
 
           {repos[0] ? (
