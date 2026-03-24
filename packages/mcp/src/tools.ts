@@ -375,7 +375,7 @@ export function registerTools(server: McpServer, stores: Stores): void {
         ? parsed.links.slice(0, MAX_LINKS)
         : parsed.links;
       if (parsed.links.length > MAX_LINKS) {
-        result["linksTruncated"] = { shown: MAX_LINKS, total: parsed.links.length, note: "Truncated to 100 entries. Request a specific kind (linchpins, packages, orphanedServices) for focused results." };
+        result["linksTruncated"] = { shown: MAX_LINKS, total: parsed.links.length, note: "Truncated to 100 entries. Request a specific kind (linchpins, packages, orphaned) for focused results." };
       }
     }
 

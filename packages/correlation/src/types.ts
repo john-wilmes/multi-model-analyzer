@@ -66,9 +66,9 @@ export interface PackageLinchpin {
   readonly packageName: string;
   /** Repo that owns/publishes this package. */
   readonly ownerRepo: string;
-  /** Number of repos that import this package (excluding the owner). */
+  /** Number of distinct repos that import this package (excludes the owner since only cross-repo edges are considered). Equals importingRepos.length. */
   readonly importerCount: number;
-  /** Names of repos that import this package. */
+  /** Names of repos that import this package (excludes the owner). */
   readonly importingRepos: readonly string[];
   /** Total number of cross-repo import edges for this package. */
   readonly edgeCount: number;
