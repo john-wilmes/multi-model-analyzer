@@ -42,4 +42,5 @@ export { runCrossRepoModels } from "./run-cross-repo-models.js";
 export { discoverConnections, extractPackageName } from "./connection-discovery.js";
 export type { RepoConnection, ConnectionDiscoveryOptions } from "./connection-discovery.js";
 export { buildExportIndex, resolveSymbolsOnEdges } from "./symbol-resolver.js";
+export type { ExportIndex, PackageEntryMap } from "./symbol-resolver.js";
 export type { ResolvedImportedSymbol } from "./types.js";

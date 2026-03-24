@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { buildExportIndex, resolveSymbolsOnEdges } from "./symbol-resolver.js";
-import type { ExportIndex } from "./symbol-resolver.js";
+import type { ExportIndex, PackageEntryMap } from "./symbol-resolver.js";
 import type { ResolvedCrossRepoEdge } from "./types.js";
 import type { RepoConfig } from "@mma/core";
 import { InMemoryKVStore } from "@mma/storage";
@@ -13,12 +13,13 @@ function makeEdge(
   source: string,
   target: string,
   meta: Record<string, unknown> = {},
+  overrides: Partial<Pick<ResolvedCrossRepoEdge, "sourceRepo" | "targetRepo" | "packageName">> = {},
 ): ResolvedCrossRepoEdge {
   return {
     edge: { source, target, kind: "imports", metadata: { ...meta } },
-    sourceRepo: "repo-a",
-    targetRepo: "repo-b",
-    packageName: "@acme/lib",
+    sourceRepo: overrides.sourceRepo ?? "repo-a",
+    targetRepo: overrides.targetRepo ?? "repo-b",
+    packageName: overrides.packageName ?? "@acme/lib",
   };
 }
 
@@ -292,5 +293,80 @@ describe("resolveSymbolsOnEdges", () => {
     const count = resolveSymbolsOnEdges(edges, exportIndex, new Map());
 
     expect(count).toBe(2);
+  });
+
+  // -------------------------------------------------------------------------
+  // Package specifier resolution via packageEntryMap
+  // -------------------------------------------------------------------------
+
+  it("resolves named import from npm package specifier via packageEntryMap", () => {
+    const exportIndex = makeExportIndex([
+      ["repo-b:src/index.ts", [["createClient", "function"], ["Session", "interface"]]],
+    ]);
+    const packageEntryMap: PackageEntryMap = new Map([
+      ["@acme/lib", ["repo-b:src/index.ts"]],
+    ]);
+    const edges = [makeEdge("repo-a:src/app.ts", "@acme/lib", { importedNames: ["createClient"] })];
+
+    const count = resolveSymbolsOnEdges(edges, exportIndex, new Map(), packageEntryMap);
+
+    expect(count).toBe(1);
+    const resolved = edges[0]!.edge.metadata!.resolvedSymbols as Array<{ name: string; targetFileId: string; kind: string }>;
+    expect(resolved[0]).toEqual({ name: "createClient", targetFileId: "repo-b:src/index.ts", kind: "function" });
+  });
+
+  it("resolves deep import subpath to candidate file ID", () => {
+    const exportIndex = makeExportIndex([
+      ["repo-b:out/constants.ts", [["MAX_RETRIES", "const"]]],
+    ]);
+    const edges = [makeEdge("repo-a:src/app.ts", "@acme/lib/out/constants", { importedNames: ["MAX_RETRIES"] })];
+
+    const count = resolveSymbolsOnEdges(edges, exportIndex, new Map(), new Map());
+
+    expect(count).toBe(1);
+    const resolved = edges[0]!.edge.metadata!.resolvedSymbols as Array<{ name: string; targetFileId: string }>;
+    expect(resolved[0]!.targetFileId).toBe("repo-b:out/constants.ts");
+  });
+
+  it("resolves deep import subpath with /index.ts fallback", () => {
+    const exportIndex = makeExportIndex([
+      ["repo-b:utils/index.ts", [["helper", "function"]]],
+    ]);
+    const edges = [makeEdge("repo-a:src/app.ts", "@acme/lib/utils", { importedNames: ["helper"] })];
+
+    const count = resolveSymbolsOnEdges(edges, exportIndex, new Map(), new Map());
+
+    expect(count).toBe(1);
+    const resolved = edges[0]!.edge.metadata!.resolvedSymbols as Array<{ name: string; targetFileId: string }>;
+    expect(resolved[0]!.targetFileId).toBe("repo-b:utils/index.ts");
+  });
+
+  it("resolves barrel package via packageEntryMap with barrel sources", () => {
+    // Package entry is a barrel that re-exports from another file
+    const exportIndex = makeExportIndex([
+      ["repo-b:src/client.ts", [["createClient", "function"]]],
+    ]);
+    const barrelSources = new Map([["repo-b:src/index.ts", ["repo-b:src/client.ts"]]]);
+    const packageEntryMap: PackageEntryMap = new Map([
+      ["@acme/lib", ["repo-b:src/index.ts"]],
+    ]);
+    const edges = [makeEdge("repo-a:src/app.ts", "@acme/lib", { importedNames: ["createClient"] })];
+
+    const count = resolveSymbolsOnEdges(edges, exportIndex, barrelSources, packageEntryMap);
+
+    expect(count).toBe(1);
+    const resolved = edges[0]!.edge.metadata!.resolvedSymbols as Array<{ name: string; targetFileId: string }>;
+    expect(resolved[0]!.name).toBe("createClient");
+    expect(resolved[0]!.targetFileId).toBe("repo-b:src/client.ts");
+  });
+
+  it("gracefully handles unresolvable package specifier", () => {
+    const exportIndex = makeExportIndex([]);
+    const edges = [makeEdge("repo-a:src/app.ts", "@unknown/pkg", { importedNames: ["Foo"] })];
+
+    const count = resolveSymbolsOnEdges(edges, exportIndex, new Map(), new Map());
+
+    expect(count).toBe(0);
+    expect(edges[0]!.edge.metadata!.resolvedSymbols).toBeUndefined();
   });
 });
