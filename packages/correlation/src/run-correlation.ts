@@ -18,6 +18,7 @@ import {
   detectCriticalPaths,
 } from "./sarif-rules.js";
 import { buildExportIndex, resolveSymbolsOnEdges } from "./symbol-resolver.js";
+import type { PackageEntryMap } from "./symbol-resolver.js";
 
 /**
  * Run all correlation analyses and persist results to KV store.
@@ -36,10 +37,12 @@ export async function runCorrelation(
   const exportIndex = await buildExportIndex(kvStore, repos);
   // Build barrel source map: barrelFileId -> file IDs the barrel re-exports from.
   const barrelSourceMap = new Map<string, string[]>();
+  const repoBarrelPaths = new Map<string, string[]>();
   for (const repo of repos) {
     const raw = await kvStore.get(`barrelFiles:${repo.name}`);
     if (!raw) continue;
     const paths = JSON.parse(raw) as string[];
+    repoBarrelPaths.set(repo.name, paths);
     // Load import edges for this repo once to avoid O(barrels * edges) queries.
     const importEdges = await graphStore.getEdgesByKind("imports", repo.name);
     for (const p of paths) {
@@ -52,10 +55,34 @@ export async function runCorrelation(
       }
     }
   }
+  // Build packageEntryMap: npm package name -> candidate entry file IDs.
+  // Uses barrel files as entry points for each package; packageRoots maps
+  // npm name -> absolute dir, so we invert to find which repo owns each package.
+  const packageEntryMap: PackageEntryMap = new Map();
+  for (const repo of repos) {
+    const barrels = repoBarrelPaths.get(repo.name);
+    if (!barrels) continue;
+    // For each package name that resolves to this repo's directory, register barrel fileIds.
+    for (const [pkgName, dirPath] of packageRoots.entries()) {
+      if (dirPath === repo.localPath || dirPath.startsWith(repo.localPath + "/")) {
+        // Compute the relative prefix for this package within the repo
+        const relPrefix = dirPath === repo.localPath ? "" : dirPath.slice(repo.localPath.length + 1) + "/";
+        const entryIds = barrels
+          .filter((b) => relPrefix === "" || b.startsWith(relPrefix))
+          .map((b) => makeFileId(repo.name, b));
+        if (entryIds.length > 0) {
+          const existing = packageEntryMap.get(pkgName) ?? [];
+          packageEntryMap.set(pkgName, [...existing, ...entryIds]);
+        }
+      }
+    }
+  }
+
   const resolvedCount = resolveSymbolsOnEdges(
     crossRepoGraph.edges as import("./types.js").ResolvedCrossRepoEdge[],
     exportIndex,
     barrelSourceMap,
+    packageEntryMap,
   );
   if (verbose && resolvedCount > 0) {
     console.log(`[correlation] resolved ${resolvedCount} cross-repo symbol bindings`);
