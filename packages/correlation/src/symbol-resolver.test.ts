@@ -341,6 +341,20 @@ describe("resolveSymbolsOnEdges", () => {
     expect(resolved[0]!.targetFileId).toBe("repo-b:utils/index.ts");
   });
 
+  it("resolves deep import subpath through barrel sources", () => {
+    const exportIndex = makeExportIndex([
+      ["repo-b:utils/helpers.ts", [["deepHelper", "function"]]],
+    ]);
+    const barrelSources = new Map([["repo-b:utils/index.ts", ["repo-b:utils/helpers.ts"]]]);
+    const edges = [makeEdge("repo-a:src/app.ts", "@acme/lib/utils", { importedNames: ["deepHelper"] })];
+
+    const count = resolveSymbolsOnEdges(edges, exportIndex, barrelSources, new Map());
+
+    expect(count).toBe(1);
+    const resolved = edges[0]!.edge.metadata!.resolvedSymbols as Array<{ name: string; targetFileId: string }>;
+    expect(resolved[0]!.targetFileId).toBe("repo-b:utils/helpers.ts");
+  });
+
   it("resolves barrel package via packageEntryMap with barrel sources", () => {
     // Package entry is a barrel that re-exports from another file
     const exportIndex = makeExportIndex([

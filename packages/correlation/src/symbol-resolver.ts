@@ -71,7 +71,7 @@ export async function buildExportIndex(
  *    "shared-types:out/constants.tsx"]
  */
 function subpathCandidates(targetRepo: string, subpath: string): string[] {
-  const exts = [".ts", ".js", "/index.ts", "/index.js", ".tsx"];
+  const exts = [".ts", ".js", "/index.ts", "/index.js", ".tsx", ".jsx", "/index.tsx", "/index.jsx"];
   return exts.map((ext) => makeFileId(targetRepo, subpath + ext));
 }
 
@@ -129,6 +129,17 @@ function findTargetExports(
         return {
           targetExports: exports,
           barrelExportSources: barrelSources.get(candidate),
+          effectiveFileId: candidate,
+        };
+      }
+    }
+    // Fallback: check if any candidate has barrel sources even without direct exports
+    for (const candidate of candidates) {
+      const bs = barrelSources.get(candidate);
+      if (bs) {
+        return {
+          targetExports: undefined,
+          barrelExportSources: bs,
           effectiveFileId: candidate,
         };
       }

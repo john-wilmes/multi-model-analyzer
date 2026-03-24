@@ -37,10 +37,12 @@ export async function runCorrelation(
   const exportIndex = await buildExportIndex(kvStore, repos);
   // Build barrel source map: barrelFileId -> file IDs the barrel re-exports from.
   const barrelSourceMap = new Map<string, string[]>();
+  const repoBarrelPaths = new Map<string, string[]>();
   for (const repo of repos) {
     const raw = await kvStore.get(`barrelFiles:${repo.name}`);
     if (!raw) continue;
     const paths = JSON.parse(raw) as string[];
+    repoBarrelPaths.set(repo.name, paths);
     // Load import edges for this repo once to avoid O(barrels * edges) queries.
     const importEdges = await graphStore.getEdgesByKind("imports", repo.name);
     for (const p of paths) {
@@ -58,9 +60,8 @@ export async function runCorrelation(
   // npm name -> absolute dir, so we invert to find which repo owns each package.
   const packageEntryMap: PackageEntryMap = new Map();
   for (const repo of repos) {
-    const raw = await kvStore.get(`barrelFiles:${repo.name}`);
-    if (!raw) continue;
-    const barrels = JSON.parse(raw) as string[];
+    const barrels = repoBarrelPaths.get(repo.name);
+    if (!barrels) continue;
     // For each package name that resolves to this repo's directory, register barrel fileIds.
     for (const [pkgName, dirPath] of packageRoots.entries()) {
       if (dirPath === repo.localPath || dirPath.startsWith(repo.localPath + "/")) {
