@@ -98,6 +98,7 @@ describe("registerTools", () => {
       "get_flag_inventory", "get_flag_impact", "get_vulnerability",
       "scan_org", "get_repo_candidates", "index_repo",
       "ignore_repo", "get_indexing_state", "check_new_repos",
+      "get_hotspots", "get_temporal_coupling", "get_patterns",
     ];
 
     for (const tool of expectedTools) {
@@ -631,6 +632,7 @@ const ALL_TOOL_NAMES = [
   "get_flag_inventory", "get_flag_impact", "get_vulnerability",
   "scan_org", "get_repo_candidates", "index_repo",
   "ignore_repo", "get_indexing_state", "check_new_repos",
+  "get_hotspots", "get_temporal_coupling", "get_patterns",
 ] as const;
 
 /** Minimal valid args for every tool so we can invoke them without crashes. */
@@ -657,6 +659,9 @@ const MINIMAL_ARGS: Record<string, Record<string, unknown>> = {
   ignore_repo:            { name: "test-repo" },
   get_indexing_state:     {},
   check_new_repos:        { org: "test-org" },
+  get_hotspots:           {},
+  get_temporal_coupling:  {},
+  get_patterns:           {},
 };
 
 function makeSarifStoresWithRepoMetadata(count: number) {
@@ -688,7 +693,7 @@ function makeInvoker(server: ReturnType<typeof createMockServer>) {
 // ---------------------------------------------------------------------------
 
 describe("MCP tool sanity checks", () => {
-  it("all 22 tools return valid JSON content with text entry", async () => {
+  it("all 25 tools return valid JSON content with text entry", async () => {
     const server = createMockServer();
     register(server, makeStores());
     const invoker = makeInvoker(server);
@@ -1143,10 +1148,10 @@ describe("MCP tool sanity checks", () => {
 // ---------------------------------------------------------------------------
 
 describe("MCP meta-sanity checks", () => {
-  it("exactly 22 tools are registered", () => {
+  it("exactly 25 tools are registered", () => {
     const server = createMockServer();
     register(server, makeStores());
-    expect(server.tools.size).toBe(22);
+    expect(server.tools.size).toBe(25);
   });
 
   it("all registered tools have non-empty descriptions", () => {
@@ -1324,5 +1329,310 @@ describe("MCP meta-sanity checks", () => {
     for (const link of resourceLinks) {
       expect(link.uri, "resource_link URI should start with mma://").toMatch(/^mma:\/\//);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// get_hotspots tests
+// ---------------------------------------------------------------------------
+
+describe("get_hotspots", () => {
+  it("returns empty note when no hotspot data exists", async () => {
+    const server = createMockServer();
+    register(server, makeStores());
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_hotspots", {});
+    const parsed = JSON.parse(result.content[0]!.text!) as { results: unknown[]; total: number; note: string };
+    expect(parsed.total).toBe(0);
+    expect(parsed.results).toEqual([]);
+    expect(parsed.note).toContain("No hotspot data");
+  });
+
+  it("returns hotspots sorted by hotspotScore descending", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("hotspots:repo-a", JSON.stringify([
+      { file: "src/low.ts", hotspotScore: 30, churnScore: 0.3, complexityScore: 0.4 },
+      { file: "src/big.ts", hotspotScore: 85, churnScore: 0.9, complexityScore: 0.8 },
+      { file: "src/mid.ts", hotspotScore: 55, churnScore: 0.6, complexityScore: 0.5 },
+    ]));
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_hotspots", {});
+    const parsed = JSON.parse(result.content[0]!.text!) as {
+      total: number;
+      results: Array<{ file: string; hotspotScore: number; repo: string }>;
+    };
+    expect(parsed.total).toBe(3);
+    expect(parsed.results[0]!.hotspotScore).toBe(85);
+    expect(parsed.results[0]!.file).toBe("src/big.ts");
+    expect(parsed.results[0]!.repo).toBe("repo-a");
+    expect(parsed.results[1]!.hotspotScore).toBe(55);
+    expect(parsed.results[2]!.hotspotScore).toBe(30);
+  });
+
+  it("filters hotspots by repo", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("hotspots:repo-a", JSON.stringify([
+      { file: "src/a.ts", hotspotScore: 70, churnScore: 0.7, complexityScore: 0.6 },
+    ]));
+    await stores.kvStore.set("hotspots:repo-b", JSON.stringify([
+      { file: "src/b.ts", hotspotScore: 90, churnScore: 0.9, complexityScore: 0.8 },
+    ]));
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_hotspots", { repo: "repo-a" });
+    const parsed = JSON.parse(result.content[0]!.text!) as { total: number; results: Array<{ repo: string }> };
+    expect(parsed.total).toBe(1);
+    expect(parsed.results[0]!.repo).toBe("repo-a");
+  });
+
+  it("paginates hotspots with limit and offset", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    const hotspots = Array.from({ length: 10 }, (_, i) => ({
+      file: `src/file-${i}.ts`,
+      hotspotScore: i * 10,
+      churnScore: 0.5,
+      complexityScore: 0.5,
+    }));
+    await stores.kvStore.set("hotspots:repo-a", JSON.stringify(hotspots));
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const page = await invoker("get_hotspots", { limit: 3, offset: 0 });
+    const parsed = JSON.parse(page.content[0]!.text!) as { total: number; returned: number; hasMore: boolean };
+    expect(parsed.total).toBe(10);
+    expect(parsed.returned).toBe(3);
+    expect(parsed.hasMore).toBe(true);
+  });
+
+  it("returns empty note with repo param when no data for that repo", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("hotspots:repo-b", JSON.stringify([
+      { file: "src/b.ts", hotspotScore: 50, churnScore: 0.5, complexityScore: 0.5 },
+    ]));
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_hotspots", { repo: "repo-a" });
+    const parsed = JSON.parse(result.content[0]!.text!) as { total: number; note: string };
+    expect(parsed.total).toBe(0);
+    expect(parsed.note).toContain("repo-a");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// get_temporal_coupling tests
+// ---------------------------------------------------------------------------
+
+describe("get_temporal_coupling", () => {
+  it("returns empty result when no temporal coupling data exists", async () => {
+    const server = createMockServer();
+    register(server, makeStores());
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_temporal_coupling", {});
+    const parsed = JSON.parse(result.content[0]!.text!) as { results: unknown[]; total: number };
+    expect(parsed.total).toBe(0);
+    expect(parsed.results).toEqual([]);
+  });
+
+  it("returns paired files sorted by coChangeCount descending", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("temporal-coupling:repo-a", JSON.stringify({
+      pairs: [
+        { fileA: "a.ts", fileB: "b.ts", coChangeCount: 5, npmi: 0.7 },
+        { fileA: "c.ts", fileB: "d.ts", coChangeCount: 12, npmi: 0.9 },
+        { fileA: "e.ts", fileB: "f.ts", coChangeCount: 3, npmi: 0.4 },
+      ],
+      commitsAnalyzed: 100,
+      commitsSkipped: 2,
+    }));
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_temporal_coupling", { repo: "repo-a" });
+    const parsed = JSON.parse(result.content[0]!.text!) as {
+      total: number;
+      commitsAnalyzed: number;
+      results: Array<{ fileA: string; fileB: string; coChangeCount: number }>;
+    };
+    expect(parsed.total).toBe(3);
+    expect(parsed.commitsAnalyzed).toBe(100);
+    expect(parsed.results[0]!.coChangeCount).toBe(12);
+    expect(parsed.results[0]!.fileA).toBe("c.ts");
+    expect(parsed.results[1]!.coChangeCount).toBe(5);
+    expect(parsed.results[2]!.coChangeCount).toBe(3);
+  });
+
+  it("filters by repo", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("temporal-coupling:repo-a", JSON.stringify({
+      pairs: [{ fileA: "a.ts", fileB: "b.ts", coChangeCount: 5, npmi: 0.7 }],
+      commitsAnalyzed: 50,
+    }));
+    await stores.kvStore.set("temporal-coupling:repo-b", JSON.stringify({
+      pairs: [{ fileA: "x.ts", fileB: "y.ts", coChangeCount: 8, npmi: 0.8 }],
+      commitsAnalyzed: 75,
+    }));
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_temporal_coupling", { repo: "repo-a" });
+    const parsed = JSON.parse(result.content[0]!.text!) as {
+      total: number;
+      results: Array<{ fileA: string }>;
+    };
+    expect(parsed.total).toBe(1);
+    expect(parsed.results[0]!.fileA).toBe("a.ts");
+  });
+
+  it("filters by minCoChanges", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("temporal-coupling:repo-a", JSON.stringify({
+      pairs: [
+        { fileA: "a.ts", fileB: "b.ts", coChangeCount: 2, npmi: 0.5 },
+        { fileA: "c.ts", fileB: "d.ts", coChangeCount: 8, npmi: 0.8 },
+        { fileA: "e.ts", fileB: "f.ts", coChangeCount: 1, npmi: 0.2 },
+      ],
+      commitsAnalyzed: 60,
+    }));
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_temporal_coupling", { repo: "repo-a", minCoChanges: 3 });
+    const parsed = JSON.parse(result.content[0]!.text!) as { total: number; results: Array<{ coChangeCount: number }> };
+    expect(parsed.total).toBe(1);
+    expect(parsed.results[0]!.coChangeCount).toBe(8);
+  });
+
+  it("returns note when no data for specific repo", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_temporal_coupling", { repo: "nonexistent-repo" });
+    const parsed = JSON.parse(result.content[0]!.text!) as { pairs: unknown[]; commitsAnalyzed: number; note: string };
+    expect(parsed.pairs).toEqual([]);
+    expect(parsed.commitsAnalyzed).toBe(0);
+    expect(parsed.note).toContain("nonexistent-repo");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// get_patterns tests
+// ---------------------------------------------------------------------------
+
+describe("get_patterns", () => {
+  it("returns empty note when no pattern data exists", async () => {
+    const server = createMockServer();
+    register(server, makeStores());
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_patterns", {});
+    const parsed = JSON.parse(result.content[0]!.text!) as { patterns: Record<string, unknown>; note: string };
+    expect(parsed.patterns).toEqual({});
+    expect(parsed.note).toContain("No pattern data");
+  });
+
+  it("returns all patterns for a specific repo", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("patterns:repo-a", JSON.stringify({
+      factory: [{ file: "factory.ts", symbol: "createFoo" }],
+      singleton: [{ file: "single.ts", symbol: "getInstance" }],
+    }));
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_patterns", { repo: "repo-a" });
+    const parsed = JSON.parse(result.content[0]!.text!) as {
+      repo: string;
+      patterns: { factory: Array<{ file: string; symbol: string }>; singleton: Array<{ file: string; symbol: string }> };
+    };
+    expect(parsed.repo).toBe("repo-a");
+    expect(parsed.patterns.factory).toHaveLength(1);
+    expect(parsed.patterns.factory[0]!.symbol).toBe("createFoo");
+    expect(parsed.patterns.singleton[0]!.symbol).toBe("getInstance");
+  });
+
+  it("filters patterns by pattern type substring (case-insensitive)", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("patterns:repo-a", JSON.stringify({
+      factory: [{ file: "factory.ts", symbol: "createFoo" }],
+      singleton: [{ file: "single.ts", symbol: "getInstance" }],
+      observer: [{ file: "events.ts", symbol: "EventEmitter" }],
+    }));
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_patterns", { repo: "repo-a", pattern: "FACT" });
+    const parsed = JSON.parse(result.content[0]!.text!) as {
+      patterns: Record<string, unknown>;
+    };
+    expect(Object.keys(parsed.patterns)).toEqual(["factory"]);
+  });
+
+  it("returns all repos patterns when no repo filter specified", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("patterns:repo-a", JSON.stringify({
+      factory: [{ file: "factory.ts", symbol: "createFoo" }],
+    }));
+    await stores.kvStore.set("patterns:repo-b", JSON.stringify({
+      singleton: [{ file: "single.ts", symbol: "getInstance" }],
+    }));
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_patterns", {});
+    const parsed = JSON.parse(result.content[0]!.text!) as { repos: Record<string, unknown> };
+    expect(parsed.repos).toHaveProperty("repo-a");
+    expect(parsed.repos).toHaveProperty("repo-b");
+  });
+
+  it("filters all-repo patterns by pattern type", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("patterns:repo-a", JSON.stringify({
+      factory: [{ file: "factory.ts", symbol: "createFoo" }],
+      observer: [{ file: "events.ts", symbol: "EventEmitter" }],
+    }));
+    await stores.kvStore.set("patterns:repo-b", JSON.stringify({
+      singleton: [{ file: "single.ts", symbol: "getInstance" }],
+    }));
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    // "factory" only matches repo-a (repo-b has singleton/observer, no factory)
+    const result = await invoker("get_patterns", { pattern: "factory" });
+    const parsed = JSON.parse(result.content[0]!.text!) as { repos: Record<string, unknown> };
+    expect(parsed.repos).toHaveProperty("repo-a");
+    expect(parsed.repos).not.toHaveProperty("repo-b");
+    const repoAPatterns = parsed.repos["repo-a"] as Record<string, unknown>;
+    expect(Object.keys(repoAPatterns)).toEqual(["factory"]);
+  });
+
+  it("returns note when no data for specific repo", async () => {
+    const server = createMockServer();
+    register(server, makeStores());
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_patterns", { repo: "missing-repo" });
+    const parsed = JSON.parse(result.content[0]!.text!) as { repo: string; patterns: Record<string, unknown>; note: string };
+    expect(parsed.repo).toBe("missing-repo");
+    expect(parsed.patterns).toEqual({});
+    expect(parsed.note).toContain("missing-repo");
   });
 });
