@@ -538,9 +538,27 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         const barrelFlags = annotated.map((a) => a.barrelMediated);
         await kvStore.set(`circularDepsBarrel:${repo.name}`, JSON.stringify(barrelFlags));
         // Persist barrel file paths for cross-repo symbol resolution.
-        const barrelPaths = getBarrelPaths(trees);
-        if (barrelPaths.length > 0) {
-          await kvStore.set(`barrelFiles:${repo.name}`, JSON.stringify(barrelPaths));
+        const barrelKey = `barrelFiles:${repo.name}`;
+        const newBarrels = getBarrelPaths(trees);
+        if (options.forceFullReindex) {
+          if (newBarrels.length > 0) {
+            await kvStore.set(barrelKey, JSON.stringify(newBarrels));
+          } else {
+            await kvStore.delete(barrelKey);
+          }
+        } else {
+          // Incremental: merge with previous barrel set. Keep barrels from the
+          // previous run that were not re-parsed, and add newly detected ones.
+          const prev = await kvStore.get(barrelKey);
+          const existing = prev ? (JSON.parse(prev) as string[]) : [];
+          const parsedPaths = new Set(trees.keys());
+          const merged = existing.filter((p) => !parsedPaths.has(p));
+          merged.push(...newBarrels);
+          if (merged.length > 0) {
+            await kvStore.set(barrelKey, JSON.stringify(merged));
+          } else {
+            await kvStore.delete(barrelKey);
+          }
         }
         if (graph.circularDependencies.length > 0) {
           const barrelCount = barrelFlags.filter(Boolean).length;

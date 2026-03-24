@@ -1048,8 +1048,11 @@ export function registerTools(server: McpServer, stores: Stores): void {
       if (pkg && resolved.packageName !== pkg) continue;
       if (repo && resolved.targetRepo !== repo) continue;
 
-      const syms = (resolved.edge.metadata?.resolvedSymbols ?? []) as ResolvedImportedSymbol[];
+      const syms = Array.isArray(resolved.edge.metadata?.resolvedSymbols)
+        ? (resolved.edge.metadata.resolvedSymbols as ResolvedImportedSymbol[])
+        : [];
       const matching = syms.filter((s) => s.name === symbol);
+
       if (matching.length > 0) {
         matches.push({
           sourceRepo: resolved.sourceRepo,
@@ -1059,34 +1062,50 @@ export function registerTools(server: McpServer, stores: Stores): void {
           packageName: resolved.packageName,
           resolvedSymbols: matching,
         });
+        continue;
+      }
+
+      // Per-edge fallback: use importedNames when resolvedSymbols has no match.
+      const names = Array.isArray(resolved.edge.metadata?.importedNames)
+        ? (resolved.edge.metadata.importedNames as string[])
+        : [];
+      if (names.includes(symbol)) {
+        matches.push({
+          sourceRepo: resolved.sourceRepo,
+          sourceFile: resolved.edge.source,
+          targetRepo: resolved.targetRepo,
+          targetFile: resolved.edge.target,
+          packageName: resolved.packageName,
+          resolvedSymbols: [],
+        });
       }
     }
 
-    // Fall back to unresolved name matching when no resolved symbols found.
-    if (matches.length === 0) {
-      for (const resolved of graph.edges) {
-        if (pkg && resolved.packageName !== pkg) continue;
-        if (repo && resolved.targetRepo !== repo) continue;
-
-        const names = (resolved.edge.metadata?.importedNames ?? []) as string[];
-        if (names.includes(symbol)) {
-          matches.push({
-            sourceRepo: resolved.sourceRepo,
-            sourceFile: resolved.edge.source,
-            targetRepo: resolved.targetRepo,
-            targetFile: resolved.edge.target,
-            packageName: resolved.packageName,
-            resolvedSymbols: [], // unresolved but name-matched
-          });
-        }
-      }
+    // Group by sourceRepo to avoid duplicates when multiple edges from the same
+    // repo import the same symbol.
+    const byRepo = new Map<string, typeof matches>();
+    for (const m of matches) {
+      const list = byRepo.get(m.sourceRepo) ?? [];
+      list.push(m);
+      byRepo.set(m.sourceRepo, list);
     }
+
+    const importers = [...byRepo.entries()].map(([sourceRepo, edges]) => ({
+      repo: sourceRepo,
+      files: edges.map((e) => ({
+        sourceFile: e.sourceFile,
+        targetRepo: e.targetRepo,
+        targetFile: e.targetFile,
+        packageName: e.packageName,
+        resolvedSymbols: e.resolvedSymbols,
+      })),
+    }));
 
     return jsonResult({
       symbol,
       package: pkg ?? null,
-      importerCount: matches.length,
-      importers: matches,
+      importerCount: importers.length,
+      importers,
     });
   });
 }

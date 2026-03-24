@@ -1724,14 +1724,13 @@ describe("get_symbol_importers", () => {
     const parsed = JSON.parse(result.content[0]!.text!) as {
       symbol: string;
       importerCount: number;
-      importers: Array<{ sourceRepo: string; resolvedSymbols: unknown[] }>;
+      importers: Array<{ repo: string; files: unknown[] }>;
     };
     expect(parsed.symbol).toBe("createClient");
-    // repo-a has resolvedSymbols match; repo-d has no resolvedSymbols but importedNames match (fallback)
-    // resolvedSymbols take priority — only repo-a returned in primary pass
+    // repo-a has resolvedSymbols match; repo-d has importedNames fallback — both grouped by repo
     expect(parsed.importerCount).toBeGreaterThanOrEqual(1);
-    const sourceRepos = parsed.importers.map((i) => i.sourceRepo);
-    expect(sourceRepos).toContain("repo-a");
+    const repos = parsed.importers.map((i) => i.repo);
+    expect(repos).toContain("repo-a");
   });
 
   it("finds SupabaseClient importer via resolvedSymbols", async () => {
@@ -1744,10 +1743,10 @@ describe("get_symbol_importers", () => {
     const result = await invoker("get_symbol_importers", { symbol: "SupabaseClient" });
     const parsed = JSON.parse(result.content[0]!.text!) as {
       importerCount: number;
-      importers: Array<{ sourceRepo: string }>;
+      importers: Array<{ repo: string }>;
     };
     expect(parsed.importerCount).toBe(1);
-    expect(parsed.importers[0]!.sourceRepo).toBe("repo-c");
+    expect(parsed.importers[0]!.repo).toBe("repo-c");
   });
 
   it("falls back to importedNames when no resolvedSymbols match", async () => {
@@ -1778,12 +1777,12 @@ describe("get_symbol_importers", () => {
     const result = await invoker("get_symbol_importers", { symbol: "helperFn" });
     const parsed = JSON.parse(result.content[0]!.text!) as {
       importerCount: number;
-      importers: Array<{ sourceRepo: string; resolvedSymbols: unknown[] }>;
+      importers: Array<{ repo: string; files: Array<{ resolvedSymbols: unknown[] }> }>;
     };
     expect(parsed.importerCount).toBe(1);
-    expect(parsed.importers[0]!.sourceRepo).toBe("repo-a");
-    // Fallback match has empty resolvedSymbols
-    expect(parsed.importers[0]!.resolvedSymbols).toEqual([]);
+    expect(parsed.importers[0]!.repo).toBe("repo-a");
+    // Fallback match has empty resolvedSymbols in the file entry
+    expect(parsed.importers[0]!.files[0]!.resolvedSymbols).toEqual([]);
   });
 
   it("returns empty importers when symbol not found", async () => {
@@ -1843,11 +1842,11 @@ describe("get_symbol_importers", () => {
     const result = await invoker("get_symbol_importers", { symbol: "createClient", package: "@acme/supabase-js" });
     const parsed = JSON.parse(result.content[0]!.text!) as {
       importerCount: number;
-      importers: Array<{ sourceRepo: string; packageName: string }>;
+      importers: Array<{ repo: string; files: Array<{ packageName: string }> }>;
     };
     expect(parsed.importerCount).toBe(1);
-    expect(parsed.importers[0]!.sourceRepo).toBe("repo-a");
-    expect(parsed.importers[0]!.packageName).toBe("@acme/supabase-js");
+    expect(parsed.importers[0]!.repo).toBe("repo-a");
+    expect(parsed.importers[0]!.files[0]!.packageName).toBe("@acme/supabase-js");
   });
 
   it("filters importers by target repo", async () => {
@@ -1861,10 +1860,11 @@ describe("get_symbol_importers", () => {
     const result = await invoker("get_symbol_importers", { symbol: "createClient", repo: "repo-b" });
     const parsed = JSON.parse(result.content[0]!.text!) as {
       importerCount: number;
-      importers: Array<{ targetRepo: string }>;
+      importers: Array<{ repo: string; files: Array<{ targetRepo: string }> }>;
     };
-    // All returned importers should target repo-b
-    expect(parsed.importers.every((i) => i.targetRepo === "repo-b")).toBe(true);
+    // All returned file entries should target repo-b
+    const allTargetB = parsed.importers.every((i) => i.files.every((f) => f.targetRepo === "repo-b"));
+    expect(allTargetB).toBe(true);
   });
 
   it("returns symbol and package in response", async () => {
