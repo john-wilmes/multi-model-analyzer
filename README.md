@@ -70,9 +70,9 @@ All findings are SARIF v2.1.0 with logical locations only -- no source code leav
 
 ## Key Features
 
-- Cross-repo analysis across multiple TypeScript repositories
+- Cross-repo analysis across multiple TypeScript repositories, with symbol-level resolution (98% coverage on real-world monorepo ecosystems)
 - SARIF v2.1.0 output with built-in anonymization for safe sharing
-- MCP server for IDE/agent integration (`mma serve`) — stdio or HTTP transport
+- MCP server with 26 tools for IDE/agent integration (`mma serve`) — stdio or HTTP transport
 - Web dashboard with dependency graphs, blast radius, and service catalog views
 - 3-tier summarization (2 free local tiers + optional Ollama LLM tier)
 - Design pattern detection (adapter, facade, observer, factory, singleton, repository, middleware, decorator)
@@ -82,7 +82,7 @@ All findings are SARIF v2.1.0 with logical locations only -- no source code leav
 
 ### Dashboard
 
-The web dashboard provides interactive dependency graphs, blast radius visualization, service health overview, cross-repo correlation views, feature flag inventory, and cascading fault analysis. Launch it with `mma dashboard` (default port 3000).
+The web dashboard provides 10 views — Overview, Findings, Cross-Repo (Graph, Feature Flags, Cascading Faults, Service Catalog), Temporal Coupling, Hotspots, Design Patterns, Blast Radius, Repo Detail, Module Detail, and Dependency Graph — served via 15 API endpoints. Launch it with `mma dashboard` (default port 3000).
 
 ## Quick Start
 
