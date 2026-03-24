@@ -63,19 +63,23 @@ export function extractDependencyGraph(
     // Hoist makeFileId out of the inner loop — computed once per file.
     const source = makeFileId(repo, filePath);
     for (const imp of imports) {
-      if (opts.ignorePatterns.some((p) => imp.includes(p))) continue;
-      const resolved = resolveImportSpecifier(imp, filePath, knownPaths, localRoots);
+      if (opts.ignorePatterns.some((p) => imp.specifier.includes(p))) continue;
+      const resolved = resolveImportSpecifier(imp.specifier, filePath, knownPaths, localRoots);
       // Use canonical ID for local files so source and target share the same
       // namespace (enabling cycle detection). External specifiers stay as-is.
       const target = knownPaths.has(resolved) ? makeFileId(repo, resolved) : resolved;
       const edgeKey = `${source}\0${target}`;
       if (seenEdges.has(edgeKey)) continue;
       seenEdges.add(edgeKey);
+      const metadata: Record<string, unknown> = { repo };
+      if (imp.importedNames.length > 0) {
+        metadata.importedNames = imp.importedNames;
+      }
       edges.push({
         source,
         target,
         kind: "imports",
-        metadata: { repo },
+        metadata,
       });
     }
   }
@@ -122,29 +126,125 @@ function stripLoaderPrefix(specifier: string): string {
   return specifier;
 }
 
-function extractImports(rootNode: TreeSitterNode): string[] {
-  const imports: string[] = [];
+/** An import with its source specifier and the names it imports. */
+export interface ImportInfo {
+  readonly specifier: string;
+  readonly importedNames: string[];
+}
+
+function extractImports(rootNode: TreeSitterNode): ImportInfo[] {
+  const imports: ImportInfo[] = [];
 
   for (const child of rootNode.namedChildren) {
     if (child.type === "import_statement") {
       const source = findStringLiteral(child);
-      if (source) imports.push(stripLoaderPrefix(source));
+      if (source) {
+        const names = extractImportedNames(child);
+        imports.push({ specifier: stripLoaderPrefix(source), importedNames: names });
+      }
     } else if (child.type === "expression_statement") {
       // Handle require() calls
       const req = findRequireCall(child);
-      if (req) imports.push(stripLoaderPrefix(req));
+      if (req) imports.push({ specifier: stripLoaderPrefix(req), importedNames: [] });
     } else if (child.type === "export_statement") {
       // Handle re-exports: export * from './x', export { X } from './x'
       // Use the "source" field to avoid matching strings inside exported class/function bodies
       const sourceNode = (child as any).childForFieldName?.("source");
       if (sourceNode) {
         const source = findStringLiteral(sourceNode);
-        if (source) imports.push(stripLoaderPrefix(source));
+        if (source) {
+          const names = extractReexportNames(child);
+          imports.push({ specifier: stripLoaderPrefix(source), importedNames: names });
+        }
       }
     }
   }
 
   return imports;
+}
+
+/**
+ * Extract imported symbol names from an import_statement node.
+ * - `import { a, b } from '…'` → `["a", "b"]`
+ * - `import * as ns from '…'` → `["*"]`
+ * - `import def from '…'` → `["default"]`
+ * - `import def, { a } from '…'` → `["default", "a"]`
+ * - `import '…'` (side-effect) → `[]`
+ */
+function extractImportedNames(importNode: TreeSitterNode): string[] {
+  const names: string[] = [];
+
+  for (const child of importNode.namedChildren) {
+    if (child.type === "import_clause") {
+      for (const clauseChild of child.namedChildren) {
+        if (clauseChild.type === "identifier") {
+          // Default import
+          names.push("default");
+        } else if (clauseChild.type === "namespace_import") {
+          names.push("*");
+        } else if (clauseChild.type === "named_imports") {
+          for (const spec of clauseChild.namedChildren) {
+            if (spec.type === "import_specifier") {
+              // The "name" field is the imported name; "alias" is the local name
+              const nameNode = (spec as any).childForFieldName?.("name");
+              if (nameNode) {
+                names.push(nameNode.text);
+              } else if (spec.namedChildren.length > 0) {
+                names.push(spec.namedChildren[0]!.text);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return names;
+}
+
+/**
+ * Extract re-exported names from an export_statement with a source.
+ * - `export { a, b } from '…'` → `["a", "b"]`
+ * - `export * from '…'` → `["*"]`
+ * - `export * as ns from '…'` → `["*"]`
+ */
+function extractReexportNames(exportNode: TreeSitterNode): string[] {
+  const names: string[] = [];
+  let hasNamedExports = false;
+
+  for (const child of exportNode.namedChildren) {
+    if (child.type === "export_clause") {
+      hasNamedExports = true;
+      for (const spec of child.namedChildren) {
+        if (spec.type === "export_specifier") {
+          const nameNode = (spec as any).childForFieldName?.("name");
+          if (nameNode) {
+            names.push(nameNode.text);
+          } else if (spec.namedChildren.length > 0) {
+            names.push(spec.namedChildren[0]!.text);
+          }
+        }
+      }
+    } else if (child.type === "namespace_export") {
+      names.push("*");
+      hasNamedExports = true;
+    }
+  }
+
+  // `export * from '…'` has no export_clause or namespace_export child —
+  // it's just the keywords "export", "*", "from", and the string.
+  if (!hasNamedExports) {
+    // Check for bare `*` token in non-named children
+    for (let i = 0; i < exportNode.childCount; i++) {
+      const child = exportNode.child(i);
+      if (child && child.type === "*") {
+        names.push("*");
+        break;
+      }
+    }
+  }
+
+  return names;
 }
 
 function findStringLiteral(node: TreeSitterNode): string | null {
@@ -423,6 +523,27 @@ export function tagBarrelMediatedCycles(
     });
     return { cycle, barrelMediated };
   });
+}
+
+/**
+ * Returns the set of barrel file paths (index.ts/js files whose body is
+ * entirely re-exports) from the given file map.
+ */
+export function getBarrelPaths(
+  files: ReadonlyMap<string, TreeSitterTree>,
+): string[] {
+  const barrelPaths: string[] = [];
+  for (const [filePath, tree] of files) {
+    const basename = filePath.split("/").pop() ?? "";
+    if (
+      (basename === "index.ts" || basename === "index.js" ||
+       basename === "index.tsx" || basename === "index.jsx") &&
+      isBarrelFile(tree)
+    ) {
+      barrelPaths.push(filePath);
+    }
+  }
+  return barrelPaths;
 }
 
 export function findDependentsOf(

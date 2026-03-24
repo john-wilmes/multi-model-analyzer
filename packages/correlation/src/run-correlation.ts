@@ -3,9 +3,12 @@
  *
  * Runs all correlation passes (cross-repo graph, service correlation, SARIF rules),
  * persists results to KV store, and returns a CorrelationResult summary.
+ *
+ * @see symbol-resolver.ts for cross-repo symbol resolution logic.
  */
 
 import type { KVStore, GraphStore } from "@mma/storage";
+import { makeFileId } from "@mma/core";
 import type { CorrelationOptions, CorrelationResult } from "./types.js";
 import { buildCrossRepoGraph } from "./graph-builder.js";
 import { buildServiceCorrelation } from "./service-correlation.js";
@@ -14,6 +17,7 @@ import {
   detectOrphanedServices,
   detectCriticalPaths,
 } from "./sarif-rules.js";
+import { buildExportIndex, resolveSymbolsOnEdges } from "./symbol-resolver.js";
 
 /**
  * Run all correlation analyses and persist results to KV store.
@@ -27,6 +31,35 @@ export async function runCorrelation(
 
   // 1. Build cross-repo dependency graph
   const crossRepoGraph = await buildCrossRepoGraph(graphStore, repos, packageRoots);
+
+  // 1b. Resolve imported symbol names on cross-repo edges.
+  const exportIndex = await buildExportIndex(kvStore, repos);
+  // Build barrel source map: barrelFileId -> file IDs the barrel re-exports from.
+  const barrelSourceMap = new Map<string, string[]>();
+  for (const repo of repos) {
+    const raw = await kvStore.get(`barrelFiles:${repo.name}`);
+    if (!raw) continue;
+    const paths = JSON.parse(raw) as string[];
+    // Load import edges for this repo once to avoid O(barrels * edges) queries.
+    const importEdges = await graphStore.getEdgesByKind("imports", repo.name);
+    for (const p of paths) {
+      const fileId = makeFileId(repo.name, p);
+      const sources = importEdges
+        .filter((e) => e.source === fileId)
+        .map((e) => e.target);
+      if (sources.length > 0) {
+        barrelSourceMap.set(fileId, sources);
+      }
+    }
+  }
+  const resolvedCount = resolveSymbolsOnEdges(
+    crossRepoGraph.edges as import("./types.js").ResolvedCrossRepoEdge[],
+    exportIndex,
+    barrelSourceMap,
+  );
+  if (verbose && resolvedCount > 0) {
+    console.log(`[correlation] resolved ${resolvedCount} cross-repo symbol bindings`);
+  }
 
   // 2. Build service correlation (pass cross-repo graph for package linchpin detection)
   const serviceCorrelation = await buildServiceCorrelation(graphStore, repos, crossRepoGraph);

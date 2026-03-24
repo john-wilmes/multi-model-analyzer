@@ -15,8 +15,9 @@ export {
   resolveImportSpecifier,
   isBarrelFile,
   tagBarrelMediatedCycles,
+  getBarrelPaths,
 } from "./dependencies.js";
-export type { DependencyGraphOptions, AnnotatedCycle } from "./dependencies.js";
+export type { DependencyGraphOptions, AnnotatedCycle, ImportInfo } from "./dependencies.js";
 
 export {
   buildControlFlowGraph,
