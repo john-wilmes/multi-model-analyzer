@@ -136,7 +136,7 @@ export function registerTools(server: McpServer, stores: Stores): void {
       const sortedTopology = [...result.serviceTopology].sort((a, b) => {
         const aKey = `${(a as { sourceRepo?: string }).sourceRepo ?? ""}:${(a as { sourceFile?: string }).sourceFile ?? ""}`;
         const bKey = `${(b as { sourceRepo?: string }).sourceRepo ?? ""}:${(b as { sourceFile?: string }).sourceFile ?? ""}`;
-        return aKey.localeCompare(bKey);
+        return aKey.localeCompare(bKey) || JSON.stringify(a).localeCompare(JSON.stringify(b));
       });
       truncated["serviceTopology"] = sortedTopology.slice(0, MAX_TOPOLOGY);
       truncated["serviceTopologyTruncated"] = { shown: MAX_TOPOLOGY, total: result.serviceTopology.length, note: "Results are sorted alphabetically by sourceRepo:sourceFile. Use get_service_correlation for full service topology." };
@@ -269,18 +269,37 @@ export function registerTools(server: McpServer, stores: Stores): void {
       ? upstreamEntries.filter(([k, v]) => k === repo || v.has(repo))
       : upstreamEntries;
 
+    // Filter repoPairs to only include pairs visible in filteredEdges
+    const filteredRepoSet = new Set(filteredEdges.flatMap((e) => [e.sourceRepo, e.targetRepo]));
+    const filteredRepoPairs = repo
+      ? [...graph.repoPairs].filter((pair) => {
+          const [a, b] = pair.split("->");
+          return a && b && filteredRepoSet.has(a) && filteredRepoSet.has(b);
+        })
+      : [...graph.repoPairs];
+
+    // Build a scoped graph for path discovery when filtering by repo
+    const scopedGraph = repo
+      ? {
+          ...graph,
+          edges: filteredEdges,
+          repoPairs: new Set(filteredRepoPairs),
+          downstreamMap: new Map(filteredDownstream),
+          upstreamMap: new Map(filteredUpstream),
+        }
+      : graph;
+
     const result: Record<string, unknown> = {
       repoCount: filteredRepoCount,
       edgeCount: filteredEdges.length,
-      repoPairs: [...graph.repoPairs],
+      repoPairs: filteredRepoPairs,
       edges: filteredEdges,
       downstreamMap: Object.fromEntries(filteredDownstream.map(([k, v]) => [k, [...v]])),
       upstreamMap: Object.fromEntries(filteredUpstream.map(([k, v]) => [k, [...v]])),
     };
 
-    // Bug C: path computation should use filteredEdges, not graph.edges
     if (includePaths && filteredEdges.length > 0) {
-      const repoList = [...new Set(filteredEdges.flatMap((e) => [e.sourceRepo, e.targetRepo]))];
+      const repoList = [...filteredRepoSet];
       if (repoList.length > 20) {
         result["pathsSkipped"] = true;
         result["pathsSkippedReason"] =
@@ -291,7 +310,7 @@ export function registerTools(server: McpServer, stores: Stores): void {
         for (const src of repoList) {
           for (const tgt of repoList) {
             if (src !== tgt) {
-              const found = findDependencyPaths(src, tgt, graph);
+              const found = findDependencyPaths(src, tgt, scopedGraph);
               if (found.length > 0) {
                 paths[`${src}->${tgt}`] = found;
               }
@@ -350,7 +369,7 @@ export function registerTools(server: McpServer, stores: Stores): void {
         ? parsed.links.slice(0, MAX_LINKS)
         : parsed.links;
       if (parsed.links.length > MAX_LINKS) {
-        result["linksTruncated"] = { shown: MAX_LINKS, total: parsed.links.length, note: "Truncated to 100 entries. Use endpoint filter to narrow results." };
+        result["linksTruncated"] = { shown: MAX_LINKS, total: parsed.links.length, note: "Truncated to 100 entries. Request a specific kind (linchpins, orphanedServices) for focused results." };
       }
     }
 
