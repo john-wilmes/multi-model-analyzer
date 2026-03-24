@@ -9,9 +9,11 @@
 import type { GraphEdge, RepoConfig } from "@mma/core";
 import type { GraphStore } from "@mma/storage";
 import type {
+  CrossRepoGraph,
   ServiceCorrelationResult,
   ServiceLink,
   LinchpinService,
+  PackageLinchpin,
   OrphanedService,
 } from "./types.js";
 
@@ -34,6 +36,50 @@ function resolveRepo(edge: GraphEdge, repos: readonly RepoConfig[]): string | un
 }
 
 /**
+ * Detect package-level linchpins from cross-repo import edges.
+ *
+ * Groups edges by packageName, identifies packages imported by 2+ repos,
+ * and scores by importerCount * edgeCount.
+ */
+function detectPackageLinchpins(crossRepoGraph: CrossRepoGraph | undefined): PackageLinchpin[] {
+  if (!crossRepoGraph || crossRepoGraph.edges.length === 0) return [];
+
+  // Group by packageName → { ownerRepo, importingRepos, edgeCount }
+  const pkgMap = new Map<string, { ownerRepo: string; importers: Set<string>; edgeCount: number }>();
+
+  for (const resolved of crossRepoGraph.edges) {
+    const { packageName, sourceRepo, targetRepo } = resolved;
+    if (!packageName) continue;
+
+    let entry = pkgMap.get(packageName);
+    if (!entry) {
+      entry = { ownerRepo: targetRepo, importers: new Set(), edgeCount: 0 };
+      pkgMap.set(packageName, entry);
+    }
+    entry.importers.add(sourceRepo);
+    entry.edgeCount++;
+  }
+
+  // Filter to packages imported by 2+ repos
+  const linchpins: PackageLinchpin[] = [];
+  for (const [packageName, entry] of pkgMap) {
+    if (entry.importers.size < 2) continue;
+    const importingRepos = [...entry.importers].sort();
+    linchpins.push({
+      packageName,
+      ownerRepo: entry.ownerRepo,
+      importerCount: importingRepos.length,
+      importingRepos,
+      edgeCount: entry.edgeCount,
+      criticalityScore: importingRepos.length * entry.edgeCount,
+    });
+  }
+
+  linchpins.sort((a, b) => b.criticalityScore - a.criticalityScore);
+  return linchpins;
+}
+
+/**
  * Build service correlation from service-call edges across all repos.
  *
  * Algorithm:
@@ -42,10 +88,12 @@ function resolveRepo(edge: GraphEdge, repos: readonly RepoConfig[]): string | un
  * 3. For each endpoint, classify edges as producer or consumer per repo
  * 4. Detect linchpins: endpoints spanning >= 2 repos with combined usage >= 2
  * 5. Detect orphaned services: producers with no cross-repo consumers (or vice versa)
+ * 6. Detect package-level linchpins from cross-repo import graph
  */
 export async function buildServiceCorrelation(
   graphStore: GraphStore,
   repos: readonly RepoConfig[],
+  crossRepoGraph?: CrossRepoGraph,
 ): Promise<ServiceCorrelationResult> {
   // Collect all service-call edges.
   // Load per-repo first (metadata.repo filter) to get known edges, then load
@@ -153,5 +201,8 @@ export async function buildServiceCorrelation(
     }
   }
 
-  return { links, linchpins, orphanedServices };
+  // Detect package-level linchpins from cross-repo import graph
+  const packageLinchpins = detectPackageLinchpins(crossRepoGraph);
+
+  return { links, linchpins, packageLinchpins, orphanedServices };
 }

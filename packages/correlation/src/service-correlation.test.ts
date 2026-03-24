@@ -5,6 +5,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { InMemoryGraphStore } from "@mma/storage";
 import type { RepoConfig } from "@mma/core";
+import type { CrossRepoGraph } from "./types.js";
 import { buildServiceCorrelation } from "./service-correlation.js";
 
 const makeRepo = (name: string, localPath = `/repos/${name}`): RepoConfig => ({
@@ -260,5 +261,92 @@ describe("buildServiceCorrelation", () => {
     const link = result.links[0]!;
     expect(link.producers.has("repo-a")).toBe(true);
     expect(link.consumers.has("repo-b")).toBe(true);
+  });
+
+  describe("package linchpins", () => {
+    const makeCrossRepoGraph = (
+      edges: Array<{ packageName: string; sourceRepo: string; targetRepo: string }>,
+    ): CrossRepoGraph => ({
+      edges: edges.map((e) => ({
+        edge: { source: "x", target: "y", kind: "imports" as const },
+        sourceRepo: e.sourceRepo,
+        targetRepo: e.targetRepo,
+        packageName: e.packageName,
+      })),
+      repoPairs: new Set(),
+      downstreamMap: new Map(),
+      upstreamMap: new Map(),
+    });
+
+    it("returns empty when no cross-repo graph provided", async () => {
+      const result = await buildServiceCorrelation(graphStore, [makeRepo("repo-a")]);
+      expect(result.packageLinchpins).toHaveLength(0);
+    });
+
+    it("detects package imported by 2+ repos", async () => {
+      const graph = makeCrossRepoGraph([
+        { packageName: "@supabase/auth-helpers", sourceRepo: "app-a", targetRepo: "auth-helpers" },
+        { packageName: "@supabase/auth-helpers", sourceRepo: "app-b", targetRepo: "auth-helpers" },
+        { packageName: "@supabase/auth-helpers", sourceRepo: "app-c", targetRepo: "auth-helpers" },
+      ]);
+
+      const result = await buildServiceCorrelation(graphStore, [], graph);
+
+      expect(result.packageLinchpins).toHaveLength(1);
+      const pkg = result.packageLinchpins[0]!;
+      expect(pkg.packageName).toBe("@supabase/auth-helpers");
+      expect(pkg.ownerRepo).toBe("auth-helpers");
+      expect(pkg.importerCount).toBe(3);
+      expect(pkg.importingRepos).toEqual(["app-a", "app-b", "app-c"]);
+      expect(pkg.edgeCount).toBe(3);
+      expect(pkg.criticalityScore).toBe(9); // 3 * 3
+    });
+
+    it("ignores packages imported by only 1 repo", async () => {
+      const graph = makeCrossRepoGraph([
+        { packageName: "lodash", sourceRepo: "app-a", targetRepo: "npm" },
+      ]);
+
+      const result = await buildServiceCorrelation(graphStore, [], graph);
+      expect(result.packageLinchpins).toHaveLength(0);
+    });
+
+    it("sorts by criticalityScore descending", async () => {
+      const graph = makeCrossRepoGraph([
+        // low: 2 importers * 2 edges = 4
+        { packageName: "low-pkg", sourceRepo: "a", targetRepo: "owner" },
+        { packageName: "low-pkg", sourceRepo: "b", targetRepo: "owner" },
+        // high: 3 importers * 5 edges = 15
+        { packageName: "high-pkg", sourceRepo: "a", targetRepo: "owner" },
+        { packageName: "high-pkg", sourceRepo: "b", targetRepo: "owner" },
+        { packageName: "high-pkg", sourceRepo: "c", targetRepo: "owner" },
+        { packageName: "high-pkg", sourceRepo: "a", targetRepo: "owner" }, // duplicate importer, extra edge
+        { packageName: "high-pkg", sourceRepo: "b", targetRepo: "owner" }, // duplicate importer, extra edge
+      ]);
+
+      const result = await buildServiceCorrelation(graphStore, [], graph);
+
+      expect(result.packageLinchpins).toHaveLength(2);
+      expect(result.packageLinchpins[0]!.packageName).toBe("high-pkg");
+      expect(result.packageLinchpins[0]!.criticalityScore).toBe(15); // 3 * 5
+      expect(result.packageLinchpins[1]!.packageName).toBe("low-pkg");
+      expect(result.packageLinchpins[1]!.criticalityScore).toBe(4); // 2 * 2
+    });
+
+    it("counts multiple edges from same repo correctly", async () => {
+      const graph = makeCrossRepoGraph([
+        { packageName: "shared-types", sourceRepo: "api", targetRepo: "types-pkg" },
+        { packageName: "shared-types", sourceRepo: "api", targetRepo: "types-pkg" }, // same repo, 2nd file
+        { packageName: "shared-types", sourceRepo: "web", targetRepo: "types-pkg" },
+      ]);
+
+      const result = await buildServiceCorrelation(graphStore, [], graph);
+
+      expect(result.packageLinchpins).toHaveLength(1);
+      const pkg = result.packageLinchpins[0]!;
+      expect(pkg.importerCount).toBe(2); // api, web (deduplicated)
+      expect(pkg.edgeCount).toBe(3); // 3 total edges
+      expect(pkg.criticalityScore).toBe(6); // 2 * 3
+    });
   });
 });

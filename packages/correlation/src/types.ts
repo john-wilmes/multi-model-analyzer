@@ -61,10 +61,26 @@ export interface LinchpinService {
   readonly criticalityScore: number;
 }
 
+/** A linchpin package — imported by multiple repos. */
+export interface PackageLinchpin {
+  readonly packageName: string;
+  /** Repo that owns/publishes this package. */
+  readonly ownerRepo: string;
+  /** Number of repos that import this package (excluding the owner). */
+  readonly importerCount: number;
+  /** Names of repos that import this package. */
+  readonly importingRepos: readonly string[];
+  /** Total number of cross-repo import edges for this package. */
+  readonly edgeCount: number;
+  /** Score: importerCount * edgeCount — higher = more critical. */
+  readonly criticalityScore: number;
+}
+
 /** Service correlation results. */
 export interface ServiceCorrelationResult {
   readonly links: readonly ServiceLink[];
   readonly linchpins: readonly LinchpinService[];
+  readonly packageLinchpins: readonly PackageLinchpin[];
   readonly orphanedServices: readonly OrphanedService[];
 }
 

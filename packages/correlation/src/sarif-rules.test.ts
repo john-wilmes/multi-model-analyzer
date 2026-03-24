@@ -62,6 +62,7 @@ function makeServices(
   return {
     links: [],
     linchpins: [],
+    packageLinchpins: [],
     orphanedServices: orphaned,
   };
 }
