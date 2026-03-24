@@ -397,6 +397,48 @@ describe("resolveSymbolsOnEdges", () => {
     expect(resolved[0]!.targetFileId).toBe("repo-b:src/constants.ts");
   });
 
+  it("resolves through transitive barrel chains (A → B → C)", () => {
+    // Simulates: @acme/lib (index.ts) re-exports from sub-package index,
+    // which in turn re-exports from a deep file with the actual symbols.
+    // The barrelSources map already contains the transitive closure.
+    const exportIndex = makeExportIndex([
+      // Only the leaf file has actual exported symbols
+      ["repo-b:packages/auth/src/lib/types.ts", [["Session", "interface"], ["User", "interface"]]],
+      ["repo-b:packages/auth/src/lib/errors.ts", [["AuthError", "class"]]],
+      // The main index has only a local export
+      ["repo-b:packages/main/src/index.ts", [["createClient", "function"]]],
+    ]);
+    // Transitive barrel sources: main index → auth index → auth leaf files
+    const barrelSources = new Map([
+      ["repo-b:packages/main/src/index.ts", [
+        "repo-b:packages/main/src/SupabaseClient.ts",
+        "repo-b:packages/auth/src/index.ts",       // intermediate hop
+        "repo-b:packages/auth/src/lib/types.ts",    // transitive: from auth index
+        "repo-b:packages/auth/src/lib/errors.ts",   // transitive: from auth index
+      ]],
+      ["repo-b:packages/auth/src/index.ts", [
+        "repo-b:packages/auth/src/lib/types.ts",
+        "repo-b:packages/auth/src/lib/errors.ts",
+      ]],
+    ]);
+    const packageEntryMap: PackageEntryMap = new Map([
+      ["@acme/lib", ["repo-b:packages/main/src/index.ts"]],
+    ]);
+    const edges = [
+      makeEdge("repo-a:src/app.ts", "@acme/lib", { importedNames: ["Session", "AuthError", "createClient"] }),
+    ];
+
+    const count = resolveSymbolsOnEdges(edges, exportIndex, barrelSources, packageEntryMap);
+
+    expect(count).toBe(3);
+    const resolved = edges[0]!.edge.metadata!.resolvedSymbols as Array<{ name: string; targetFileId: string; kind: string }>;
+    expect(resolved).toEqual(expect.arrayContaining([
+      { name: "createClient", targetFileId: "repo-b:packages/main/src/index.ts", kind: "function" },
+      { name: "Session", targetFileId: "repo-b:packages/auth/src/lib/types.ts", kind: "interface" },
+      { name: "AuthError", targetFileId: "repo-b:packages/auth/src/lib/errors.ts", kind: "class" },
+    ]));
+  });
+
   it("resolves deep import with dist/module/ stripping", () => {
     const exportIndex = makeExportIndex([
       ["repo-b:src/lib/types.ts", [["DatabaseType", "interface"]]],

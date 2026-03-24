@@ -38,10 +38,10 @@ export async function runCorrelation(
   // Build barrel source map: barrelFileId -> file IDs the barrel re-exports from.
   const barrelSourceMap = new Map<string, string[]>();
   const repoBarrelPaths = new Map<string, string[]>();
+  const INDEX_RE = /(?:^|[/\\])index\.[jt]sx?$/;
   for (const repo of repos) {
     const raw = await kvStore.get(`barrelFiles:${repo.name}`);
-    if (!raw) continue;
-    const paths = JSON.parse(raw) as string[];
+    const paths = raw ? (JSON.parse(raw) as string[]) : [];
     repoBarrelPaths.set(repo.name, paths);
     // Load import edges for this repo once to avoid O(barrels * edges) queries.
     const importEdges = await graphStore.getEdgesByKind("imports", repo.name);
@@ -52,6 +52,47 @@ export async function runCorrelation(
         .map((e) => e.target);
       if (sources.length > 0) {
         barrelSourceMap.set(fileId, sources);
+      }
+    }
+    // Also track non-pure index files that have outgoing import edges.
+    // These may re-export from sub-modules even if isBarrelFile() rejects them
+    // (e.g. an index.ts with both `export * from '...'` and `export const ...`).
+    const seen = new Set<string>();
+    for (const edge of importEdges) {
+      if (seen.has(edge.source) || barrelSourceMap.has(edge.source)) continue;
+      seen.add(edge.source);
+      const sourcePath = edge.source.slice(repo.name.length + 1);
+      if (INDEX_RE.test(sourcePath)) {
+        const sources = importEdges
+          .filter((e) => e.source === edge.source)
+          .map((e) => e.target);
+        if (sources.length > 0) {
+          barrelSourceMap.set(edge.source, sources);
+        }
+      }
+    }
+  }
+  // Expand transitive re-export chains in barrelSourceMap.
+  // If barrel A -> [B, C] and B -> [D, E], then A -> [B, C, D, E].
+  {
+    let changed = true;
+    let depth = 0;
+    while (changed && depth < 5) {
+      changed = false;
+      depth++;
+      for (const [fileId, sources] of barrelSourceMap) {
+        const expanded = new Set(sources);
+        const before = expanded.size;
+        for (const src of sources) {
+          const transitive = barrelSourceMap.get(src);
+          if (transitive) {
+            for (const t of transitive) expanded.add(t);
+          }
+        }
+        if (expanded.size > before) {
+          barrelSourceMap.set(fileId, [...expanded]);
+          changed = true;
+        }
       }
     }
   }
@@ -89,7 +130,7 @@ export async function runCorrelation(
     const entryIds: string[] = [];
     for (const cp of candidatePaths) {
       const fileId = makeFileId(repo.name, relPrefix + cp);
-      if (exportIndex.has(fileId)) {
+      if (exportIndex.has(fileId) || barrelSourceMap.has(fileId)) {
         entryIds.push(fileId);
       }
     }
