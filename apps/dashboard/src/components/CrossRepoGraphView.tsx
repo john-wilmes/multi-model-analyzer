@@ -583,6 +583,13 @@ export default function CrossRepoGraphView() {
   const allSorted = [...repos.entries()].sort((a, b) => b[1].fanIn - a[1].fanIn);
   const topLinchpins = allSorted.slice(0, 10);
 
+  // Symbol resolution coverage
+  const totalEdges = data?.edges.length ?? 0;
+  const resolvedEdges = data?.edges.filter(
+    (e) => e.edge.metadata?.resolvedSymbols && e.edge.metadata.resolvedSymbols.length > 0
+  ).length ?? 0;
+  const resolutionPct = totalEdges > 0 ? Math.round((resolvedEdges / totalEdges) * 100) : 0;
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -737,6 +744,12 @@ export default function CrossRepoGraphView() {
                 <div><span className="font-medium text-slate-800 dark:text-slate-200">{repos.size}</span> repos</div>
                 <div><span className="font-medium text-slate-800 dark:text-slate-200">{pairs.length}</span> dependency pairs</div>
                 <div><span className="font-medium text-slate-800 dark:text-slate-200">{data?.edges.length ?? 0}</span> total edges</div>
+                {totalEdges > 0 && (
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-medium text-slate-800 dark:text-slate-200">{resolutionPct}%</span> symbols resolved
+                    <span className="text-xs text-slate-400">({resolvedEdges}/{totalEdges})</span>
+                  </div>
+                )}
                 {repoStates.length > 0 && (
                   <>
                     <div className="border-t border-slate-200 dark:border-slate-700 my-2" />

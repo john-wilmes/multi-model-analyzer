@@ -116,8 +116,22 @@ export async function fetchAtdi(): Promise<SystemAtdi | null> {
   return fetchJson<SystemAtdi>(`${BASE}/api/atdi`).catch(() => null);
 }
 
+export interface ResolvedSymbol {
+  name: string;
+  targetFileId: string;
+  kind: string;
+}
+
 export interface CrossRepoEdge {
-  edge: { source: string; target: string; kind: string };
+  edge: {
+    source: string;
+    target: string;
+    kind: string;
+    metadata?: {
+      importedNames?: string[];
+      resolvedSymbols?: ResolvedSymbol[];
+    };
+  };
   sourceRepo: string;
   targetRepo: string;
   packageName: string;
