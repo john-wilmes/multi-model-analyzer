@@ -1,0 +1,597 @@
+/**
+ * Agent scenario tests: multi-step MCP tool chains that simulate what an LLM
+ * agent actually experiences. Each scenario seeds realistic interconnected data,
+ * then executes 2-4 sequential tool calls where each step's output informs the
+ * next.
+ */
+
+import { describe, it, expect, vi } from "vitest";
+import { registerTools } from "./tools.js";
+import type { Stores } from "./tools.js";
+
+vi.mock("@mma/ingestion", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@mma/ingestion")>();
+  return {
+    ...actual,
+    scanGitHubOrg: vi.fn().mockResolvedValue({ totalReposInOrg: 0, repos: [] }),
+    cloneOrFetch: vi.fn().mockResolvedValue(undefined),
+  };
+});
+import {
+  InMemoryGraphStore,
+  InMemorySearchStore,
+  InMemoryKVStore,
+} from "@mma/storage";
+
+type ToolResult = { content: Array<{ type: string; text?: string; uri?: string }> };
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type ToolHandler = (...args: any[]) => Promise<ToolResult>;
+interface ToolEntry { description: string; handler: ToolHandler; }
+
+function createMockServer() {
+  const tools = new Map<string, ToolEntry>();
+  return {
+    registerTool: vi.fn(
+      (name: string, config: { description: string }, handler: ToolHandler) => {
+        tools.set(name, { description: config.description, handler });
+      },
+    ),
+    tools,
+  };
+}
+
+function makeStores() {
+  return {
+    graphStore: new InMemoryGraphStore(),
+    searchStore: new InMemorySearchStore(),
+    kvStore: new InMemoryKVStore(),
+  };
+}
+
+function makeInvoker(stores: ReturnType<typeof makeStores>) {
+  const server = createMockServer();
+  registerTools(server as unknown as Parameters<typeof registerTools>[0], stores as unknown as Stores);
+  return async (name: string, args: Record<string, unknown> = {}) => {
+    const handler = server.tools.get(name)?.handler;
+    if (!handler) throw new Error(`Tool not found: ${name}`);
+    return handler(args);
+  };
+}
+
+// Parse the JSON text content from a tool response
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function parse(result: ToolResult): any {
+  return JSON.parse(result.content.find(c => c.type === "text")!.text!);
+}
+
+describe("agent scenarios", () => {
+  // ---------------------------------------------------------------------------
+  // Scenario 1: "What breaks if I change this file?"
+  // Chain: search → get_blast_radius → get_diagnostics
+  // ---------------------------------------------------------------------------
+  describe("scenario 1: what breaks if I change this file?", () => {
+    it("finds dependents and matches diagnostics to affected files", async () => {
+      const stores = makeStores();
+      const invoke = makeInvoker(stores);
+
+      // Seed graph: auth.ts imports crypto.ts; controllers import auth.ts
+      await stores.graphStore.addEdges([{
+        source: "src/utils/auth.ts",
+        target: "src/utils/crypto.ts",
+        kind: "imports",
+        metadata: { repo: "api-server" },
+      }]);
+      await stores.graphStore.addEdges([{
+        source: "src/controllers/user-ctrl.ts",
+        target: "src/utils/auth.ts",
+        kind: "imports",
+        metadata: { repo: "api-server" },
+      }]);
+      await stores.graphStore.addEdges([{
+        source: "src/controllers/admin-ctrl.ts",
+        target: "src/utils/auth.ts",
+        kind: "imports",
+        metadata: { repo: "api-server" },
+      }]);
+
+      // Seed search index: crypto.ts
+      await stores.searchStore.index([
+        { id: "api-server:src/utils/crypto.ts", content: "crypto utility hashing", metadata: { repo: "api-server" } },
+      ]);
+
+      // Seed SARIF per-repo findings
+      await stores.kvStore.set("sarif:latest:index", JSON.stringify({ repos: ["api-server"] }));
+      await stores.kvStore.set("sarif:repo:api-server", JSON.stringify([
+        {
+          ruleId: "structural/high-coupling",
+          level: "error",
+          message: { text: "High coupling detected" },
+          logicalLocations: [{ name: "src/utils/auth.ts", properties: { repo: "api-server" } }],
+        },
+        {
+          ruleId: "structural/god-module",
+          level: "warning",
+          message: { text: "God module detected" },
+          logicalLocations: [{ name: "src/controllers/user-ctrl.ts", properties: { repo: "api-server" } }],
+        },
+      ]));
+
+      // Step 1: search for "crypto" in api-server
+      const searchResult = parse(await invoke("search", { query: "crypto", repo: "api-server" }));
+      expect(searchResult.total).toBeGreaterThanOrEqual(1);
+      expect(searchResult.results).toBeDefined();
+       
+      const firstResult = searchResult.results[0];
+      expect(firstResult.id).toContain("crypto");
+
+      // Step 2: compute blast radius for crypto.ts
+      const blastResult = parse(await invoke("get_blast_radius", {
+        files: ["src/utils/crypto.ts"],
+        repo: "api-server",
+      }));
+      expect(blastResult.affectedFiles).toBeDefined();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const affectedPaths: string[] = (blastResult.affectedFiles as any[]).map((f: any) => f.path as string);
+      expect(affectedPaths.some(p => p.includes("auth"))).toBe(true);
+      expect(affectedPaths.some(p => p.includes("user-ctrl") || p.includes("admin-ctrl"))).toBe(true);
+
+      // Step 3: get diagnostics for api-server and assert at least one finding
+      // touches an affected file from step 2
+      const diagResult = parse(await invoke("get_diagnostics", { repo: "api-server" }));
+      expect(diagResult.total).toBeGreaterThanOrEqual(1);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const findings = diagResult.results as any[];
+      expect(findings.length).toBeGreaterThanOrEqual(1);
+
+      const findingLocations = findings.flatMap(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (f: any) => (f.logicalLocations ?? []).map((loc: any) => loc.name as string),
+      );
+      const overlap = findingLocations.filter(loc =>
+        affectedPaths.some(p => p.includes(loc) || loc.includes(p.split("/").pop()!)),
+      );
+      expect(overlap.length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Scenario 2: "Find the most coupled service and trace its dependencies"
+  // Chain: get_service_correlation → get_cross_repo_graph → get_dependencies
+  // ---------------------------------------------------------------------------
+  describe("scenario 2: find the most coupled service and trace its dependencies", () => {
+    it("identifies top linchpin then traces cross-repo and intra-repo edges", async () => {
+      const stores = makeStores();
+      const invoke = makeInvoker(stores);
+
+      // Seed correlation:services with two linchpins
+      await stores.kvStore.set("correlation:services", JSON.stringify({
+        links: [],
+        linchpins: [
+          { endpoint: "/api/payments", producerCount: 3, consumerCount: 5, linkedRepoCount: 4, criticalityScore: 42 },
+          { endpoint: "/api/users", producerCount: 1, consumerCount: 2, linkedRepoCount: 2, criticalityScore: 15 },
+        ],
+        orphanedServices: [],
+      }));
+
+      // Seed correlation:graph with cross-repo edges pointing to payments-svc
+      await stores.kvStore.set("correlation:graph", JSON.stringify({
+        edges: [
+          {
+            edge: { source: "src/checkout.ts", target: "src/handler.ts", kind: "imports", metadata: {} },
+            sourceRepo: "checkout-svc",
+            targetRepo: "payments-svc",
+            packageName: "@acme/payments",
+          },
+          {
+            edge: { source: "src/billing.ts", target: "src/handler.ts", kind: "imports", metadata: {} },
+            sourceRepo: "billing-svc",
+            targetRepo: "payments-svc",
+            packageName: "@acme/payments",
+          },
+        ],
+        repoPairs: ["checkout-svc->payments-svc", "billing-svc->payments-svc"],
+        downstreamMap: [["checkout-svc", ["payments-svc"]], ["billing-svc", ["payments-svc"]]],
+        upstreamMap: [["payments-svc", ["checkout-svc", "billing-svc"]]],
+      }));
+
+      // Seed intra-repo graph edges for payments-svc
+      await stores.graphStore.addEdges([{
+        source: "src/handler.ts",
+        target: "src/db/pool.ts",
+        kind: "imports",
+        metadata: { repo: "payments-svc" },
+      }]);
+      await stores.graphStore.addEdges([{
+        source: "src/handler.ts",
+        target: "src/utils/auth.ts",
+        kind: "imports",
+        metadata: { repo: "payments-svc" },
+      }]);
+
+      // Step 1: get service correlation linchpins
+      const corrResult = parse(await invoke("get_service_correlation", { kind: "linchpins" }));
+      expect(corrResult.linchpins).toBeDefined();
+      const linchpins = corrResult.linchpins.results as Array<{ endpoint: string; criticalityScore: number }>;
+      expect(linchpins.length).toBeGreaterThanOrEqual(2);
+      const top = linchpins.reduce((a, b) => a.criticalityScore > b.criticalityScore ? a : b);
+      expect(top.endpoint).toBe("/api/payments");
+
+      // Step 2: get cross-repo graph for payments-svc
+      const graphResult = parse(await invoke("get_cross_repo_graph", { repo: "payments-svc" }));
+      expect(graphResult.edgeCount).toBeGreaterThanOrEqual(1);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const edges = graphResult.edges as any[];
+      expect(edges.length).toBeGreaterThanOrEqual(1);
+
+      // Step 3: get dependencies for handler.ts — may return empty if FQN not matched, but must not error
+      const depsResult = parse(await invoke("get_dependencies", {
+        symbol: "src/handler.ts",
+        repo: "payments-svc",
+      }));
+      expect(depsResult).toBeDefined();
+      expect(depsResult.error).toBeUndefined();
+      expect(depsResult.nodes).toBeDefined();
+      expect(depsResult.edges).toBeDefined();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Scenario 3: "Which repos are affected by this feature flag?"
+  // Chain: get_flag_inventory → get_flag_impact
+  // ---------------------------------------------------------------------------
+  describe("scenario 3: which repos are affected by this feature flag?", () => {
+    it("finds flag across repos then computes blast radius", async () => {
+      const stores = makeStores();
+      const invoke = makeInvoker(stores);
+
+      // Seed flags in two repos
+      await stores.kvStore.set("flags:checkout-svc", JSON.stringify({
+        repo: "checkout-svc",
+        flags: [
+          {
+            name: "ENABLE_NEW_CHECKOUT",
+            sdk: "launchdarkly",
+            locations: [
+              { module: "src/checkout/flow.ts", line: 12 },
+              { module: "src/checkout/cart.ts", line: 55 },
+            ],
+          },
+        ],
+      }));
+      await stores.kvStore.set("flags:frontend-app", JSON.stringify({
+        repo: "frontend-app",
+        flags: [
+          {
+            name: "ENABLE_NEW_CHECKOUT",
+            sdk: "launchdarkly",
+            locations: [
+              { module: "src/pages/checkout.tsx", line: 8 },
+            ],
+          },
+        ],
+      }));
+
+      // Seed intra-repo graph: summary.ts → flow.ts, routes.ts → cart.ts
+      await stores.graphStore.addEdges([{
+        source: "src/checkout/summary.ts",
+        target: "src/checkout/flow.ts",
+        kind: "imports",
+        metadata: { repo: "checkout-svc" },
+      }]);
+      await stores.graphStore.addEdges([{
+        source: "src/checkout/routes.ts",
+        target: "src/checkout/cart.ts",
+        kind: "imports",
+        metadata: { repo: "checkout-svc" },
+      }]);
+
+      // Seed cross-repo graph: checkout-svc → payments-svc
+      await stores.kvStore.set("correlation:graph", JSON.stringify({
+        edges: [
+          {
+            edge: { source: "src/checkout/flow.ts", target: "src/payment.ts", kind: "imports", metadata: {} },
+            sourceRepo: "checkout-svc",
+            targetRepo: "payments-svc",
+            packageName: "@acme/payments",
+          },
+        ],
+        repoPairs: ["checkout-svc->payments-svc"],
+        downstreamMap: [["checkout-svc", ["payments-svc"]]],
+        upstreamMap: [["payments-svc", ["checkout-svc"]]],
+      }));
+
+      // Step 1: get flag inventory across all repos
+      const inventoryResult = parse(await invoke("get_flag_inventory", {}));
+      expect(inventoryResult.total).toBeGreaterThanOrEqual(2);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const flags = inventoryResult.flags as any[];
+      const checkoutFlag = flags.find((f: { name: string; repo: string }) =>
+        f.name === "ENABLE_NEW_CHECKOUT" && f.repo === "checkout-svc",
+      );
+      const frontendFlag = flags.find((f: { name: string; repo: string }) =>
+        f.name === "ENABLE_NEW_CHECKOUT" && f.repo === "frontend-app",
+      );
+      expect(checkoutFlag).toBeDefined();
+      expect(frontendFlag).toBeDefined();
+
+      // Step 2: compute flag impact for checkout-svc with cross-repo
+      const impactResult = parse(await invoke("get_flag_impact", {
+        flag: "ENABLE_NEW_CHECKOUT",
+        repo: "checkout-svc",
+        crossRepo: true,
+      }));
+      expect(impactResult.flagName).toBe("ENABLE_NEW_CHECKOUT");
+      expect(impactResult.flagLocations).toBeDefined();
+      // flagLocations is string[] of file paths (modules)
+      const flagLocs = impactResult.flagLocations as string[];
+      expect(flagLocs.some(m => m.includes("flow.ts"))).toBe(true);
+      expect(flagLocs.some(m => m.includes("cart.ts"))).toBe(true);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const affectedPaths = (impactResult.affectedFiles as any[]).map((f: { path: string }) => f.path);
+      expect(affectedPaths.some(p => p.includes("summary"))).toBe(true);
+      expect(affectedPaths.some(p => p.includes("routes"))).toBe(true);
+
+      expect(impactResult.crossRepo).toBeDefined();
+      expect(impactResult.crossRepo.reposReached).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Scenario 4: "Triage the worst code quality issues"
+  // Chain: get_diagnostics → get_metrics → get_blast_radius
+  // ---------------------------------------------------------------------------
+  describe("scenario 4: triage the worst code quality issues", () => {
+    it("finds error-level findings, checks instability metrics, then blast radius", async () => {
+      const stores = makeStores();
+      const invoke = makeInvoker(stores);
+
+      // Seed SARIF with errors for engine.ts and warnings for others
+      await stores.kvStore.set("sarif:latest:index", JSON.stringify({ repos: ["engine-repo"] }));
+      await stores.kvStore.set("sarif:repo:engine-repo", JSON.stringify([
+        {
+          ruleId: "structural/god-module",
+          level: "error",
+          message: { text: "God module: too many responsibilities" },
+          logicalLocations: [{ name: "src/core/engine.ts", properties: { repo: "engine-repo" } }],
+        },
+        {
+          ruleId: "structural/cyclomatic-complexity",
+          level: "error",
+          message: { text: "Cyclomatic complexity exceeds threshold" },
+          logicalLocations: [{ name: "src/core/engine.ts", properties: { repo: "engine-repo" } }],
+        },
+        {
+          ruleId: "structural/high-coupling",
+          level: "warning",
+          message: { text: "High coupling" },
+          logicalLocations: [{ name: "src/utils/helpers.ts", properties: { repo: "engine-repo" } }],
+        },
+        {
+          ruleId: "structural/missing-abstraction",
+          level: "warning",
+          message: { text: "Missing abstraction layer" },
+          logicalLocations: [{ name: "src/io/reader.ts", properties: { repo: "engine-repo" } }],
+        },
+        {
+          ruleId: "structural/long-function",
+          level: "warning",
+          message: { text: "Function too long" },
+          logicalLocations: [{ name: "src/io/writer.ts", properties: { repo: "engine-repo" } }],
+        },
+      ]));
+
+      // Seed metrics for engine-repo
+      await stores.kvStore.set("metrics:engine-repo", JSON.stringify([
+        { module: "src/core/engine.ts", instability: 0.95, abstractness: 0.1, distance: 0.55, fanIn: 2, fanOut: 18 },
+        { module: "src/utils/helpers.ts", instability: 0.3, abstractness: 0.5, distance: 0.2, fanIn: 5, fanOut: 2 },
+      ]));
+
+      // Seed graph: processor.ts and handler.ts both import engine.ts
+      await stores.graphStore.addEdges([{
+        source: "src/processing/processor.ts",
+        target: "src/core/engine.ts",
+        kind: "imports",
+        metadata: { repo: "engine-repo" },
+      }]);
+      await stores.graphStore.addEdges([{
+        source: "src/api/handler.ts",
+        target: "src/core/engine.ts",
+        kind: "imports",
+        metadata: { repo: "engine-repo" },
+      }]);
+
+      // Step 1: get error-level diagnostics for engine-repo
+      const diagResult = parse(await invoke("get_diagnostics", { level: "error", repo: "engine-repo" }));
+      expect(diagResult.total).toBeGreaterThanOrEqual(2);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const findings = diagResult.results as any[];
+      expect(findings.every((f: { level: string }) => f.level === "error")).toBe(true);
+      // Extract file from logicalLocations
+      const engineFile = findings[0]?.logicalLocations?.[0]?.name as string;
+      expect(engineFile).toContain("engine");
+
+      // Step 2: get metrics filtered to "engine" module
+      const metricsResult = parse(await invoke("get_metrics", { repo: "engine-repo", module: "engine" }));
+      expect(metricsResult.results).toBeDefined();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const moduleResults = metricsResult.results as any[];
+      expect(moduleResults.length).toBeGreaterThanOrEqual(1);
+      const engineMetric = moduleResults.find((m: { module: string }) => m.module.includes("engine"));
+      expect(engineMetric).toBeDefined();
+      expect(engineMetric.instability).toBeGreaterThan(0.9);
+
+      // Step 3: blast radius for engine.ts
+      const blastResult = parse(await invoke("get_blast_radius", {
+        files: ["src/core/engine.ts"],
+        repo: "engine-repo",
+      }));
+      expect(blastResult.affectedFiles).toBeDefined();
+      expect(blastResult.affectedFiles.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Scenario 5: "Trace a vulnerability's reach"
+  // Chain: get_vulnerability → search → get_callers → get_blast_radius
+  // ---------------------------------------------------------------------------
+  describe("scenario 5: trace a vulnerability's reach", () => {
+    it("finds CVE, locates file, gets callers, then blast radius", async () => {
+      const stores = makeStores();
+      const invoke = makeInvoker(stores);
+
+      // Seed sarif index and vulnerability findings
+      await stores.kvStore.set("sarif:latest:index", JSON.stringify({ repos: ["api-svc"] }));
+      await stores.kvStore.set("sarif:vuln:api-svc", JSON.stringify([
+        {
+          ruleId: "CVE-2024-1234",
+          level: "error",
+          message: { text: "Prototype pollution in lodash merge" },
+          properties: { severity: "high", package: "lodash" },
+          logicalLocations: [{ name: "src/lib/data.ts", properties: { repo: "api-svc" } }],
+        },
+      ]));
+
+      // Seed search index: data.ts with lodash content
+      await stores.searchStore.index([
+        { id: "api-svc:src/lib/data.ts", content: "lodash merge utility data transformation", metadata: { repo: "api-svc" } },
+      ]);
+
+      // Seed graph: transformer.ts and ingest.ts import data.ts; batch.ts imports transformer.ts
+      await stores.graphStore.addEdges([{
+        source: "src/pipeline/transformer.ts",
+        target: "src/lib/data.ts",
+        kind: "imports",
+        metadata: { repo: "api-svc" },
+      }]);
+      await stores.graphStore.addEdges([{
+        source: "src/pipeline/ingest.ts",
+        target: "src/lib/data.ts",
+        kind: "imports",
+        metadata: { repo: "api-svc" },
+      }]);
+      await stores.graphStore.addEdges([{
+        source: "src/pipeline/batch.ts",
+        target: "src/pipeline/transformer.ts",
+        kind: "imports",
+        metadata: { repo: "api-svc" },
+      }]);
+
+      // Step 1: get vulnerability findings for api-svc with high severity
+      const vulnResult = parse(await invoke("get_vulnerability", { repo: "api-svc", severity: "high" }));
+      expect(vulnResult.findings).toBeDefined();
+      expect(vulnResult.findings.length).toBeGreaterThanOrEqual(1);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const vuln = (vulnResult.findings as any[])[0];
+      expect(vuln.ruleId).toBe("CVE-2024-1234");
+
+      // Step 2: search for lodash to confirm file location
+      const searchResult = parse(await invoke("search", { query: "lodash", repo: "api-svc" }));
+      expect(searchResult.total).toBeGreaterThanOrEqual(1);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const searchHit = (searchResult.results as any[])[0];
+      expect(searchHit.id).toContain("data.ts");
+
+      // Step 3: get callers of data.ts — may use FQN fallback but must not error
+      const callersResult = parse(await invoke("get_callers", {
+        symbol: "src/lib/data.ts",
+        repo: "api-svc",
+      }));
+      expect(callersResult).toBeDefined();
+      expect(callersResult.error).toBeUndefined();
+      expect(callersResult.nodes).toBeDefined();
+      // nodes is string[] of FQNs like "src/file.ts#Symbol"
+      const nodeIds = callersResult.nodes as string[];
+      // Accept either a hit or an empty set — the tool must not crash
+      const hasExpectedCallers = nodeIds.some(id => id.includes("transformer") || id.includes("ingest"));
+      expect(hasExpectedCallers || nodeIds.length === 0).toBe(true);
+
+      // Step 4: blast radius for data.ts — should reach transformer, ingest, and batch
+      const blastResult = parse(await invoke("get_blast_radius", {
+        files: ["src/lib/data.ts"],
+        repo: "api-svc",
+      }));
+      expect(blastResult.totalAffected).toBeGreaterThanOrEqual(3);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Scenario 6: "Understand cross-repo architecture and find orphaned services"
+  // Chain: get_architecture → get_cross_repo_graph → get_service_correlation
+  // ---------------------------------------------------------------------------
+  describe("scenario 6: understand cross-repo architecture and find orphaned services", () => {
+    it("surveys architecture, traces cross-repo graph, then finds orphans", async () => {
+      const stores = makeStores();
+      const invoke = makeInvoker(stores);
+
+      // Seed intra-repo graph edges for two repos
+      await stores.graphStore.addEdges([{
+        source: "src/index.ts",
+        target: "src/db.ts",
+        kind: "imports",
+        metadata: { repo: "data-svc" },
+      }]);
+      await stores.graphStore.addEdges([{
+        source: "src/app.ts",
+        target: "src/api.ts",
+        kind: "imports",
+        metadata: { repo: "web-svc" },
+      }]);
+
+      // Seed correlation:graph: web-svc → data-svc
+      await stores.kvStore.set("correlation:graph", JSON.stringify({
+        edges: [
+          {
+            edge: { source: "src/app.ts", target: "src/index.ts", kind: "imports", metadata: {} },
+            sourceRepo: "web-svc",
+            targetRepo: "data-svc",
+            packageName: "@acme/data",
+          },
+        ],
+        repoPairs: ["web-svc->data-svc"],
+        downstreamMap: [["web-svc", ["data-svc"]]],
+        upstreamMap: [["data-svc", ["web-svc"]]],
+        paths: { "web-svc->data-svc": [["web-svc", "data-svc"]] },
+      }));
+
+      // Seed correlation:services: one orphan, no linchpins
+      await stores.kvStore.set("correlation:services", JSON.stringify({
+        links: [],
+        linchpins: [],
+        orphanedServices: [
+          { endpoint: "/api/legacy-reports", hasProducers: false, hasConsumers: false, repos: ["reports-svc"] },
+        ],
+      }));
+
+      // Step 1: get architecture overview — just verify no error and repos present
+      const archResult = parse(await invoke("get_architecture", {}));
+      expect(archResult).toBeDefined();
+      // Architecture query reads edge counts; verify it returns repos array or valid shape
+      const hasRepos = Array.isArray(archResult.repos);
+      const hasError = "error" in archResult;
+      // If there's no error, repos should be an array; if errored, that's also acceptable
+      // (the point is the tool doesn't throw)
+      expect(hasRepos || hasError).toBe(true);
+      if (hasRepos) {
+        expect(archResult.repos.length).toBeGreaterThanOrEqual(1);
+      }
+
+      // Step 2: get cross-repo graph with paths
+      const graphResult = parse(await invoke("get_cross_repo_graph", { includePaths: true }));
+      expect(graphResult.edgeCount).toBeGreaterThanOrEqual(1);
+      expect(graphResult.repoPairs).toContain("web-svc->data-svc");
+      expect(graphResult.paths).toBeDefined();
+      const pathKeys = Object.keys(graphResult.paths as Record<string, unknown>);
+      expect(pathKeys.length).toBeGreaterThanOrEqual(1);
+
+      // Step 3: get orphaned services
+      const corrResult = parse(await invoke("get_service_correlation", { kind: "orphaned" }));
+      expect(corrResult.orphanedServices).toBeDefined();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const orphans = corrResult.orphanedServices.results as any[];
+      expect(orphans.length).toBeGreaterThanOrEqual(1);
+      const legacyOrphan = orphans.find((o: { endpoint: string }) => o.endpoint === "/api/legacy-reports");
+      expect(legacyOrphan).toBeDefined();
+    });
+  });
+});

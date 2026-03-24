@@ -6,6 +6,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+- Agent scenario tests for MCP server: 6 scripted multi-step tool chains that validate the real agent experience (search → blast radius → diagnostics, etc.)
+
 ## [1.1.0] - 2026-03-23
 
 ### Added

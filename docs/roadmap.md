@@ -16,6 +16,10 @@ Implemented in `packages/mcp`. Exposes mma's query layer as MCP tools over stdio
 
 Split the monolithic `tools.ts` into focused modules (PR #73). Each tool category lives in its own file under `packages/mcp/src/tools/`, reducing merge conflicts and making it easier to add new tools.
 
+### MCP Agent Scenario Tests ✓
+
+Six scripted multi-step integration tests in `packages/mcp/src/agent-scenarios.test.ts` that simulate real agent workflows. Each scenario seeds interconnected stores, then chains 2-4 tool calls where each step's output informs the next — validating that an agent can answer questions like "what breaks if I change this file?" or "trace this vulnerability's reach" using the MCP tools.
+
 ### Worker Thread Blast Radius ✓
 
 Implemented in PR #74. `computeReachCounts` (SCC + bitset) runs in a worker thread with a 30-second timeout and graceful fallback. Prevents large-repo blast radius computation from blocking the main thread.
