@@ -66,13 +66,40 @@ export async function buildExportIndex(
 /**
  * Generate candidate file IDs for a deep import subpath.
  * E.g. targetRepo="shared-types", subpath="out/constants"
- * → ["shared-types:out/constants.ts", "shared-types:out/constants.js",
- *    "shared-types:out/constants/index.ts", "shared-types:out/constants/index.js",
- *    "shared-types:out/constants.tsx"]
+ * → tries "out/constants.ts", "src/constants.ts", etc.
+ *
+ * Also remaps compiled output directories to source:
+ *   out/X → src/X, dist/X → src/X
+ * And strips intermediate build dirs:
+ *   dist/module/X → X, dist/cjs/X → X, dist/esm/X → X
  */
 function subpathCandidates(targetRepo: string, subpath: string): string[] {
   const exts = [".ts", ".js", "/index.ts", "/index.js", ".tsx", ".jsx", "/index.tsx", "/index.jsx"];
-  return exts.map((ext) => makeFileId(targetRepo, subpath + ext));
+
+  // Build list of subpath variants to try
+  const subpaths = [subpath];
+
+  // Strip intermediate build dirs first (more specific):
+  // dist/module/X → X, dist/cjs/X → X, dist/esm/X → X
+  const strippedMatch = subpath.match(/^(?:out|dist)\/(?:module|cjs|esm|es)\/(.*)/);
+  if (strippedMatch) {
+    subpaths.push(strippedMatch[1]!);           // bare path
+    subpaths.push("src/" + strippedMatch[1]!);  // src/ prefixed
+  }
+
+  // Generic remap: out/X → src/X, dist/X → src/X (less specific, tried after stripping)
+  if (/^(?:out|dist)\//.test(subpath)) {
+    subpaths.push(subpath.replace(/^(?:out|dist)\//, "src/"));
+  }
+
+  // Generate candidates for all subpath variants (deduplicated)
+  const candidates: string[] = [];
+  for (const sp of new Set(subpaths)) {
+    for (const ext of exts) {
+      candidates.push(makeFileId(targetRepo, sp + ext));
+    }
+  }
+  return candidates;
 }
 
 /**
