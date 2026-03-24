@@ -204,6 +204,35 @@ describe("RepoStateManager", () => {
     expect(names).toEqual(["repo-a", "repo-b"]);
   });
 
+  // forceCandidate
+  describe("forceCandidate", () => {
+    it("resets an indexed repo back to candidate", async () => {
+      await mgr.addCandidate(REPO_A, "org-scan");
+      await mgr.startIndexing("repo-a");
+      await mgr.markIndexed("repo-a");
+
+      const result = await mgr.forceCandidate("repo-a");
+      expect(result.status).toBe("candidate");
+
+      const fetched = await mgr.get("repo-a");
+      expect(fetched?.status).toBe("candidate");
+    });
+
+    it("resets an indexing repo back to candidate", async () => {
+      await mgr.addCandidate(REPO_A, "org-scan");
+      await mgr.startIndexing("repo-a");
+
+      const result = await mgr.forceCandidate("repo-a");
+      expect(result.status).toBe("candidate");
+    });
+
+    it("throws for a non-existent repo", async () => {
+      await expect(mgr.forceCandidate("ghost")).rejects.toThrow(
+        /not found in state store/,
+      );
+    });
+  });
+
   it("remove deletes a repo from state", async () => {
     await mgr.addCandidate(REPO_A, "org-scan");
     await mgr.remove("repo-a");

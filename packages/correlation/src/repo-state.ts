@@ -174,6 +174,16 @@ export class RepoStateManager {
     return updated;
   }
 
+  /**
+   * Force a repo back to "candidate" state regardless of current status. For re-indexing.
+   */
+  async forceCandidate(name: string): Promise<RepoState> {
+    const existing = await this.#requireExisting(name);
+    const updated: RepoState = { ...existing, status: "candidate" };
+    await this.kv.set(key(name), JSON.stringify(updated));
+    return updated;
+  }
+
   /** Update the connection count for a repo. */
   async updateConnectionCount(name: string, count: number): Promise<RepoState> {
     const existing = await this.#requireExisting(name);

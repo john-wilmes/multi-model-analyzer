@@ -86,6 +86,9 @@ async function main(): Promise<void> {
       repo: { type: "string" },
       "max-depth": { type: "string", default: "5" },
       "audit-file": { type: "string" },
+      concurrency: { type: "string" },
+      language: { type: "string" },
+      "batch-size": { type: "string" },
     },
   });
 
@@ -662,6 +665,47 @@ async function main(): Promise<void> {
           ? new Set(corsOriginList)
           : undefined,
       });
+    } finally {
+      stores.close();
+    }
+    return;
+  }
+
+  // index-org command -- scan a GitHub org and index all repos in batches
+  // Implementation: commands/index-org-cmd.ts (dynamic import below)
+  if (command === "index-org") {
+    const orgName = positionals[1];
+    if (!orgName) {
+      console.error("Usage: mma index-org <org-name> [--mirrors dir] [--db path] [--concurrency N] [--language ts,js] [--force]");
+      process.exit(1);
+    }
+    const mirrorDir = resolve(values.mirrors ?? "mirrors");
+    if (dbPath !== ":memory:") mkdirSync(dirname(dbPath), { recursive: true });
+    const stores = await createStores({ backend: earlyBackend, dbPath });
+    try {
+      const { indexOrgCommand } = await import("./commands/index-org-cmd.js");
+      const concurrency = parseInt(values.concurrency ?? "4", 10);
+      const batchSizeVal = parseInt(values["batch-size"] ?? "20", 10);
+      const languages = (values.language ?? "TypeScript,JavaScript").split(",").map((s: string) => s.trim());
+      const result = await indexOrgCommand({
+        org: orgName,
+        kvStore: stores.kvStore,
+        graphStore: stores.graphStore,
+        searchStore: stores.searchStore,
+        mirrorDir,
+        concurrency: Number.isFinite(concurrency) ? concurrency : 4,
+        languages,
+        force: values["force-full-reindex"] ?? false,
+        verbose,
+        batchSize: Number.isFinite(batchSizeVal) ? batchSizeVal : 20,
+        enrich: values.enrich,
+        ollamaUrl: values["ollama-url"],
+        ollamaModel: values["ollama-model"],
+      });
+      if (result.failedRepos.length > 0) {
+        console.error(`Failed repos: ${result.failedRepos.join(", ")}`);
+        process.exit(1);
+      }
     } finally {
       stores.close();
     }
