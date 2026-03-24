@@ -199,7 +199,7 @@ export default function PatternsView() {
                     onClick={() => toggleKind(kind)}
                     role="button"
                     tabIndex={0}
-                    onKeyDown={(e) => e.key === 'Enter' && toggleKind(kind)}
+                    onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), toggleKind(kind))}
                   >
                     <span className="font-semibold text-slate-800 dark:text-slate-100">
                       {KIND_LABELS[kind] ?? kind}
