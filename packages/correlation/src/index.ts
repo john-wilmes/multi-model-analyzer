@@ -5,6 +5,7 @@ export type {
   DependencyPath,
   ServiceLink,
   LinchpinService,
+  PackageLinchpin,
   ServiceCorrelationResult,
   OrphanedService,
   CorrelationOptions,

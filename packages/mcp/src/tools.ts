@@ -326,10 +326,10 @@ export function registerTools(server: McpServer, stores: Stores): void {
 
   // 11. Cross-repo service correlation
   server.registerTool("get_service_correlation", {
-    description: "Get cross-repo service correlation: linchpin services with high cross-repo coupling and orphaned services",
+    description: "Get cross-repo service correlation: linchpin services/packages with high cross-repo coupling and orphaned services",
     inputSchema: {
-      endpoint: z.string().optional().describe("Filter by endpoint substring (case-insensitive)"),
-      kind: z.enum(["linchpins", "orphaned", "all"]).optional().describe("Which subset to return (default: all)"),
+      endpoint: z.string().optional().describe("Filter by endpoint or package name substring (case-insensitive)"),
+      kind: z.enum(["linchpins", "packages", "orphaned", "all"]).optional().describe("Which subset to return: linchpins (HTTP endpoints), packages (shared packages), orphaned, or all (default: all)"),
       limit: z.number().optional().describe("Max results to return (default 50)"),
       offset: z.number().optional().describe("Number of results to skip for pagination (default 0)"),
     },
@@ -341,16 +341,19 @@ export function registerTools(server: McpServer, stores: Stores): void {
     const parsed = JSON.parse(raw) as {
       links: unknown[];
       linchpins: Array<{ endpoint: string; [key: string]: unknown }>;
+      packageLinchpins?: Array<{ packageName: string; [key: string]: unknown }>;
       orphanedServices: Array<{ endpoint: string; [key: string]: unknown }>;
     };
 
     // Filter template-literal URLs (test harness noise like ${MAILPIT_URL}/...)
     let linchpins = parsed.linchpins.filter((l) => !l.endpoint.includes("${"));
+    let packageLinchpins = parsed.packageLinchpins ?? [];
     let orphanedServices = parsed.orphanedServices.filter((o) => !o.endpoint.includes("${"));
 
     if (endpoint) {
       const lower = endpoint.toLowerCase();
       linchpins = linchpins.filter((l) => l.endpoint.toLowerCase().includes(lower));
+      packageLinchpins = packageLinchpins.filter((p) => p.packageName.toLowerCase().includes(lower));
       orphanedServices = orphanedServices.filter((o) => o.endpoint.toLowerCase().includes(lower));
     }
 
@@ -359,6 +362,9 @@ export function registerTools(server: McpServer, stores: Stores): void {
 
     if (selectedKind === "linchpins" || selectedKind === "all") {
       result["linchpins"] = paginated(linchpins, offset ?? 0, limit ?? 50);
+    }
+    if (selectedKind === "packages" || selectedKind === "all") {
+      result["packageLinchpins"] = paginated(packageLinchpins, offset ?? 0, limit ?? 50);
     }
     if (selectedKind === "orphaned" || selectedKind === "all") {
       result["orphanedServices"] = paginated(orphanedServices, offset ?? 0, limit ?? 50);
@@ -369,7 +375,7 @@ export function registerTools(server: McpServer, stores: Stores): void {
         ? parsed.links.slice(0, MAX_LINKS)
         : parsed.links;
       if (parsed.links.length > MAX_LINKS) {
-        result["linksTruncated"] = { shown: MAX_LINKS, total: parsed.links.length, note: "Truncated to 100 entries. Request a specific kind (linchpins, orphanedServices) for focused results." };
+        result["linksTruncated"] = { shown: MAX_LINKS, total: parsed.links.length, note: "Truncated to 100 entries. Request a specific kind (linchpins, packages, orphaned) for focused results." };
       }
     }
 

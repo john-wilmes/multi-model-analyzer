@@ -28,8 +28,8 @@ export async function runCorrelation(
   // 1. Build cross-repo dependency graph
   const crossRepoGraph = await buildCrossRepoGraph(graphStore, repos, packageRoots);
 
-  // 2. Build service correlation
-  const serviceCorrelation = await buildServiceCorrelation(graphStore, repos);
+  // 2. Build service correlation (pass cross-repo graph for package linchpin detection)
+  const serviceCorrelation = await buildServiceCorrelation(graphStore, repos, crossRepoGraph);
 
   // 3. Run SARIF detectors
   const breakingRisk = detectBreakingChangeRisk(crossRepoGraph);
@@ -58,6 +58,7 @@ export async function runCorrelation(
         linkedRepos: [...l.linkedRepos],
       })),
       linchpins: serviceCorrelation.linchpins,
+      packageLinchpins: serviceCorrelation.packageLinchpins,
       orphanedServices: serviceCorrelation.orphanedServices,
     }),
   );
