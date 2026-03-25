@@ -732,7 +732,7 @@ async function main(): Promise<void> {
         batchSize: Number.isFinite(batchSizeVal) ? batchSizeVal : 20,
         enrich: values.enrich ?? orgCfg?.enrich,
         ollamaUrl: values["ollama-url"] ?? orgCfg?.ollamaUrl ?? "http://localhost:11434",
-        ollamaModel: values["ollama-model"] ?? orgCfg?.ollamaModel ?? "llama3",
+        ollamaModel: values["ollama-model"] ?? orgCfg?.ollamaModel ?? "qwen2.5-coder:1.5b",
         llmProvider: orgLlmProvider,
         llmApiKey: values["llm-api-key"] ?? orgCfg?.llmApiKey,
         llmModel: values["llm-model"] ?? orgCfg?.llmModel,
@@ -785,7 +785,7 @@ async function main(): Promise<void> {
         verbose,
         enrich: values.enrich ?? exploreCfg?.enrich,
         ollamaUrl: values["ollama-url"] ?? exploreCfg?.ollamaUrl ?? "http://localhost:11434",
-        ollamaModel: values["ollama-model"] ?? exploreCfg?.ollamaModel ?? "llama3",
+        ollamaModel: values["ollama-model"] ?? exploreCfg?.ollamaModel ?? "qwen2.5-coder:1.5b",
         llmProvider,
         llmApiKey: values["llm-api-key"] ?? exploreCfg?.llmApiKey,
         llmModel: values["llm-model"] ?? exploreCfg?.llmModel,
@@ -823,7 +823,7 @@ async function main(): Promise<void> {
       process.exit(1);
     }
     // Warn on unknown top-level fields (catches typos)
-    const knownFields = new Set(["repos", "mirrorDir", "dbPath", "rules", "baselinePath", "backend", "advisories", "llmProvider", "llmApiKey", "llmModel"]);
+    const knownFields = new Set(["repos", "mirrorDir", "dbPath", "rules", "baselinePath", "backend", "advisories", "enrich", "ollamaUrl", "ollamaModel", "llmProvider", "llmApiKey", "llmModel"]);
     for (const key of Object.keys(cfg)) {
       if (!knownFields.has(key)) {
         console.error(`warning: unknown config field "${key}" — possible typo`);
