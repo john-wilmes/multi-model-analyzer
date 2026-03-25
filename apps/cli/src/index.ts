@@ -77,6 +77,9 @@ async function main(): Promise<void> {
       enrich: { type: "boolean", default: false },
       "ollama-url": { type: "string" },
       "ollama-model": { type: "string" },
+      "llm-provider": { type: "string" },
+      "llm-api-key": { type: "string" },
+      "llm-model": { type: "string" },
       port: { type: "string", default: "3000" },
       host: { type: "string", default: "127.0.0.1" },
       "cors-origin": { type: "string", multiple: true },
@@ -86,6 +89,9 @@ async function main(): Promise<void> {
       repo: { type: "string" },
       "max-depth": { type: "string", default: "5" },
       "audit-file": { type: "string" },
+      concurrency: { type: "string" },
+      language: { type: "string" },
+      "batch-size": { type: "string" },
     },
   });
 
@@ -662,6 +668,64 @@ async function main(): Promise<void> {
           ? new Set(corsOriginList)
           : undefined,
       });
+    } finally {
+      stores.close();
+    }
+    return;
+  }
+
+  // index-org command -- scan a GitHub org and index all repos in batches
+  // Implementation: commands/index-org-cmd.ts (dynamic import below)
+  if (command === "index-org") {
+    const orgName = positionals[1];
+    if (!orgName) {
+      console.error("Usage: mma index-org <org-name> [--mirrors dir] [--db path] [--concurrency N] [--language ts,js] [--force-full-reindex]");
+      process.exit(1);
+    }
+    // Resolve mirrorDir and backend from config (same pattern as explore command),
+    // falling back to CLI flags and defaults.
+    let mirrorDir = resolve(values.mirrors ?? "mirrors");
+    let orgBackend = earlyBackend;
+    try {
+      const configPath = resolve(values.config);
+      const configRaw = await readFile(configPath, "utf-8");
+      const cfg = JSON.parse(configRaw) as CliConfig;
+      if (!values.mirrors && typeof cfg.mirrorDir === "string" && cfg.mirrorDir.trim() !== "") {
+        mirrorDir = resolve(dirname(configPath), cfg.mirrorDir);
+      }
+      if (!values.backend && cfg.backend) {
+        orgBackend = cfg.backend;
+      }
+    } catch { /* use defaults */ }
+    if (dbPath !== ":memory:") mkdirSync(dirname(dbPath), { recursive: true });
+    const stores = await createStores({ backend: orgBackend, dbPath });
+    try {
+      const { indexOrgCommand } = await import("./commands/index-org-cmd.js");
+      const concurrency = parseInt(values.concurrency ?? "4", 10);
+      const batchSizeVal = parseInt(values["batch-size"] ?? "20", 10);
+      const languages = (values.language ?? "TypeScript,JavaScript").split(",").map((s: string) => s.trim());
+      const result = await indexOrgCommand({
+        org: orgName,
+        kvStore: stores.kvStore,
+        graphStore: stores.graphStore,
+        searchStore: stores.searchStore,
+        mirrorDir,
+        concurrency: Number.isFinite(concurrency) ? concurrency : 4,
+        languages,
+        force: values["force-full-reindex"] ?? false,
+        verbose,
+        batchSize: Number.isFinite(batchSizeVal) ? batchSizeVal : 20,
+        enrich: values.enrich,
+        ollamaUrl: values["ollama-url"],
+        ollamaModel: values["ollama-model"],
+        llmProvider: (values["llm-provider"] ?? "ollama") as "anthropic" | "openai" | "ollama",
+        llmApiKey: values["llm-api-key"],
+        llmModel: values["llm-model"],
+      });
+      if (result.failedRepos.length > 0) {
+        console.error(`Failed repos: ${result.failedRepos.join(", ")}`);
+        process.exit(1);
+      }
     } finally {
       stores.close();
     }

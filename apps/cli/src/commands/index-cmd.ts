@@ -63,8 +63,10 @@ import {
   shouldEscalateToTier3,
   tier3Summarize as ollamaTier3Summarize,
   isOllamaAvailable,
+  tier3SummarizeLlmApi,
+  isLlmApiAvailable,
 } from "@mma/summarization";
-import type { OllamaOptions } from "@mma/summarization";
+import type { OllamaOptions, LlmApiOptions } from "@mma/summarization";
 import { computeAffectedScope } from "./affected-scope.js";
 import type { AffectedScope } from "./affected-scope.js";
 import { PipelineTracer } from "../tracer.js";
@@ -126,6 +128,9 @@ export interface IndexOptions {
   readonly enrich?: boolean;
   readonly ollamaUrl?: string;
   readonly ollamaModel?: string;
+  readonly llmProvider?: "anthropic" | "openai" | "ollama";
+  readonly llmApiKey?: string;
+  readonly llmModel?: string;
 }
 
 export interface IndexResult {
@@ -134,6 +139,8 @@ export interface IndexResult {
   readonly totalFiles: number;
   readonly totalSarifResults: number;
   readonly failedRepos: number;
+  /** Names of repos that failed at any pipeline phase. */
+  readonly failedRepoNames: ReadonlySet<string>;
 }
 
 export async function indexCommand(options: IndexOptions): Promise<IndexResult> {
@@ -145,14 +152,34 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
 
   log(`Indexing ${repos.length} repositories...`);
 
-  // Ollama availability check (when --enrich is set)
+  // LLM availability check (when --enrich is set)
   if (options.enrich) {
-    const ollamaUrl = options.ollamaUrl ?? "http://localhost:11434";
-    const available = await isOllamaAvailable(ollamaUrl);
-    if (!available) {
-      throw new Error(`Ollama is not reachable at ${ollamaUrl}. Start Ollama or specify --ollama-url.`);
+    const provider = options.llmProvider ?? "ollama";
+    if (provider === "anthropic" || provider === "openai") {
+      const apiKey =
+        options.llmApiKey ??
+        (provider === "anthropic"
+          ? process.env.ANTHROPIC_API_KEY
+          : process.env.OPENAI_API_KEY) ??
+        "";
+      if (!apiKey) {
+        throw new Error(
+          `No API key for ${provider}. Set --llm-api-key or ${provider === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY"} env var.`,
+        );
+      }
+      const available = await isLlmApiAvailable({ provider, apiKey, timeout: 5_000 });
+      if (!available) {
+        throw new Error(`${provider} API is not reachable. Check your API key and network.`);
+      }
+      log(`${provider} API available`);
+    } else {
+      const ollamaUrl = options.ollamaUrl ?? "http://localhost:11434";
+      const available = await isOllamaAvailable(ollamaUrl);
+      if (!available) {
+        throw new Error(`Ollama is not reachable at ${ollamaUrl}. Start Ollama or specify --ollama-url.`);
+      }
+      log(`Ollama available at ${ollamaUrl}`);
     }
-    log(`Ollama available at ${ollamaUrl}`);
   }
 
   // Load previous commit hashes (parallel KV reads)
@@ -1090,9 +1117,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         let tier1ReadErrors = 0;
         let tier1CacheHits = 0;
         const BATCH_SIZE = 20;
-        // Source snippets for tier-3 context (only needed when --enrich is set and budget allows)
-        const needSnippets = !!(options.enrich && options.maxApiCalls !== 0);
-        const sourceContextMap = new Map<string, string>();
+        // Tier-3 snippets are loaded lazily at tier-3 time to avoid OOM on large repos.
         const MAX_SNIPPET_LINES = 30;
         const isBareForTier1 = await checkBareRepo(repo.localPath);
         const bareCommitForTier1 = isBareForTier1
@@ -1132,7 +1157,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
               if (cached) {
                 tier1CacheHits++;
                 try {
-                  return { summaries: JSON.parse(cached) as Summary[], symbols: pf.symbols, sourceLines: null as string[] | null, filePath: pf.path };
+                  return { summaries: JSON.parse(cached) as Summary[], symbols: pf.symbols, filePath: pf.path };
                 } catch {
                   // Corrupted cache entry; re-generate below
                 }
@@ -1149,28 +1174,16 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
                 if (summaries.length > 0) {
                   await kvStore.set(cacheKey, JSON.stringify(summaries));
                 }
-                return { summaries, symbols: pf.symbols, sourceLines: needSnippets ? sourceText.split("\n") : null, filePath: pf.path };
+                return { summaries, symbols: pf.symbols, filePath: pf.path };
               } catch {
                 tier1ReadErrors++;
-                return { summaries: [] as Summary[], symbols: pf.symbols, sourceLines: null as string[] | null, filePath: pf.path };
+                return { summaries: [] as Summary[], symbols: pf.symbols, filePath: pf.path };
               }
             }),
           );
-          for (const { summaries: tier1, symbols, sourceLines, filePath } of results) {
+          for (const { summaries: tier1 } of results) {
             for (const s of tier1) {
               summaryMap.set(s.entityId, s);
-            }
-            // Extract source snippets for tier-3 context
-            if (sourceLines) {
-              for (const sym of symbols) {
-                if (sym.kind !== "function" && sym.kind !== "method" && sym.kind !== "class") continue;
-                const entityId = sym.containerName
-                  ? `${filePath}#${sym.containerName}.${sym.name}`
-                  : `${filePath}#${sym.name}`;
-                const start = Math.max(0, sym.startLine - 1);
-                const end = Math.min(sourceLines.length, start + MAX_SNIPPET_LINES);
-                sourceContextMap.set(entityId, sourceLines.slice(start, end).join("\n"));
-              }
             }
           }
           const processed = Math.min(batchStart + BATCH_SIZE, parsedFiles.length);
@@ -1200,7 +1213,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
           }
         }
 
-        // Tier 3: Ollama for low-confidence method summaries
+        // Tier 3: LLM (cloud API or Ollama) for low-confidence method summaries (lazy snippet loading)
         let tier3Count = 0;
         if (options.enrich && (!sharedApiBudget || sharedApiBudget.remaining > 0)) {
           let tier3Candidates = [...summaryMap.entries()]
@@ -1211,26 +1224,123 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
             tier3Candidates = tier3Candidates.slice(0, granted);
           }
           if (tier3Candidates.length > 0) {
-            log(`    Tier 3 (Ollama): upgrading ${tier3Candidates.length} low-confidence summaries`);
-            const ollamaEntities = tier3Candidates.map(([entityId]) => ({
-              entityId,
-              sourceCode: sourceContextMap.get(entityId) ?? entityId,
-              context: entityId,
-            }));
+            const tier3Provider = options.llmProvider ?? "ollama";
+            log(`    Tier 3 (${tier3Provider}): upgrading ${tier3Candidates.length} low-confidence summaries`);
+
+            // Lazily load source snippets only for tier-3 candidates (avoids OOM on large repos)
+            const isBareForTier3 = await checkBareRepo(repo.localPath);
+            const bareCommitForTier3 = isBareForTier3
+              ? await resolveCommitForBare(repo.localPath, changeSets, repo.name)
+              : undefined;
+
+            // Build a symbol start-line index from parsedFiles
+            const symbolLineIndex = new Map<string, number>();
+            for (const pf of parsedFiles) {
+              for (const sym of pf.symbols) {
+                if (sym.kind !== "function" && sym.kind !== "method" && sym.kind !== "class") continue;
+                const eid = sym.containerName
+                  ? `${pf.path}#${sym.containerName}.${sym.name}`
+                  : `${pf.path}#${sym.name}`;
+                symbolLineIndex.set(eid, sym.startLine);
+              }
+            }
+
             const ollamaOpts: Partial<OllamaOptions> = {
               ...(options.ollamaUrl ? { baseUrl: options.ollamaUrl } : {}),
               ...(options.ollamaModel ? { model: options.ollamaModel } : {}),
             };
-            const tier3Results = await ollamaTier3Summarize(ollamaEntities, ollamaOpts);
-            for (const s of tier3Results) {
-              if (s.confidence > 0) {
-                summaryMap.set(s.entityId, s);
-                tier3Count++;
+
+            // Process tier-3 in chunks of 200 to bound memory (load snippets per chunk, then free)
+            const TIER3_CHUNK = 200;
+            for (let ci = 0; ci < tier3Candidates.length; ci += TIER3_CHUNK) {
+              const chunk = tier3Candidates.slice(ci, ci + TIER3_CHUNK);
+
+              // Group this chunk's candidates by file
+              const chunkByFile = new Map<string, { entityId: string }[]>();
+              for (const [entityId] of chunk) {
+                const [filePath, symPart] = entityId.split("#");
+                if (!filePath || !symPart) continue;
+                let list = chunkByFile.get(filePath);
+                if (!list) { list = []; chunkByFile.set(filePath, list); }
+                list.push({ entityId });
+              }
+
+              // Load snippets for this chunk only
+              const snippetMap = new Map<string, string>();
+              const filePaths = [...chunkByFile.keys()];
+              if (isBareForTier3 && bareCommitForTier3 && filePaths.length > 0) {
+                try {
+                  const fetched = await getFileContentBatch(repo.localPath, bareCommitForTier3, filePaths);
+                  for (const [fp, content] of fetched) {
+                    const lines = content.split("\n");
+                    for (const { entityId } of chunkByFile.get(fp) ?? []) {
+                      const startLine = symbolLineIndex.get(entityId);
+                      if (startLine === undefined) continue;
+                      const start = Math.max(0, startLine - 1);
+                      const end = Math.min(lines.length, start + MAX_SNIPPET_LINES);
+                      snippetMap.set(entityId, lines.slice(start, end).join("\n"));
+                    }
+                  }
+                } catch {
+                  // Fall through — use entityId as context
+                }
+              } else {
+                for (const [fp, candidates] of chunkByFile) {
+                  try {
+                    const content = await readFile(join(repo.localPath, fp), "utf-8");
+                    const lines = content.split("\n");
+                    for (const { entityId } of candidates) {
+                      const startLine = symbolLineIndex.get(entityId);
+                      if (startLine === undefined) continue;
+                      const start = Math.max(0, startLine - 1);
+                      const end = Math.min(lines.length, start + MAX_SNIPPET_LINES);
+                      snippetMap.set(entityId, lines.slice(start, end).join("\n"));
+                    }
+                  } catch {
+                    // File not readable — skip
+                  }
+                }
+              }
+
+              const tier3Entities = chunk.map(([entityId]) => ({
+                entityId,
+                sourceCode: snippetMap.get(entityId) ?? entityId,
+                context: entityId,
+              }));
+
+              let tier3Results;
+              if (tier3Provider === "anthropic" || tier3Provider === "openai") {
+                const resolvedApiKey =
+                  options.llmApiKey ??
+                  (tier3Provider === "anthropic"
+                    ? process.env.ANTHROPIC_API_KEY
+                    : process.env.OPENAI_API_KEY) ??
+                  "";
+                const llmOpts: LlmApiOptions = {
+                  provider: tier3Provider,
+                  apiKey: resolvedApiKey,
+                  model: options.llmModel ?? (tier3Provider === "anthropic" ? "claude-haiku-4-5-20251001" : "gpt-4o-mini"),
+                  timeout: 30_000,
+                  maxTokens: 200,
+                };
+                tier3Results = await tier3SummarizeLlmApi(tier3Entities, llmOpts, 20);
+              } else {
+                const ollamaEntities = tier3Entities;
+                tier3Results = await ollamaTier3Summarize(ollamaEntities, ollamaOpts);
+              }
+              for (const s of tier3Results) {
+                if (s.confidence > 0) {
+                  summaryMap.set(s.entityId, s);
+                  tier3Count++;
+                }
+              }
+
+              if (ci % 1000 < TIER3_CHUNK) {
+                log(`    [tier-3] ${Math.min(ci + TIER3_CHUNK, tier3Candidates.length)}/${tier3Candidates.length}`);
               }
             }
           }
         }
-        sourceContextMap.clear(); // free snippet memory after tier-3
 
         // Index summaries in search store for query support (batched to limit memory)
         const SEARCH_BATCH = 1000;
@@ -1579,6 +1689,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     totalFiles,
     totalSarifResults: allSarifResults.length,
     failedRepos: failedRepoNames.size,
+    failedRepoNames,
   };
 }
 
