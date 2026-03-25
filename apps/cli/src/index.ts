@@ -679,12 +679,26 @@ async function main(): Promise<void> {
   if (command === "index-org") {
     const orgName = positionals[1];
     if (!orgName) {
-      console.error("Usage: mma index-org <org-name> [--mirrors dir] [--db path] [--concurrency N] [--language ts,js] [--force]");
+      console.error("Usage: mma index-org <org-name> [--mirrors dir] [--db path] [--concurrency N] [--language ts,js] [--force-full-reindex]");
       process.exit(1);
     }
-    const mirrorDir = resolve(values.mirrors ?? "mirrors");
+    // Resolve mirrorDir and backend from config (same pattern as explore command),
+    // falling back to CLI flags and defaults.
+    let mirrorDir = resolve(values.mirrors ?? "mirrors");
+    let orgBackend = earlyBackend;
+    try {
+      const configPath = resolve(values.config);
+      const configRaw = await readFile(configPath, "utf-8");
+      const cfg = JSON.parse(configRaw) as CliConfig;
+      if (!values.mirrors && typeof cfg.mirrorDir === "string" && cfg.mirrorDir.trim() !== "") {
+        mirrorDir = resolve(dirname(configPath), cfg.mirrorDir);
+      }
+      if (!values.backend && cfg.backend) {
+        orgBackend = cfg.backend;
+      }
+    } catch { /* use defaults */ }
     if (dbPath !== ":memory:") mkdirSync(dirname(dbPath), { recursive: true });
-    const stores = await createStores({ backend: earlyBackend, dbPath });
+    const stores = await createStores({ backend: orgBackend, dbPath });
     try {
       const { indexOrgCommand } = await import("./commands/index-org-cmd.js");
       const concurrency = parseInt(values.concurrency ?? "4", 10);

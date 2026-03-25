@@ -139,6 +139,8 @@ export interface IndexResult {
   readonly totalFiles: number;
   readonly totalSarifResults: number;
   readonly failedRepos: number;
+  /** Names of repos that failed at any pipeline phase. */
+  readonly failedRepoNames: ReadonlySet<string>;
 }
 
 export async function indexCommand(options: IndexOptions): Promise<IndexResult> {
@@ -1687,6 +1689,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     totalFiles,
     totalSarifResults: allSarifResults.length,
     failedRepos: failedRepoNames.size,
+    failedRepoNames,
   };
 }
 

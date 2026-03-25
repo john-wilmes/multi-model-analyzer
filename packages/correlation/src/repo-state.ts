@@ -176,10 +176,14 @@ export class RepoStateManager {
 
   /**
    * Force a repo back to "candidate" state regardless of current status. For re-indexing.
+   * Strips `ignoredAt` so that a previously-ignored repo starts with a clean candidate state.
    */
   async forceCandidate(name: string): Promise<RepoState> {
     const existing = await this.#requireExisting(name);
-    const updated: RepoState = { ...existing, status: "candidate" };
+    // Strip ignoredAt when transitioning out of "ignored" state so the resulting
+    // candidate state is clean and does not carry stale ignore metadata.
+    const { ignoredAt: _dropped, ...rest } = existing;
+    const updated: RepoState = { ...rest, status: "candidate" };
     await this.kv.set(key(name), JSON.stringify(updated));
     return updated;
   }

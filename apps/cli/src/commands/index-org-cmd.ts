@@ -44,6 +44,14 @@ export interface IndexOrgResult {
   readonly duration: number; // ms
 }
 
+/**
+ * Sanitise a repo full_name (e.g. "myorg/my-repo") for use as a filesystem
+ * path component by replacing "/" with "--".
+ */
+function toMirrorSlug(fullName: string): string {
+  return fullName.replace(/\//g, "--");
+}
+
 export async function indexOrgCommand(options: IndexOrgOptions): Promise<IndexOrgResult> {
   const {
     org, kvStore, graphStore, searchStore, mirrorDir, verbose,
@@ -52,6 +60,14 @@ export async function indexOrgCommand(options: IndexOrgOptions): Promise<IndexOr
     enrich, ollamaUrl, ollamaModel,
     llmProvider, llmApiKey, llmModel,
   } = options;
+
+  // Validate numeric options
+  if (!Number.isInteger(concurrency) || concurrency < 1) {
+    throw new Error(`--concurrency must be a positive integer >= 1 (got ${concurrency})`);
+  }
+  if (!Number.isInteger(batchSize) || batchSize < 1) {
+    throw new Error(`--batch-size must be a positive integer >= 1 (got ${batchSize})`);
+  }
 
   const start = Date.now();
   const log = verbose ? console.log.bind(console) : () => {};
@@ -78,12 +94,10 @@ export async function indexOrgCommand(options: IndexOrgOptions): Promise<IndexOr
   }
 
   // ── Phase 2: Register candidates ───────────────────────────────────────────
+  // addCandidate is idempotent: returns existing state without throwing if already registered.
+  // Use fullName (e.g. "myorg/my-repo") as the stable key to avoid collisions across orgs.
   for (const repo of scanResult.repos) {
-    try {
-      await stateManager.addCandidate({ name: repo.name, url: repo.url }, "org-scan");
-    } catch {
-      // Already registered — ok
-    }
+    await stateManager.addCandidate({ name: repo.fullName, url: repo.url }, "org-scan");
   }
 
   // ── Phase 3: Determine which repos to index ────────────────────────────────
@@ -101,16 +115,16 @@ export async function indexOrgCommand(options: IndexOrgOptions): Promise<IndexOr
   const reposToIndex: DiscoveredRepo[] = [];
   const skipped: string[] = [];
   for (const repo of scanResult.repos) {
-    const state = allStates.get(repo.name);
+    const state = allStates.get(repo.fullName);
     if (!state) {
       reposToIndex.push(repo);
     } else if (state.status === "ignored") {
-      skipped.push(repo.name);
+      skipped.push(repo.fullName);
     } else if (state.status === "indexed" && !force) {
-      skipped.push(repo.name);
+      skipped.push(repo.fullName);
     } else {
       if (state.status === "indexed" && force) {
-        await stateManager.forceCandidate(repo.name);
+        await stateManager.forceCandidate(repo.fullName);
       }
       reposToIndex.push(repo);
     }
@@ -134,22 +148,24 @@ export async function indexOrgCommand(options: IndexOrgOptions): Promise<IndexOr
   await Promise.all(
     reposToIndex.map((repo, i) =>
       limit(async () => {
-        const label = `[${i + 1}/${reposToIndex.length}] ${repo.name}`;
+        const label = `[${i + 1}/${reposToIndex.length}] ${repo.fullName}`;
         try {
           log(`  Cloning ${label}...`);
-          const localPath = await cloneOrFetch(repo.url, repo.name, {
+          // Use sanitised fullName as the filesystem directory name to avoid
+          // collisions when the same repo name appears in multiple orgs.
+          const localPath = await cloneOrFetch(repo.url, toMirrorSlug(repo.fullName), {
             mirrorDir,
             branch: repo.defaultBranch,
           });
           cloned.push({ repo, localPath });
         } catch (err) {
           console.error(`  Failed to clone ${label}: ${(err as Error).message}`);
-          await kvStore.set(`repo-error:${repo.name}`, JSON.stringify({
+          await kvStore.set(`repo-error:${repo.fullName}`, JSON.stringify({
             error: (err as Error).message,
             phase: "clone",
             timestamp: new Date().toISOString(),
           }));
-          failedClone.push(repo.name);
+          failedClone.push(repo.fullName);
         }
       }),
     ),
@@ -179,12 +195,13 @@ export async function indexOrgCommand(options: IndexOrgOptions): Promise<IndexOr
 
     for (const { repo } of batch) {
       try {
-        await stateManager.startIndexing(repo.name);
+        await stateManager.startIndexing(repo.fullName);
       } catch {
         // May already be in indexing state
       }
     }
 
+    // RepoConfig.name must be the short repo name (used as identifier inside indexCommand).
     const repoConfigs: RepoConfig[] = batch.map(({ repo, localPath }) => ({
       name: repo.name,
       url: repo.url,
@@ -208,15 +225,28 @@ export async function indexOrgCommand(options: IndexOrgOptions): Promise<IndexOr
         llmModel,
       });
 
+      // Only mark repos that actually succeeded as indexed; retry failed ones next run.
       for (const { repo } of batch) {
-        try {
-          await stateManager.markIndexed(repo.name);
-        } catch {
-          // best-effort
+        if (result.failedRepoNames.has(repo.name)) {
+          // Reset to candidate so the next resume attempt will retry this repo.
+          await stateManager.forceCandidate(repo.fullName);
+          await kvStore.set(`repo-error:${repo.fullName}`, JSON.stringify({
+            error: "failed during indexing pipeline",
+            phase: "index",
+            timestamp: new Date().toISOString(),
+          }));
+          failedIndex.push(repo.fullName);
+        } else {
+          try {
+            await stateManager.markIndexed(repo.fullName);
+          } catch {
+            // best-effort
+          }
         }
       }
 
-      totalIndexed += batch.length - result.failedRepos;
+      const succeededInBatch = batch.length - result.failedRepos;
+      totalIndexed += succeededInBatch;
       if (result.failedRepos > 0) {
         console.warn(`  ${result.failedRepos} repo(s) failed in this batch`);
       }
@@ -224,13 +254,13 @@ export async function indexOrgCommand(options: IndexOrgOptions): Promise<IndexOr
     } catch (err) {
       console.error(`  ${batchLabel} FAILED: ${(err as Error).message}`);
       for (const { repo } of batch) {
-        await stateManager.forceCandidate(repo.name);
-        await kvStore.set(`repo-error:${repo.name}`, JSON.stringify({
+        await stateManager.forceCandidate(repo.fullName);
+        await kvStore.set(`repo-error:${repo.fullName}`, JSON.stringify({
           error: (err as Error).message,
           phase: "index",
           timestamp: new Date().toISOString(),
         }));
-        failedIndex.push(repo.name);
+        failedIndex.push(repo.fullName);
       }
     }
 
@@ -242,7 +272,7 @@ export async function indexOrgCommand(options: IndexOrgOptions): Promise<IndexOr
   if (batches.length > 1 && totalIndexed > 1) {
     console.log("\nRunning final cross-repo correlation across all repos...");
     const allConfigs: RepoConfig[] = cloned
-      .filter(({ repo }) => !failedIndex.includes(repo.name))
+      .filter(({ repo }) => !failedIndex.includes(repo.fullName))
       .map(({ repo, localPath }) => ({
         name: repo.name,
         url: repo.url,
