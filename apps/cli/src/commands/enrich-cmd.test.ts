@@ -100,7 +100,7 @@ describe("enrichCommand", () => {
       description: "Handles authentication and session management",
       confidence: 0.9,
     };
-    await kvStore.set(`summary:t3:${entityId}`, JSON.stringify(cachedT3));
+    await kvStore.set(`summary:t3:repo-a:${entityId}`, JSON.stringify(cachedT3));
 
     const result = await enrichCommand({ kvStore, searchStore, verbose: false });
 

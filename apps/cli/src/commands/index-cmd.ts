@@ -250,9 +250,11 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       await options.graphStore.deleteEdgesForFiles(changeSet.repo, changeSet.deletedFiles);
 
       // Remove KV entries associated with deleted files
-      await Promise.all(changeSet.deletedFiles.map(filePath =>
-        kvStore.deleteByPrefix(`symbols:${changeSet.repo}:${filePath}`)
-      ));
+      await Promise.all(changeSet.deletedFiles.flatMap(filePath => [
+        kvStore.deleteByPrefix(`symbols:${changeSet.repo}:${filePath}`),
+        kvStore.deleteByPrefix(`summary:t1:${changeSet.repo}:${filePath}:`),
+        kvStore.deleteByPrefix(`summary:t3:${changeSet.repo}:${filePath}#`),
+      ]));
 
       // Remove stale SARIF findings for deleted files.
       // When a run has only deletions, Phase 3+ is skipped (classified.length === 0),
@@ -604,15 +606,13 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
           if (excludedFilePaths.length > 0) {
             const keysToDelete: string[] = [];
             for (const filePath of excludedFilePaths) {
-              keysToDelete.push(
-                `symbols:${repo.name}:${filePath}`,
-                `parsedFile:${repo.name}:${filePath}`,
-                `summary:1:${repo.name}:${filePath}`,
-                `summary:2:${repo.name}:${filePath}`,
-                `summary:3:${repo.name}:${filePath}`,
-              );
+              keysToDelete.push(`symbols:${repo.name}:${filePath}`);
             }
             await Promise.all(keysToDelete.map((k) => kvStore.delete(k)));
+            await Promise.all(excludedFilePaths.flatMap((filePath) => [
+              kvStore.deleteByPrefix(`summary:t1:${repo.name}:${filePath}:`),
+              kvStore.deleteByPrefix(`summary:t3:${repo.name}:${filePath}#`),
+            ]));
             log(`  [${repo.name}] Removed KV entries for ${excludedFilePaths.length} excluded files`);
           }
         } else {
@@ -1365,8 +1365,15 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         // Tier 3: LLM (cloud API or Ollama) for low-confidence method summaries (lazy snippet loading)
         let tier3Count = 0;
         if (options.enrich && (!sharedApiBudget || sharedApiBudget.remaining > 0)) {
-          let tier3Candidates = [...summaryMap.entries()]
+          const tier3Raw = [...summaryMap.entries()]
             .filter(([, s]) => shouldEscalateToTier3(s, undefined));
+          const tier3CacheChecks = await Promise.all(
+            tier3Raw.map(async ([entityId, s]) => {
+              const cached = await kvStore.has(`summary:t3:${repo.name}:${entityId}`);
+              return cached ? null : [entityId, s] as [string, typeof s];
+            })
+          );
+          let tier3Candidates = tier3CacheChecks.filter((r): r is [string, (typeof tier3Raw)[number][1]] => r !== null);
           // Atomically reserve budget before async work
           if (sharedApiBudget) {
             const granted = sharedApiBudget.reserve(tier3Candidates.length);
@@ -1482,6 +1489,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
                 if (s.confidence > 0) {
                   summaryMap.set(s.entityId, s);
                   tier3Count++;
+                  await kvStore.set(`summary:t3:${repo.name}:${s.entityId}`, JSON.stringify(s));
                 }
               }
               tier3Progress.tick(chunk.length);

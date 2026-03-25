@@ -140,6 +140,21 @@ export async function enrichCommand(options: EnrichOptions): Promise<EnrichResul
 
     log(`[enrich]   Loaded ${summaryMap.size} tier-1 summaries`);
 
+    // Merge any previously persisted tier-3 results into summaryMap so the
+    // escalation filter below correctly skips already-enriched entities.
+    const repoT3Keys = await options.kvStore.keys(`${T3_PREFIX}${repoName}:`);
+    for (const key of repoT3Keys) {
+      const raw = await options.kvStore.get(key);
+      if (!raw) continue;
+      try {
+        const s = JSON.parse(raw) as Summary;
+        const existing = summaryMap.get(s.entityId);
+        if (!existing || s.tier > existing.tier) {
+          summaryMap.set(s.entityId, s);
+        }
+      } catch { /* skip corrupted */ }
+    }
+
     // Tier 3: Ollama for low-confidence entities not already t3-cached
     let tier3Count = 0;
     if (budgetRemaining === undefined || budgetRemaining > 0) {
@@ -148,7 +163,7 @@ export async function enrichCommand(options: EnrichOptions): Promise<EnrichResul
           [...summaryMap.entries()]
             .filter(([, s]) => shouldEscalateToTier3(s, undefined))
             .map(async ([entityId, s]) => {
-              const alreadyCached = await options.kvStore.has(T3_PREFIX + entityId);
+              const alreadyCached = await options.kvStore.has(`${T3_PREFIX}${repoName}:${entityId}`);
               if (alreadyCached) return null;
               return { entityId, description: s.description, context: entityId };
             }),
@@ -189,12 +204,13 @@ export async function enrichCommand(options: EnrichOptions): Promise<EnrichResul
           };
           tier3Results = await ollamaTier3Summarize(entities, ollamaOpts);
         }
-        for (const s of tier3Results) {
+        await Promise.all(tier3Results.map(async (s) => {
           if (s.confidence > 0) {
             summaryMap.set(s.entityId, s);
             tier3Count++;
+            await options.kvStore.set(`${T3_PREFIX}${repoName}:${s.entityId}`, JSON.stringify(s));
           }
-        }
+        }));
         if (budgetRemaining !== undefined) {
           budgetRemaining = Math.max(0, budgetRemaining - capped.length);
         }
