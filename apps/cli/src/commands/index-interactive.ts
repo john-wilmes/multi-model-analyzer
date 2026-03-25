@@ -6,7 +6,6 @@
  */
 
 import { input, select, checkbox, confirm } from "@inquirer/prompts";
-import { basename } from "node:path";
 import type { KVStore, GraphStore, SearchStore } from "@mma/storage";
 import {
   scanGitHubOrg,
@@ -371,9 +370,25 @@ async function handleCandidates(
   }
 }
 
-/** Derive a repo name from a clone URL (strips .git suffix and takes the last path segment). */
+/** Detect the default branch of a remote git repo via ls-remote. Falls back to "main". */
+async function detectDefaultBranch(url: string): Promise<string> {
+  try {
+    const { execSync } = await import("child_process");
+    const out = execSync(`git ls-remote --symref ${url} HEAD`, { encoding: "utf-8", timeout: 10000 });
+    const match = out.match(/ref: refs\/heads\/(\S+)\s+HEAD/);
+    return match?.[1] ?? "main";
+  } catch {
+    return "main";
+  }
+}
+
+/** Derive a repo name from a clone URL using the last two path segments (org--repo). */
 function repoNameFromUrl(url: string): string {
-  return basename(url.replace(/\.git$/, ""));
+  const stripped = url.replace(/\.git$/, "");
+  const parts = stripped.split("/");
+  return parts.length >= 2
+    ? `${parts[parts.length - 2]}--${parts[parts.length - 1]}`
+    : (parts[parts.length - 1] ?? stripped);
 }
 
 /**
@@ -390,12 +405,14 @@ async function exploreSeedUrl(
 
   console.log(`\nStarting from ${name} (${seedUrl})`);
 
+  const defaultBranch = await detectDefaultBranch(seedUrl);
+
   const seed: DiscoveredRepo = {
     name,
     fullName: name,
     url: seedUrl,
     sshUrl: seedUrl,
-    defaultBranch: "main",
+    defaultBranch,
     language: null,
     updatedAt: new Date().toISOString(),
     archived: false,
@@ -406,7 +423,7 @@ async function exploreSeedUrl(
 
   const existing = await stateManager.get(name);
   if (existing?.status !== "indexed") {
-    await stateManager.addCandidate({ name, url: seedUrl, defaultBranch: "main" }, "user-selected");
+    await stateManager.addCandidate({ name, url: seedUrl, defaultBranch }, "user-selected");
     await indexSingleRepo(seed, stateManager, options, mirrorDir, verbose);
   } else {
     console.log(`  ${name} is already indexed.`);
@@ -620,12 +637,13 @@ async function promptForRepoUrl(
   }
 
   const name = repoNameFromUrl(url);
+  const defaultBranch = await detectDefaultBranch(url);
   const repo: DiscoveredRepo = {
     name,
     fullName: name,
     url,
     sshUrl: url,
-    defaultBranch: "main",
+    defaultBranch,
     language: null,
     updatedAt: new Date().toISOString(),
     archived: false,
@@ -634,7 +652,7 @@ async function promptForRepoUrl(
     description: null,
   };
 
-  await stateManager.addCandidate({ name, url, defaultBranch: "main" }, "user-selected");
+  await stateManager.addCandidate({ name, url, defaultBranch }, "user-selected");
   await indexSingleRepo(repo, stateManager, options, mirrorDir, verbose);
   return repo;
 }
