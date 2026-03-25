@@ -244,7 +244,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       log(`Phase 0: Cleaning up ${changeSet.deletedFiles.length} deleted files from ${changeSet.repo}...`);
 
       // Remove from search index
-      await options.searchStore.delete(changeSet.deletedFiles);
+      await options.searchStore.deleteByFilePaths(changeSet.repo, changeSet.deletedFiles);
 
       // Remove stale graph edges sourced from deleted files
       await options.graphStore.deleteEdgesForFiles(changeSet.repo, changeSet.deletedFiles);
@@ -642,7 +642,8 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
           const prev = await kvStore.get(barrelKey);
           const existing = prev ? (JSON.parse(prev) as string[]) : [];
           const parsedPaths = new Set(trees.keys());
-          const merged = existing.filter((p) => !parsedPaths.has(p));
+          const deletedFilePaths = new Set(changeSets.find(c => c.repo === repo.name)?.deletedFiles ?? []);
+          const merged = existing.filter((p) => !parsedPaths.has(p) && !deletedFilePaths.has(p));
           merged.push(...newBarrels);
           if (merged.length > 0) {
             await kvStore.set(barrelKey, JSON.stringify(merged));

@@ -171,6 +171,41 @@ describe("InMemorySearchStore", () => {
     });
   });
 
+  describe("deleteByFilePaths", () => {
+    it("deletes entity-id docs where file path matches (fp#Symbol pattern)", async () => {
+      await store.index([
+        { id: "src/auth.ts#AuthService.signIn", content: "sign in authentication", metadata: { repo: "r1" } },
+        { id: "src/auth.ts#AuthService.signOut", content: "sign out logout", metadata: { repo: "r1" } },
+        { id: "src/db.ts#DbPool.connect", content: "database connection", metadata: { repo: "r1" } },
+      ]);
+
+      await store.deleteByFilePaths("r1", ["src/auth.ts"]);
+
+      expect(await store.search("authentication")).toEqual([]);
+      expect(await store.search("logout")).toEqual([]);
+
+      const dbResults = await store.search("database");
+      expect(dbResults).toHaveLength(1);
+      expect(dbResults[0]!.id).toBe("src/db.ts#DbPool.connect");
+    });
+
+    it("does not delete docs from a different repo", async () => {
+      await store.index([
+        { id: "src/auth.ts#AuthService.signIn", content: "sign in authentication", metadata: { repo: "r1" } },
+        { id: "src/auth.ts#AuthService.signIn", content: "sign in authentication", metadata: { repo: "r2" } },
+      ]);
+
+      await store.deleteByFilePaths("r1", ["src/auth.ts"]);
+
+      const results = await store.search("authentication", 10, "r2");
+      expect(results).toHaveLength(1);
+    });
+
+    it("handles empty filePaths array", async () => {
+      await expect(store.deleteByFilePaths("r1", [])).resolves.toBeUndefined();
+    });
+  });
+
   describe("close", () => {
     it("empties the store", async () => {
       await store.index([

@@ -134,6 +134,25 @@ export class KuzuSearchStore implements SearchStore {
     }
   }
 
+  async deleteByFilePaths(repo: string, filePaths: readonly string[]): Promise<void> {
+    if (filePaths.length === 0) return;
+    let deleted = 0;
+    for (const fp of filePaths) {
+      // Match exact file path ID or entity IDs prefixed with "fp#"
+      const prefix = fp + '#';
+      const result = this.conn.querySync(
+        `MATCH (d:SearchDoc) WHERE d.repo = "${repo.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+        + ` AND (d.id = "${fp.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+        + ` OR STARTS_WITH(d.id, "${prefix.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}")) DELETE d RETURN count(*) AS n`,
+      );
+      const rows = single(result).getAllSync();
+      deleted += (rows[0]?.["n"] as number | undefined) ?? 0;
+    }
+    if (deleted > 0) {
+      this.ftsIndexDirty = true;
+    }
+  }
+
   async clear(repo?: string): Promise<void> {
     if (repo !== undefined) {
       this.conn.executeSync(this.stmtDeleteByRepo, { r: repo });
