@@ -28,6 +28,12 @@ export interface ExploreCommandOptions {
   readonly mirrorDir: string;
   readonly verbose?: boolean;
   readonly seedUrl?: string;
+  readonly enrich?: boolean;
+  readonly llmProvider?: "anthropic" | "openai" | "ollama";
+  readonly llmApiKey?: string;
+  readonly llmModel?: string;
+  readonly ollamaUrl?: string;
+  readonly ollamaModel?: string;
 }
 
 export async function exploreCommand(options: ExploreCommandOptions): Promise<void> {
@@ -190,6 +196,12 @@ async function indexSingleRepo(
       searchStore,
       verbose: verbose ?? false,
       rules: [],
+      enrich: options.enrich,
+      llmProvider: options.llmProvider,
+      llmApiKey: options.llmApiKey,
+      llmModel: options.llmModel,
+      ollamaUrl: options.ollamaUrl,
+      ollamaModel: options.ollamaModel,
     });
 
     await stateManager.markIndexed(repo.name);

@@ -79,6 +79,7 @@ All findings are SARIF v2.1.0 with logical locations only -- no source code leav
 - Baseline sharing for incremental reindexing across teams — see [docs/baseline-sharing.md](docs/baseline-sharing.md)
 - Pluggable storage backends: SQLite (default) and Kuzu graph DB (`--backend kuzu`)
 - No cloud API required — everything runs locally by default; cloud LLM providers are optional
+- Progress tracking with ETA display during clone, batch indexing, and tier-1/tier-3 summarization phases
 
 ### Dashboard
 
@@ -140,7 +141,7 @@ mma dashboard        Launch the web dashboard UI (port 3000)
 mma compress         Compress/prune the SQLite DB to reduce disk usage
 mma audit            Parse npm audit JSON and check vulnerability reachability
 mma enrich           Standalone LLM enrichment (Tier 3 summaries via Ollama)
-mma explore          Interactive incremental indexing with guided repo discovery
+mma explore          Interactive incremental indexing with guided repo discovery (supports --enrich and LLM flags)
 mma index-org        Scan a GitHub org and index all matching repos in batches
 ```
 
@@ -285,6 +286,10 @@ Flags:
 - `--language` — comma-separated list of GitHub language filters (default: TypeScript,JavaScript)
 - `--force-full-reindex` — clear and rebuild graph for each repo
 - All `--enrich`, `--llm-provider`, `--llm-api-key`, `--llm-model` flags apply
+
+`index-org` is resumable: repos already in the database are skipped, and any repos stuck in an `"indexing"` state from a prior interrupted run are automatically reset before the next batch begins.
+
+The command runs a 6-phase pipeline per batch: scan org repos → register candidates → filter by language → clone → batch index → cross-repo correlation.
 
 ## Architecture
 
