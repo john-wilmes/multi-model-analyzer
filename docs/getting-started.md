@@ -28,6 +28,8 @@ After either option, `mma --help` should print the command list.
 
 ## Quick Index: Your First Analysis
 
+If you'd rather explore without writing a config file first, run `mma explore`. It guides you through adding repos interactively, indexing each one as you go. The full config-file approach is described below.
+
 Create a file called `quickstart.config.json` in any working directory:
 
 ```json
@@ -144,6 +146,16 @@ A prebuilt baseline covering 10 Supabase repos (~20 MB compressed) is available 
 This repository includes a devcontainer configuration. Click **Code > Open with Codespaces** on GitHub and the environment will be provisioned automatically with Node.js 22 and all dependencies installed via `npm install`.
 
 Once the container starts, create your config file and run `mma index` — no local setup required.
+
+## Indexing a Whole GitHub Organization
+
+To index every TypeScript/JavaScript repo in a GitHub org at once, use `mma index-org`:
+
+```bash
+mma index-org my-org -c mma.config.json
+```
+
+This scans the org via the GitHub API, clones matching repos in batches, indexes each batch, and then runs cross-repo correlation. Repos already in the database are skipped, so interrupted runs resume where they left off. Add `--enrich --llm-provider anthropic` to enable LLM summarization at org scale.
 
 ## Next Steps
 
