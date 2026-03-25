@@ -171,8 +171,8 @@ async function indexSingleRepo(
           url: repo.url,
           branch: repo.defaultBranch,
           // For local repos the url is the filesystem path; for remote repos
-          // the mirror dir will be used by the ingestion layer.
-          localPath: repo.url,
+          // omit localPath so index-cmd falls back to mirrorDir.
+          localPath: repo.url.startsWith("/") ? repo.url : undefined,
         },
       ],
       mirrorDir,

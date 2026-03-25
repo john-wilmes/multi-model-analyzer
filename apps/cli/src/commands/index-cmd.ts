@@ -273,7 +273,9 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
           return; // malformed; leave intact
         }
         const filtered = results.filter((r) => {
-          const primaryUri = r.locations?.[0]?.physicalLocation?.artifactLocation?.uri;
+          const primaryUri =
+            r.locations?.[0]?.physicalLocation?.artifactLocation?.uri ??
+            r.locations?.[0]?.logicalLocations?.[0]?.fullyQualifiedName;
           return !primaryUri || !deletedSet.has(primaryUri);
         });
         if (filtered.length !== results.length) {
