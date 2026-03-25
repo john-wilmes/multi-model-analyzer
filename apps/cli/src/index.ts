@@ -327,6 +327,9 @@ async function main(): Promise<void> {
         verbose,
         ollamaUrl: values["ollama-url"],
         ollamaModel: values["ollama-model"],
+        llmProvider: values["llm-provider"] as import("@mma/summarization").LlmProvider | undefined,
+        llmApiKey: values["llm-api-key"],
+        llmModel: values["llm-model"],
       });
       console.log(`Enriched ${result.reposEnriched} repo(s): ${result.tier3Count} tier-3 summaries`);
     } finally {
