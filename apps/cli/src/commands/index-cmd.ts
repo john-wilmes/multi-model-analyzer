@@ -286,23 +286,23 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     if (packageRoots.size === 0) {
       await Promise.all(repos.map(async (repo) => {
         try {
-          const isBare = await checkBareRepo(repo.localPath);
-          const commit = await resolveCommitForBare(repo.localPath, changeSets, repo.name);
+          const isBare = await checkBareRepo((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)));
+          const commit = await resolveCommitForBare((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), changeSets, repo.name);
           const { execSync } = await import("node:child_process");
           const lsOutput = execSync(
             `git ls-tree -r --name-only ${commit}`,
-            { cwd: repo.localPath, encoding: "utf-8", timeout: 10000 },
+            { cwd: (repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), encoding: "utf-8", timeout: 10000 },
           );
           const pjPaths = lsOutput.split("\n").filter(p => p.endsWith("/package.json") || p === "package.json");
           await Promise.all(pjPaths.map(async (pjPath) => {
             try {
               const raw = isBare
-                ? await getFileContent(repo.localPath, commit, pjPath)
-                : await readFile(join(repo.localPath, pjPath), "utf-8");
+                ? await getFileContent((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), commit, pjPath)
+                : await readFile(join((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), pjPath), "utf-8");
               const parsed = JSON.parse(raw) as Record<string, unknown>;
               const name = parsed.name as string | undefined;
               if (name) {
-                packageRoots.set(name, join(repo.localPath, dirname(pjPath)));
+                packageRoots.set(name, join((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), dirname(pjPath)));
               }
             } catch { /* skip unreadable */ }
           }));
@@ -320,16 +320,16 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       const packageJsonFiles = classified.filter(
         (f) => f.kind === "json" && f.path.endsWith("package.json"),
       );
-      const isBare = await checkBareRepo(repo.localPath);
+      const isBare = await checkBareRepo((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)));
       await Promise.all(packageJsonFiles.map(async (pjFile) => {
         try {
           const raw = isBare
-            ? await getFileContent(repo.localPath, await resolveCommitForBare(repo.localPath, changeSets, repo.name), pjFile.path)
-            : await readFile(join(repo.localPath, pjFile.path), "utf-8");
+            ? await getFileContent((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), await resolveCommitForBare((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), changeSets, repo.name), pjFile.path)
+            : await readFile(join((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), pjFile.path), "utf-8");
           const parsed = JSON.parse(raw) as Record<string, unknown>;
           const name = parsed.name as string | undefined;
           if (name) {
-            const absDir = join(repo.localPath, dirname(pjFile.path));
+            const absDir = join((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), dirname(pjFile.path));
             if (packageRoots.has(name)) {
               log(`    warning: duplicate package name "${name}" (overwriting ${packageRoots.get(name)} with ${absDir})`);
             }
@@ -473,18 +473,18 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     try {
       // Detect bare repos (no working tree) so we can read content via git show.
       // A bare repo path ends with ".git" or git rev-parse reports it is bare.
-      const isBare = await checkBareRepo(repo.localPath);
-      const bareCommit = isBare ? await resolveCommitForBare(repo.localPath, changeSets, repo.name) : undefined;
+      const isBare = await checkBareRepo((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)));
+      const bareCommit = isBare ? await resolveCommitForBare((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), changeSets, repo.name) : undefined;
       const contentProvider =
         isBare && bareCommit
           ? async (filePath: string) => {
-              const text = await getFileContent(repo.localPath, bareCommit, filePath);
+              const text = await getFileContent((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), bareCommit, filePath);
               sourceTextCache.set(filePath, text);
               return text;
             }
           : undefined;
 
-      const result = await parseFiles(classified, repo.name, repo.localPath, {
+      const result = await parseFiles(classified, repo.name, (repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), {
         enableTsMorph: options.enableTsMorph,
         contentProvider,
         onProgress: verbose
@@ -543,7 +543,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       log(`  [${repo.name}] Extracting dependency graph...`);
       try {
         const start = performance.now();
-        const graph = extractDependencyGraph(trees, repo.name, { detectCircular: true }, packageRoots, repo.localPath);
+        const graph = extractDependencyGraph(trees, repo.name, { detectCircular: true }, packageRoots, (repo.localPath ?? join(mirrorDir, `${repo.name}.git`)));
         const elapsed = Math.round(performance.now() - start);
 
         depGraphByRepo.set(repo.name, graph);
@@ -713,7 +713,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         log(`  [${repo.name}] Computing hotspots...`);
         try {
           const start = performance.now();
-          const fileChanges = await getCommitHistory(repo.localPath, 200);
+          const fileChanges = await getCommitHistory((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), 200);
           const symbolCounts = new Map<string, number>();
           for (const pf of pf4e) {
             symbolCounts.set(pf.path, pf.symbols.length);
@@ -737,7 +737,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         log(`  [${repo.name}] Computing temporal coupling...`);
         try {
           const start = performance.now();
-          const fileChanges = await getCommitHistory(repo.localPath, 200);
+          const fileChanges = await getCommitHistory((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), 200);
           const commits: CommitInfo[] = groupByCommit(fileChanges);
           const tcResult = detectTemporalCoupling(commits);
           const tcSarif = temporalCouplingToSarif(tcResult, repo.name);
@@ -768,12 +768,12 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         );
 
         const packageJsons = new Map<string, PackageJsonInfo>();
-        const isBare = await checkBareRepo(repo.localPath);
+        const isBare = await checkBareRepo((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)));
         await Promise.all(packageJsonFiles.map(async (pjFile) => {
           try {
             const raw = isBare
-              ? await getFileContent(repo.localPath, await resolveCommitForBare(repo.localPath, changeSets, repo.name), pjFile.path)
-              : await readFile(join(repo.localPath, pjFile.path), "utf-8");
+              ? await getFileContent((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), await resolveCommitForBare((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), changeSets, repo.name), pjFile.path)
+              : await readFile(join((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), pjFile.path), "utf-8");
             const parsed = JSON.parse(raw) as Record<string, unknown>;
             packageJsons.set(dirname(pjFile.path), {
               name: (parsed.name as string) ?? "",
@@ -1120,9 +1120,9 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         const BATCH_SIZE = 20;
         // Tier-3 snippets are loaded lazily at tier-3 time to avoid OOM on large repos.
         const MAX_SNIPPET_LINES = 30;
-        const isBareForTier1 = await checkBareRepo(repo.localPath);
+        const isBareForTier1 = await checkBareRepo((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)));
         const bareCommitForTier1 = isBareForTier1
-          ? await resolveCommitForBare(repo.localPath, changeSets, repo.name)
+          ? await resolveCommitForBare((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), changeSets, repo.name)
           : undefined;
         const tier1Progress = new ProgressTracker(parsedFiles.length);
 
@@ -1144,7 +1144,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
             const uncached = cacheChecks.filter(({ hit }) => !hit).map(({ pf }) => pf.path);
             if (uncached.length > 0) {
               try {
-                const fetched = await getFileContentBatch(repo.localPath, bareCommitForTier1, uncached);
+                const fetched = await getFileContentBatch((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), bareCommitForTier1, uncached);
                 for (const [p, c] of fetched) sourceTextCache.set(p, c);
               } catch (err) {
                 log(`[warn] bulk fetch failed for ${repo.name}, falling through to per-file reads: ${String(err)}`);
@@ -1170,8 +1170,8 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
                 const sourceText = cachedSource !== undefined
                   ? cachedSource
                   : isBareForTier1 && bareCommitForTier1
-                    ? await getFileContent(repo.localPath, bareCommitForTier1, pf.path, { timeoutMs: 30_000 })
-                    : await readFile(join(repo.localPath, pf.path), "utf-8");
+                    ? await getFileContent((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), bareCommitForTier1, pf.path, { timeoutMs: 30_000 })
+                    : await readFile(join((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), pf.path), "utf-8");
                 const summaries = tier1Summarize(pf.symbols, pf.path, sourceText);
                 if (summaries.length > 0) {
                   await kvStore.set(cacheKey, JSON.stringify(summaries));
@@ -1231,9 +1231,9 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
             log(`    Tier 3 (${tier3Provider}): upgrading ${tier3Candidates.length} low-confidence summaries`);
 
             // Lazily load source snippets only for tier-3 candidates (avoids OOM on large repos)
-            const isBareForTier3 = await checkBareRepo(repo.localPath);
+            const isBareForTier3 = await checkBareRepo((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)));
             const bareCommitForTier3 = isBareForTier3
-              ? await resolveCommitForBare(repo.localPath, changeSets, repo.name)
+              ? await resolveCommitForBare((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), changeSets, repo.name)
               : undefined;
 
             // Build a symbol start-line index from parsedFiles
@@ -1274,7 +1274,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
               const filePaths = [...chunkByFile.keys()];
               if (isBareForTier3 && bareCommitForTier3 && filePaths.length > 0) {
                 try {
-                  const fetched = await getFileContentBatch(repo.localPath, bareCommitForTier3, filePaths);
+                  const fetched = await getFileContentBatch((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), bareCommitForTier3, filePaths);
                   for (const [fp, content] of fetched) {
                     const lines = content.split("\n");
                     for (const { entityId } of chunkByFile.get(fp) ?? []) {
@@ -1291,7 +1291,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
               } else {
                 for (const [fp, candidates] of chunkByFile) {
                   try {
-                    const content = await readFile(join(repo.localPath, fp), "utf-8");
+                    const content = await readFile(join((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), fp), "utf-8");
                     const lines = content.split("\n");
                     for (const { entityId } of candidates) {
                       const startLine = symbolLineIndex.get(entityId);
@@ -1429,7 +1429,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
   if (repos.length > 1) {
     tracer.startPhase("Cross-repo Correlation");
     correlationResult = await runCorrelation(kvStore, options.graphStore, {
-      repos, packageRoots, verbose,
+      repos, packageRoots, mirrorDir, verbose,
     });
     if (verbose) {
       log(`  Cross-repo edges: ${correlationResult.counts.crossRepoEdges}`);

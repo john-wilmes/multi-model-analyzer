@@ -539,7 +539,7 @@ async function main(): Promise<void> {
       const configDir = dirname(configPath);
       deltaRepos = config.repos.map((r) => ({
         name: r.name,
-        localPath: resolve(configDir, r.localPath),
+        localPath: r.localPath !== undefined ? resolve(configDir, r.localPath) : resolve(configDir, config.mirrorDir, `${r.name}.git`),
       }));
     } catch {
       // No config — use cwd as a single unnamed repo
@@ -821,7 +821,7 @@ async function main(): Promise<void> {
     mirrorDir: resolve(configDir, config.mirrorDir),
     repos: config.repos.map((r) => ({
       ...r,
-      localPath: resolve(configDir, r.localPath),
+      localPath: r.localPath !== undefined ? resolve(configDir, r.localPath) : undefined,
     })),
   };
 

@@ -41,7 +41,7 @@ describe("buildCrossRepoGraph", () => {
   });
 
   it("returns an empty graph when there are no edges", async () => {
-    const graph = await buildCrossRepoGraph(store, repos, packageRoots);
+    const graph = await buildCrossRepoGraph(store, repos, packageRoots, "/mirrors");
 
     expect(graph.edges).toHaveLength(0);
     expect(graph.repoPairs.size).toBe(0);
@@ -59,7 +59,7 @@ describe("buildCrossRepoGraph", () => {
       },
     ]);
 
-    const graph = await buildCrossRepoGraph(store, repos, packageRoots);
+    const graph = await buildCrossRepoGraph(store, repos, packageRoots, "/mirrors");
 
     expect(graph.edges).toHaveLength(1);
     const edge = graph.edges[0]!;
@@ -78,7 +78,7 @@ describe("buildCrossRepoGraph", () => {
       },
     ]);
 
-    const graph = await buildCrossRepoGraph(store, repos, packageRoots);
+    const graph = await buildCrossRepoGraph(store, repos, packageRoots, "/mirrors");
 
     expect(graph.edges).toHaveLength(1);
     const edge = graph.edges[0]!;
@@ -97,7 +97,7 @@ describe("buildCrossRepoGraph", () => {
       },
     ]);
 
-    const graph = await buildCrossRepoGraph(store, repos, packageRoots);
+    const graph = await buildCrossRepoGraph(store, repos, packageRoots, "/mirrors");
 
     expect(graph.edges).toHaveLength(1);
     expect(graph.edges[0]!.targetRepo).toBe("repo-c");
@@ -114,7 +114,7 @@ describe("buildCrossRepoGraph", () => {
       },
     ]);
 
-    const graph = await buildCrossRepoGraph(store, repos, packageRoots);
+    const graph = await buildCrossRepoGraph(store, repos, packageRoots, "/mirrors");
 
     expect(graph.edges).toHaveLength(0);
   });
@@ -129,7 +129,7 @@ describe("buildCrossRepoGraph", () => {
       },
     ]);
 
-    const graph = await buildCrossRepoGraph(store, repos, packageRoots);
+    const graph = await buildCrossRepoGraph(store, repos, packageRoots, "/mirrors");
 
     expect(graph.edges).toHaveLength(0);
   });
@@ -144,7 +144,7 @@ describe("buildCrossRepoGraph", () => {
       },
     ]);
 
-    const graph = await buildCrossRepoGraph(store, repos, packageRoots);
+    const graph = await buildCrossRepoGraph(store, repos, packageRoots, "/mirrors");
 
     expect(graph.edges).toHaveLength(0);
   });
@@ -171,7 +171,7 @@ describe("buildCrossRepoGraph", () => {
       },
     ]);
 
-    const graph = await buildCrossRepoGraph(store, repos, packageRoots);
+    const graph = await buildCrossRepoGraph(store, repos, packageRoots, "/mirrors");
 
     // repo-a depends on repo-b and repo-c
     expect(graph.downstreamMap.get("repo-a")).toEqual(
@@ -205,7 +205,7 @@ describe("buildCrossRepoGraph", () => {
       },
     ]);
 
-    const graph = await buildCrossRepoGraph(store, repos, packageRoots);
+    const graph = await buildCrossRepoGraph(store, repos, packageRoots, "/mirrors");
 
     expect(graph.repoPairs.size).toBe(1);
     expect(graph.repoPairs.has("repo-a->repo-b")).toBe(true);
@@ -224,7 +224,7 @@ describe("buildCrossRepoGraph", () => {
       },
     ]);
 
-    const graph = await buildCrossRepoGraph(store, repos, packageRoots);
+    const graph = await buildCrossRepoGraph(store, repos, packageRoots, "/mirrors");
 
     expect(graph.edges).toHaveLength(1);
     expect(graph.edges[0]!.packageName).toBe("lodash");
@@ -242,7 +242,7 @@ describe("buildCrossRepoGraph", () => {
       },
     ]);
 
-    const graph = await buildCrossRepoGraph(store, repos, new Map());
+    const graph = await buildCrossRepoGraph(store, repos, new Map(), "/mirrors");
 
     expect(graph.edges).toHaveLength(1);
     expect(graph.edges[0]!.sourceRepo).toBe("repo-a");
@@ -262,7 +262,7 @@ describe("buildCrossRepoGraph", () => {
       },
     ]);
 
-    const graph = await buildCrossRepoGraph(store, repos, new Map());
+    const graph = await buildCrossRepoGraph(store, repos, new Map(), "/mirrors");
 
     expect(graph.edges).toHaveLength(0);
   });
@@ -279,7 +279,7 @@ describe("buildCrossRepoGraph", () => {
       },
     ]);
 
-    const graph = await buildCrossRepoGraph(store, repos, new Map());
+    const graph = await buildCrossRepoGraph(store, repos, new Map(), "/mirrors");
 
     expect(graph.edges).toHaveLength(1);
     expect(graph.edges[0]!.targetRepo).toBe("repo-b");
@@ -296,7 +296,7 @@ describe("buildCrossRepoGraph", () => {
     ]);
 
     // buildCrossRepoGraph only queries imports and depends-on, not calls
-    const graph = await buildCrossRepoGraph(store, repos, new Map());
+    const graph = await buildCrossRepoGraph(store, repos, new Map(), "/mirrors");
 
     expect(graph.edges).toHaveLength(0);
   });
@@ -323,7 +323,7 @@ describe("buildCrossRepoGraph", () => {
       },
     ]);
 
-    const graph = await buildCrossRepoGraph(store, repos, packageRoots);
+    const graph = await buildCrossRepoGraph(store, repos, packageRoots, "/mirrors");
 
     // node: built-ins must never appear as cross-repo edges
     expect(graph.edges).toHaveLength(0);
@@ -358,7 +358,7 @@ describe("buildCrossRepoGraph", () => {
       },
     ]);
 
-    const graph = await buildCrossRepoGraph(store, repos, packageRoots);
+    const graph = await buildCrossRepoGraph(store, repos, packageRoots, "/mirrors");
 
     expect(graph.edges).toHaveLength(0);
     expect(graph.repoPairs.size).toBe(0);
@@ -374,7 +374,7 @@ describe("buildCrossRepoGraph", () => {
       },
     ]);
 
-    const graph = await buildCrossRepoGraph(store, repos, packageRoots);
+    const graph = await buildCrossRepoGraph(store, repos, packageRoots, "/mirrors");
 
     expect(graph.edges).toHaveLength(0);
   });
@@ -410,7 +410,7 @@ describe("buildCrossRepoGraph", () => {
 
     // Build with all three repos so repo-a exists and self-edge filtering works
     const threeRepos = [repoA, repoShort, repoLong] as const;
-    const graph = await buildCrossRepoGraph(store, threeRepos, ambiguousRoots);
+    const graph = await buildCrossRepoGraph(store, threeRepos, ambiguousRoots, "/mirrors");
 
     // Without the separator guard, /repos/repo-b-extra/... would match repo-b
     // (because "/repos/repo-b-extra".startsWith("/repos/repo-b") is true).

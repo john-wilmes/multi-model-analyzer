@@ -16,7 +16,7 @@ export async function detectChanges(
   // If localPath exists and is a git repo, use it directly (skip clone/fetch).
   // This supports pre-cloned working copies alongside bare mirrors.
   let repoPath: string;
-  if (await isGitRepo(repo.localPath)) {
+  if (repo.localPath !== undefined && await isGitRepo(repo.localPath)) {
     repoPath = repo.localPath;
   } else {
     repoPath = await cloneOrFetch(repo.url, repo.name, {

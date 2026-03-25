@@ -7,7 +7,7 @@
  * @see symbol-resolver.ts for cross-repo symbol resolution logic.
  */
 
-import { posix as path } from "node:path";
+import { posix as path, join } from "node:path";
 import type { KVStore, GraphStore } from "@mma/storage";
 import { makeFileId } from "@mma/core";
 import type { CorrelationOptions, CorrelationResult } from "./types.js";
@@ -29,10 +29,10 @@ export async function runCorrelation(
   graphStore: GraphStore,
   options: CorrelationOptions,
 ): Promise<CorrelationResult> {
-  const { repos, packageRoots, verbose } = options;
+  const { repos, packageRoots, mirrorDir, verbose } = options;
 
   // 1. Build cross-repo dependency graph
-  const crossRepoGraph = await buildCrossRepoGraph(graphStore, repos, packageRoots);
+  const crossRepoGraph = await buildCrossRepoGraph(graphStore, repos, packageRoots, mirrorDir);
 
   // 1b. Resolve imported symbol names on cross-repo edges.
   const exportIndex = await buildExportIndex(kvStore, repos);
@@ -121,9 +121,10 @@ export async function runCorrelation(
     if (!barrels) continue;
     // For each package name that resolves to this repo's directory, register barrel fileIds.
     for (const [pkgName, dirPath] of packageRoots.entries()) {
-      if (dirPath === repo.localPath || dirPath.startsWith(repo.localPath + "/")) {
+      const repoPath = repo.localPath ?? join(mirrorDir, `${repo.name}.git`);
+      if (dirPath === repoPath || dirPath.startsWith(repoPath + "/")) {
         // Compute the relative prefix for this package within the repo
-        const relPrefix = dirPath === repo.localPath ? "" : dirPath.slice(repo.localPath.length + 1) + "/";
+        const relPrefix = dirPath === repoPath ? "" : dirPath.slice(repoPath.length + 1) + "/";
         const entryIds = barrels
           .filter((b) => relPrefix === "" || b.startsWith(relPrefix))
           .map((b) => makeFileId(repo.name, b));
@@ -139,9 +140,13 @@ export async function runCorrelation(
   for (const [pkgName, dirPath] of packageRoots.entries()) {
     if (packageEntryMap.has(pkgName)) continue;
     // Find which repo owns this package
-    const repo = repos.find((r) => dirPath === r.localPath || dirPath.startsWith(r.localPath + "/"));
+    const repo = repos.find((r) => {
+      const rp = r.localPath ?? join(mirrorDir, `${r.name}.git`);
+      return dirPath === rp || dirPath.startsWith(rp + "/");
+    });
     if (!repo) continue;
-    const relPrefix = dirPath === repo.localPath ? "" : dirPath.slice(repo.localPath.length + 1) + "/";
+    const repoPathFallback = repo.localPath ?? join(mirrorDir, `${repo.name}.git`);
+    const relPrefix = dirPath === repoPathFallback ? "" : dirPath.slice(repoPathFallback.length + 1) + "/";
     const candidatePaths = ["src/index.ts", "index.ts", "src/index.tsx", "index.tsx", "src/index.js", "index.js"];
     const entryIds: string[] = [];
     for (const cp of candidatePaths) {

@@ -11,7 +11,7 @@ export interface RepoConfig {
   readonly name: string;
   readonly url: string;
   readonly branch: string;
-  readonly localPath: string;
+  readonly localPath?: string;
 }
 
 export interface ChangeSet {

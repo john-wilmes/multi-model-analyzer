@@ -28,7 +28,7 @@ function resolveRepo(edge: GraphEdge, repos: readonly RepoConfig[]): string | un
   }
   // Fall back to matching edge.source prefix against repo localPaths
   for (const repo of repos) {
-    if (edge.source.startsWith(repo.localPath)) {
+    if (repo.localPath !== undefined && edge.source.startsWith(repo.localPath)) {
       return repo.name;
     }
   }

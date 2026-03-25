@@ -18,6 +18,7 @@ const makeRepo = (name: string, localPath = `/repos/${name}`): RepoConfig => ({
 const emptyOptions = (repos: readonly RepoConfig[]): CorrelationOptions => ({
   repos,
   packageRoots: new Map(),
+  mirrorDir: "/mirrors",
 });
 
 describe("runCorrelation", () => {
@@ -79,6 +80,7 @@ describe("runCorrelation", () => {
     const result = await runCorrelation(kv, gs, {
       repos,
       packageRoots,
+      mirrorDir: "/mirrors",
     });
 
     expect(result.crossRepoGraph).toMatchObject({
