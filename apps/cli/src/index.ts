@@ -743,10 +743,12 @@ async function main(): Promise<void> {
     // Try to get mirrorDir and backend from config; fall back to defaults
     let mirrorDir = resolve("mirrors");
     let exploreBackend = earlyBackend;
+    let exploreCfg: CliConfig | undefined;
     try {
       const configPath = resolve(values.config);
       const configRaw = await readFile(configPath, "utf-8");
       const config = JSON.parse(configRaw) as CliConfig;
+      exploreCfg = config;
       if (typeof config.mirrorDir === "string" && config.mirrorDir.trim() !== "") {
         mirrorDir = resolve(dirname(configPath), config.mirrorDir);
       }
@@ -764,6 +766,12 @@ async function main(): Promise<void> {
         searchStore: stores.searchStore,
         mirrorDir,
         verbose,
+        enrich: values.enrich,
+        ollamaUrl: values["ollama-url"],
+        ollamaModel: values["ollama-model"],
+        llmProvider: (values["llm-provider"] ?? exploreCfg?.llmProvider ?? "ollama") as "anthropic" | "openai" | "ollama",
+        llmApiKey: values["llm-api-key"] ?? exploreCfg?.llmApiKey,
+        llmModel: values["llm-model"] ?? exploreCfg?.llmModel,
       });
     } finally {
       stores.close();
