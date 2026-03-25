@@ -783,6 +783,7 @@ async function main(): Promise<void> {
         searchStore: stores.searchStore,
         mirrorDir,
         verbose,
+        seedUrl: values.repo,
         enrich: values.enrich ?? exploreCfg?.enrich,
         ollamaUrl: values["ollama-url"] ?? exploreCfg?.ollamaUrl ?? "http://localhost:11434",
         ollamaModel: values["ollama-model"] ?? exploreCfg?.ollamaModel ?? "qwen2.5-coder:1.5b",
@@ -1049,7 +1050,7 @@ Usage:
   mma compress [--db path]                      Gzip the analysis database
   mma dashboard [--db path] [--port 3000] [--host 127.0.0.1]
                                                 Serve local web dashboard
-  mma explore [--db path] [--config path] [--backend <name>] [-v]
+  mma explore [--repo <url>] [--db path] [--config path] [--backend <name>] [-v]
                                                 Interactive incremental indexing (guided repo discovery)
   mma index-org <org-name> [--concurrency N] [--language ts,js] [--batch-size N]
             [--llm-provider anthropic|openai] [--llm-model M]
@@ -1085,7 +1086,7 @@ Options:
   --backend       Storage backend: sqlite (default) or kuzu
   --transport     MCP transport: stdio (default) or http (use with serve)
   --exit-code     Exit with code 1 if new/updated findings exist (use with delta)
-  --repo          Filter to a single repo (use with affected, catalog)
+  --repo          Repo name or URL (filter for affected/catalog/audit/enrich, seed for explore)
   --max-depth     Max blast radius depth (default: 5, use with affected)
   -h, --help      Show this help message
   --version       Show version number
