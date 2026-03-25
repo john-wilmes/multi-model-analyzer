@@ -77,6 +77,9 @@ async function main(): Promise<void> {
       enrich: { type: "boolean", default: false },
       "ollama-url": { type: "string" },
       "ollama-model": { type: "string" },
+      "llm-provider": { type: "string" },
+      "llm-api-key": { type: "string" },
+      "llm-model": { type: "string" },
       port: { type: "string", default: "3000" },
       host: { type: "string", default: "127.0.0.1" },
       "cors-origin": { type: "string", multiple: true },
@@ -701,6 +704,9 @@ async function main(): Promise<void> {
         enrich: values.enrich,
         ollamaUrl: values["ollama-url"],
         ollamaModel: values["ollama-model"],
+        llmProvider: (values["llm-provider"] ?? "ollama") as "anthropic" | "openai" | "ollama",
+        llmApiKey: values["llm-api-key"],
+        llmModel: values["llm-model"],
       });
       if (result.failedRepos.length > 0) {
         console.error(`Failed repos: ${result.failedRepos.join(", ")}`);

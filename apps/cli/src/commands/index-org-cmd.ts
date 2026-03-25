@@ -29,6 +29,9 @@ export interface IndexOrgOptions {
   readonly enrich?: boolean;
   readonly ollamaUrl?: string;
   readonly ollamaModel?: string;
+  readonly llmProvider?: "anthropic" | "openai" | "ollama";
+  readonly llmApiKey?: string;
+  readonly llmModel?: string;
 }
 
 export interface IndexOrgResult {
@@ -47,6 +50,7 @@ export async function indexOrgCommand(options: IndexOrgOptions): Promise<IndexOr
     concurrency, languages, force, batchSize,
     excludeForks, excludeArchived,
     enrich, ollamaUrl, ollamaModel,
+    llmProvider, llmApiKey, llmModel,
   } = options;
 
   const start = Date.now();
@@ -199,6 +203,9 @@ export async function indexOrgCommand(options: IndexOrgOptions): Promise<IndexOr
         enrich,
         ollamaUrl,
         ollamaModel,
+        llmProvider,
+        llmApiKey,
+        llmModel,
       });
 
       for (const { repo } of batch) {
@@ -251,6 +258,12 @@ export async function indexOrgCommand(options: IndexOrgOptions): Promise<IndexOr
         graphStore,
         searchStore,
         verbose: false,
+        enrich,
+        ollamaUrl,
+        ollamaModel,
+        llmProvider,
+        llmApiKey,
+        llmModel,
       });
     } catch (err) {
       console.error(`  Cross-repo correlation failed: ${(err as Error).message}`);
