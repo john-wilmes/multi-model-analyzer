@@ -70,6 +70,7 @@ import type { OllamaOptions, LlmApiOptions } from "@mma/summarization";
 import { computeAffectedScope } from "./affected-scope.js";
 import type { AffectedScope } from "./affected-scope.js";
 import { PipelineTracer } from "../tracer.js";
+import { ProgressTracker } from "./progress.js";
 
 function pLimit(concurrency: number) {
   if (!Number.isInteger(concurrency) || concurrency < 1) {
@@ -1123,6 +1124,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         const bareCommitForTier1 = isBareForTier1
           ? await resolveCommitForBare(repo.localPath, changeSets, repo.name)
           : undefined;
+        const tier1Progress = new ProgressTracker(parsedFiles.length);
 
         for (let batchStart = 0; batchStart < parsedFiles.length; batchStart += BATCH_SIZE) {
           const batch = parsedFiles.slice(batchStart, batchStart + BATCH_SIZE);
@@ -1186,9 +1188,10 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
               summaryMap.set(s.entityId, s);
             }
           }
+          tier1Progress.tick(batch.length);
           const processed = Math.min(batchStart + BATCH_SIZE, parsedFiles.length);
           if (batchStart === 0 || processed % 1000 < BATCH_SIZE || processed === parsedFiles.length) {
-            log(`    [tier-1] ${processed}/${parsedFiles.length}`);
+            log(`    [tier-1] ${tier1Progress.format()}`);
           }
         }
         if (tier1CacheHits > 0) {
@@ -1252,6 +1255,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
 
             // Process tier-3 in chunks of 200 to bound memory (load snippets per chunk, then free)
             const TIER3_CHUNK = 200;
+            const tier3Progress = new ProgressTracker(tier3Candidates.length);
             for (let ci = 0; ci < tier3Candidates.length; ci += TIER3_CHUNK) {
               const chunk = tier3Candidates.slice(ci, ci + TIER3_CHUNK);
 
@@ -1334,9 +1338,9 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
                   tier3Count++;
                 }
               }
-
+              tier3Progress.tick(chunk.length);
               if (ci % 1000 < TIER3_CHUNK) {
-                log(`    [tier-3] ${Math.min(ci + TIER3_CHUNK, tier3Candidates.length)}/${tier3Candidates.length}`);
+                log(`    [tier-3] ${tier3Progress.format()}`);
               }
             }
           }

@@ -12,6 +12,7 @@ import { scanGitHubOrg, cloneOrFetch } from "@mma/ingestion";
 import type { DiscoveredRepo } from "@mma/ingestion";
 import { RepoStateManager } from "@mma/correlation";
 import { indexCommand } from "./index-cmd.js";
+import { ProgressTracker } from "./progress.js";
 
 export interface IndexOrgOptions {
   readonly org: string;
@@ -144,6 +145,7 @@ export async function indexOrgCommand(options: IndexOrgOptions): Promise<IndexOr
   const limit = pLimit(concurrency);
   const cloned: { repo: DiscoveredRepo; localPath: string }[] = [];
   const failedClone: string[] = [];
+  const cloneProgress = new ProgressTracker(reposToIndex.length);
 
   await Promise.all(
     reposToIndex.map((repo, i) =>
@@ -166,6 +168,9 @@ export async function indexOrgCommand(options: IndexOrgOptions): Promise<IndexOr
             timestamp: new Date().toISOString(),
           }));
           failedClone.push(repo.fullName);
+        } finally {
+          cloneProgress.tick();
+          log(`  [clone] ${cloneProgress.format()}`);
         }
       }),
     ),
@@ -185,12 +190,13 @@ export async function indexOrgCommand(options: IndexOrgOptions): Promise<IndexOr
 
   let totalIndexed = 0;
   const failedIndex: string[] = [];
+  const batchProgress = new ProgressTracker(batches.length);
 
   for (let b = 0; b < batches.length; b++) {
     const batch = batches[b]!;
     const rangeStart = b * batchSize + 1;
     const rangeEnd = b * batchSize + batch.length;
-    const batchLabel = `Batch ${b + 1}/${batches.length} (repos ${rangeStart}-${rangeEnd} of ${cloned.length})`;
+    const batchLabel = `Batch ${b + 1}/${batches.length} (repos ${rangeStart}-${rangeEnd} of ${cloned.length}) — ${batchProgress.format()}`;
     console.log(`\n${batchLabel}`);
 
     for (const { repo } of batch) {
@@ -250,9 +256,11 @@ export async function indexOrgCommand(options: IndexOrgOptions): Promise<IndexOr
       if (result.failedRepos > 0) {
         console.warn(`  ${result.failedRepos} repo(s) failed in this batch`);
       }
+      batchProgress.tick();
       log(`  ${batchLabel}: ${result.totalFiles} files, ${result.totalSarifResults} findings`);
     } catch (err) {
       console.error(`  ${batchLabel} FAILED: ${(err as Error).message}`);
+      batchProgress.tick();
       for (const { repo } of batch) {
         await stateManager.forceCandidate(repo.fullName);
         await kvStore.set(`repo-error:${repo.fullName}`, JSON.stringify({
