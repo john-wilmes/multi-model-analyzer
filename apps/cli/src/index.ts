@@ -48,9 +48,12 @@ interface CliConfig {
   readonly baselinePath?: string;
   readonly backend?: StorageBackend;
   readonly advisories?: readonly Advisory[];
+  readonly enrich?: boolean;
   readonly llmProvider?: "anthropic" | "openai" | "ollama";
   readonly llmApiKey?: string;
   readonly llmModel?: string;
+  readonly ollamaUrl?: string;
+  readonly ollamaModel?: string;
 }
 
 async function main(): Promise<void> {
@@ -709,6 +712,13 @@ async function main(): Promise<void> {
       const concurrency = parseInt(values.concurrency ?? "4", 10);
       const batchSizeVal = parseInt(values["batch-size"] ?? "20", 10);
       const languages = (values.language ?? "TypeScript,JavaScript").split(",").map((s: string) => s.trim());
+      const rawOrgProvider = values["llm-provider"] ?? orgCfg?.llmProvider ?? "ollama";
+      const orgAllowedProviders = ["anthropic", "openai", "ollama"] as const;
+      if (!orgAllowedProviders.includes(rawOrgProvider as typeof orgAllowedProviders[number])) {
+        console.error(`Invalid --llm-provider "${rawOrgProvider}". Allowed values: ${orgAllowedProviders.join(", ")}`);
+        process.exit(1);
+      }
+      const orgLlmProvider = rawOrgProvider as "anthropic" | "openai" | "ollama";
       const result = await indexOrgCommand({
         org: orgName,
         kvStore: stores.kvStore,
@@ -720,10 +730,10 @@ async function main(): Promise<void> {
         force: values["force-full-reindex"] ?? false,
         verbose,
         batchSize: Number.isFinite(batchSizeVal) ? batchSizeVal : 20,
-        enrich: values.enrich,
-        ollamaUrl: values["ollama-url"],
-        ollamaModel: values["ollama-model"],
-        llmProvider: (values["llm-provider"] ?? orgCfg?.llmProvider ?? "ollama") as "anthropic" | "openai" | "ollama",
+        enrich: values.enrich ?? orgCfg?.enrich,
+        ollamaUrl: values["ollama-url"] ?? orgCfg?.ollamaUrl ?? "http://localhost:11434",
+        ollamaModel: values["ollama-model"] ?? orgCfg?.ollamaModel ?? "qwen2.5-coder:1.5b",
+        llmProvider: orgLlmProvider,
         llmApiKey: values["llm-api-key"] ?? orgCfg?.llmApiKey,
         llmModel: values["llm-model"] ?? orgCfg?.llmModel,
       });
@@ -743,10 +753,12 @@ async function main(): Promise<void> {
     // Try to get mirrorDir and backend from config; fall back to defaults
     let mirrorDir = resolve("mirrors");
     let exploreBackend = earlyBackend;
+    let exploreCfg: CliConfig | undefined;
     try {
       const configPath = resolve(values.config);
       const configRaw = await readFile(configPath, "utf-8");
       const config = JSON.parse(configRaw) as CliConfig;
+      exploreCfg = config;
       if (typeof config.mirrorDir === "string" && config.mirrorDir.trim() !== "") {
         mirrorDir = resolve(dirname(configPath), config.mirrorDir);
       }
@@ -758,12 +770,25 @@ async function main(): Promise<void> {
     const stores = await createStores({ backend: exploreBackend, dbPath });
     try {
       const { exploreCommand } = await import("./commands/index-interactive.js");
+      const rawProvider = values["llm-provider"] ?? exploreCfg?.llmProvider ?? "ollama";
+      const allowedProviders = ["anthropic", "openai", "ollama"] as const;
+      if (!allowedProviders.includes(rawProvider as typeof allowedProviders[number])) {
+        console.error(`Invalid --llm-provider "${rawProvider}". Allowed values: ${allowedProviders.join(", ")}`);
+        process.exit(1);
+      }
+      const llmProvider = rawProvider as "anthropic" | "openai" | "ollama";
       await exploreCommand({
         kvStore: stores.kvStore,
         graphStore: stores.graphStore,
         searchStore: stores.searchStore,
         mirrorDir,
         verbose,
+        enrich: values.enrich ?? exploreCfg?.enrich,
+        ollamaUrl: values["ollama-url"] ?? exploreCfg?.ollamaUrl ?? "http://localhost:11434",
+        ollamaModel: values["ollama-model"] ?? exploreCfg?.ollamaModel ?? "qwen2.5-coder:1.5b",
+        llmProvider,
+        llmApiKey: values["llm-api-key"] ?? exploreCfg?.llmApiKey,
+        llmModel: values["llm-model"] ?? exploreCfg?.llmModel,
       });
     } finally {
       stores.close();
@@ -798,7 +823,7 @@ async function main(): Promise<void> {
       process.exit(1);
     }
     // Warn on unknown top-level fields (catches typos)
-    const knownFields = new Set(["repos", "mirrorDir", "dbPath", "rules", "baselinePath", "backend", "advisories", "llmProvider", "llmApiKey", "llmModel"]);
+    const knownFields = new Set(["repos", "mirrorDir", "dbPath", "rules", "baselinePath", "backend", "advisories", "enrich", "ollamaUrl", "ollamaModel", "llmProvider", "llmApiKey", "llmModel"]);
     for (const key of Object.keys(cfg)) {
       if (!knownFields.has(key)) {
         console.error(`warning: unknown config field "${key}" — possible typo`);
