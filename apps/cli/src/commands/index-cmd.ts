@@ -254,6 +254,31 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         kvStore.deleteByPrefix(`symbols:${changeSet.repo}:${filePath}`)
       ));
 
+      // Remove stale SARIF findings for deleted files.
+      // When a run has only deletions, Phase 3+ is skipped (classified.length === 0),
+      // so the per-type SARIF keys are never regenerated. Filter deleted paths out
+      // of each key now so they don't persist into the aggregated sarif:latest.
+      const deletedSet = new Set(changeSet.deletedFiles);
+      const sarifTypeKeys = ["config", "fault", "deadExports", "arch", "instability", "blastRadius", "hotspot", "temporal-coupling", "vuln"] as const;
+      await Promise.all(sarifTypeKeys.map(async (typeKey) => {
+        const kvKey = `sarif:${typeKey}:${changeSet.repo}`;
+        const json = await kvStore.get(kvKey);
+        if (!json) return;
+        let results: import("@mma/core").SarifResult[];
+        try {
+          results = JSON.parse(json) as import("@mma/core").SarifResult[];
+        } catch {
+          return; // malformed; leave intact
+        }
+        const filtered = results.filter((r) => {
+          const primaryUri = r.locations?.[0]?.physicalLocation?.artifactLocation?.uri;
+          return !primaryUri || !deletedSet.has(primaryUri);
+        });
+        if (filtered.length !== results.length) {
+          await kvStore.set(kvKey, JSON.stringify(filtered));
+        }
+      }));
+
       log(`  Removed stale data for ${changeSet.deletedFiles.length} files`);
     }
   }));
@@ -1291,6 +1316,10 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
                     : await readFile(join((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), pf.path), "utf-8");
                 const summaries = tier1Summarize(pf.symbols, pf.path, sourceText);
                 if (summaries.length > 0) {
+                  // Delete any stale cache entries for this file (old contentHash keys
+                  // from previous runs). The prefix includes the trailing colon so it
+                  // matches only entries for this exact repo:filePath pair.
+                  await kvStore.deleteByPrefix(`summary:t1:${repo.name}:${pf.path}:`);
                   await kvStore.set(cacheKey, JSON.stringify(summaries));
                 }
                 return { summaries, symbols: pf.symbols, filePath: pf.path };
