@@ -128,6 +128,13 @@ export function computeInstabilityFromEdges(
   return result;
 }
 
+// ─── Barrel file detection (mirrors packages/structural/src/metrics.ts) ────
+
+const BARREL_RE = /(?:^|[/\\])index\.[jt]sx?$/;
+function isBarrelFile(moduleId: string): boolean {
+  return BARREL_RE.test(moduleId);
+}
+
 // ─── Per-run caches (cleared each validateCommand call) ────
 
 let edgesCache: Map<string, GraphEdge[]> = new Map();
@@ -392,6 +399,10 @@ export async function checkUnstableDependency(
       const src = metrics.get(edge.source);
       const tgt = metrics.get(edge.target);
       if (!src || !tgt) continue;
+
+      // Skip barrel files as dependency targets — matches the exclusion in
+      // detectInstabilityViolations() in packages/structural/src/metrics.ts
+      if (isBarrelFile(edge.target)) continue;
 
       const delta = tgt.instability - src.instability;
       if (delta > 0.3 && !checkedSources.has(edge.source)) {
@@ -998,6 +1009,12 @@ export async function checkSanityDrain(
       const tmpl = typeof t === "object" && t !== null ? (t as Record<string, unknown>)["template"] : undefined;
       if (typeof tmpl === "string") {
         const stripped = tmpl.replace(/<\*>/g, "").trim();
+        // Skip templates that are entirely dynamic: fewer than 2 non-whitespace
+        // characters remain after removing <*> tokens and whitespace. These are
+        // log messages like bare variable references (e.g. just `<*>`) where an
+        // empty result is expected by design.
+        const nonWhitespace = stripped.replace(/\s+/g, "").length;
+        if (nonWhitespace < 2) continue;
         if (stripped.length === 0) emptyTemplates++;
       }
     }
