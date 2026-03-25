@@ -28,7 +28,7 @@ import type {
   SarifResult,
 } from "@mma/core";
 import { createSarifResult, createLogicalLocation } from "@mma/core";
-import { detectChanges, classifyFiles, getFileContent, getFileContentBatch, getHeadCommit, isBareRepo, getCommitHistory } from "@mma/ingestion";
+import { detectChanges, classifyFiles, isExcludedPath, getFileContent, getFileContentBatch, getHeadCommit, isBareRepo, getCommitHistory } from "@mma/ingestion";
 import { parseFiles } from "@mma/parsing";
 import type { TreeSitterTree } from "@mma/parsing";
 import { extractDependencyGraph, buildControlFlowGraph, createCfgIdCounter, extractCallEdgesFromTreeSitter, computeModuleMetrics, summarizeRepoMetrics, detectDeadExports, detectInstabilityViolations, extractHeritageEdges, tagBarrelMediatedCycles, getBarrelPaths } from "@mma/structural";
@@ -554,6 +554,31 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         const changedFilePaths = classified.map(f => f.path);
         if (options.forceFullReindex) {
           await options.graphStore.clear(repo.name);
+          // Remove KV entries for files that are now excluded (e.g. dist/ files
+          // that were previously indexed but should no longer be).
+          const symbolKeys = await kvStore.getByPrefix(`symbols:${repo.name}:`);
+          const prefixLen = `symbols:${repo.name}:`.length;
+          const excludedFilePaths: string[] = [];
+          for (const key of symbolKeys.keys()) {
+            const filePath = key.slice(prefixLen);
+            if (isExcludedPath(filePath)) {
+              excludedFilePaths.push(filePath);
+            }
+          }
+          if (excludedFilePaths.length > 0) {
+            const keysToDelete: string[] = [];
+            for (const filePath of excludedFilePaths) {
+              keysToDelete.push(
+                `symbols:${repo.name}:${filePath}`,
+                `parsedFile:${repo.name}:${filePath}`,
+                `summary:1:${repo.name}:${filePath}`,
+                `summary:2:${repo.name}:${filePath}`,
+                `summary:3:${repo.name}:${filePath}`,
+              );
+            }
+            await Promise.all(keysToDelete.map((k) => kvStore.delete(k)));
+            log(`  [${repo.name}] Removed KV entries for ${excludedFilePaths.length} excluded files`);
+          }
         } else {
           await options.graphStore.deleteEdgesForFiles(repo.name, changedFilePaths);
         }

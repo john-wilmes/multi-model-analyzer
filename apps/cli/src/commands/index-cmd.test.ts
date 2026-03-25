@@ -35,6 +35,7 @@ vi.mock("@mma/ingestion", () => ({
   detectChanges: vi.fn(),
   classifyFiles: vi.fn().mockReturnValue([]),
   isBareRepo: vi.fn().mockResolvedValue(false),
+  isExcludedPath: vi.fn().mockReturnValue(false),
 }));
 
 vi.mock("@mma/parsing", () => ({
