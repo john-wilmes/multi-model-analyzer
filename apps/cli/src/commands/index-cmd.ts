@@ -18,6 +18,7 @@ import type {
   FlagInventory,
   LogicalLocation,
   LogTemplateIndex,
+  LogSeverity,
   MethodPurposeMap,
   SymbolInfo,
   Summary,
@@ -318,6 +319,16 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       }
     }
   } else {
+    // Incremental mode: seed from cache so unchanged repos' packages are preserved
+    const cachedPkgRoots = await kvStore.get("_packageRoots");
+    if (cachedPkgRoots) {
+      try {
+        const entries = JSON.parse(cachedPkgRoots) as [string, string][];
+        for (const [name, dir] of entries) {
+          packageRoots.set(name, dir);
+        }
+      } catch { /* skip malformed cache */ }
+    }
     await Promise.all(repos.map(async (repo) => {
       const classified = classifiedByRepo.get(repo.name);
       if (!classified) return;
@@ -588,12 +599,34 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         if (graph.edges.length === 0) {
           log(`    warning: 0 import edges from ${trees.size} trees -- pattern and flag detection may be limited`);
         }
-        await kvStore.set(`circularDeps:${repo.name}`, JSON.stringify(graph.circularDependencies));
-        // Tag barrel-mediated cycles and persist the boolean flags so consumers
-        // can suppress false-positive warnings without re-running analysis.
+        // Tag barrel-mediated cycles
         const annotated = tagBarrelMediatedCycles(graph.circularDependencies, trees, repo.name);
-        const barrelFlags = annotated.map((a) => a.barrelMediated);
-        await kvStore.set(`circularDepsBarrel:${repo.name}`, JSON.stringify(barrelFlags));
+        let mergedCycles = graph.circularDependencies;
+        let mergedBarrelFlags = annotated.map((a) => a.barrelMediated);
+        // Incremental mode: keep cached cycles that don't touch any changed file
+        if (!options.forceFullReindex) {
+          const changedSet = new Set(changedFilePaths);
+          const cachedCyclesJson = await kvStore.get(`circularDeps:${repo.name}`);
+          const cachedBarrelJson = await kvStore.get(`circularDepsBarrel:${repo.name}`);
+          if (cachedCyclesJson) {
+            try {
+              const cachedCycles = JSON.parse(cachedCyclesJson) as string[][];
+              const cachedBarrels = cachedBarrelJson ? (JSON.parse(cachedBarrelJson) as boolean[]) : [];
+              const keptCycles: string[][] = [];
+              const keptBarrels: boolean[] = [];
+              for (let ci = 0; ci < cachedCycles.length; ci++) {
+                if (!cachedCycles[ci]!.some((p) => changedSet.has(p))) {
+                  keptCycles.push(cachedCycles[ci]!);
+                  keptBarrels.push(cachedBarrels[ci] ?? false);
+                }
+              }
+              mergedCycles = [...keptCycles, ...graph.circularDependencies];
+              mergedBarrelFlags = [...keptBarrels, ...annotated.map((a) => a.barrelMediated)];
+            } catch { /* skip malformed cache */ }
+          }
+        }
+        await kvStore.set(`circularDeps:${repo.name}`, JSON.stringify(mergedCycles));
+        await kvStore.set(`circularDepsBarrel:${repo.name}`, JSON.stringify(mergedBarrelFlags));
         // Persist barrel file paths for cross-repo symbol resolution.
         const barrelKey = `barrelFiles:${repo.name}`;
         const newBarrels = getBarrelPaths(trees);
@@ -617,14 +650,14 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
             await kvStore.delete(barrelKey);
           }
         }
-        if (graph.circularDependencies.length > 0) {
-          const barrelCount = barrelFlags.filter(Boolean).length;
-          log(`    ${graph.circularDependencies.length} circular dependencies found (${barrelCount} barrel-mediated)`);
-          for (const cycle of graph.circularDependencies.slice(0, 5)) {
+        if (mergedCycles.length > 0) {
+          const barrelCount = mergedBarrelFlags.filter(Boolean).length;
+          log(`    ${mergedCycles.length} circular dependencies found (${barrelCount} barrel-mediated)`);
+          for (const cycle of mergedCycles.slice(0, 5)) {
             log(`      ${cycle.join(" -> ")}`);
           }
-          if (graph.circularDependencies.length > 5) {
-            log(`      ... and ${graph.circularDependencies.length - 5} more`);
+          if (mergedCycles.length > 5) {
+            log(`      ... and ${mergedCycles.length - 5} more`);
           }
         }
       } catch (error) {
@@ -817,6 +850,23 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
           }
         }));
 
+        // Incremental mode: merge with cached packageJsons for dirs not re-scanned
+        if (!options.forceFullReindex) {
+          const cachedPjJson = await kvStore.get(`packageJsons:${repo.name}`);
+          if (cachedPjJson) {
+            try {
+              const cachedEntries = JSON.parse(cachedPjJson) as [string, PackageJsonInfo][];
+              const scannedDirs = new Set(packageJsonFiles.map((f) => dirname(f.path)));
+              for (const [dir, info] of cachedEntries) {
+                if (!scannedDirs.has(dir)) {
+                  packageJsons.set(dir, info);
+                }
+              }
+            } catch { /* skip malformed cache */ }
+          }
+        }
+        await kvStore.set(`packageJsons:${repo.name}`, JSON.stringify([...packageJsons.entries()]));
+
         const filePaths = parsedFiles && parsedFiles.length > 0
           ? parsedFiles.map((pf) => pf.path)
           : repoClassified.map((f) => f.path);
@@ -904,7 +954,44 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
           log(`    ${flagInventory.flags.length} feature flags found`);
 
           // 5d: Log statement extraction
-          const logIndex = extractLogStatements(trees, repo.name);
+          let logIndex = extractLogStatements(trees, repo.name);
+
+          // Incremental mode: merge with cached templates for files not re-scanned
+          if (!options.forceFullReindex) {
+            const cachedLogJson = await kvStore.get(`logTemplates:${repo.name}`);
+            if (cachedLogJson) {
+              try {
+                const cached = JSON.parse(cachedLogJson) as LogTemplateIndex;
+                const scannedFiles = new Set(trees.keys());
+                // Key: "severity\0template" → merged template entry
+                type MutableTemplate = { id: string; template: string; severity: LogSeverity; locations: LogicalLocation[]; frequency: number };
+                const mergedMap = new Map<string, MutableTemplate>();
+                // Keep cached locations from files not re-scanned
+                for (const t of cached.templates) {
+                  const keptLocs = t.locations.filter(loc => !scannedFiles.has(loc.module));
+                  if (keptLocs.length > 0) {
+                    const key = `${t.severity}\x00${t.template}`;
+                    mergedMap.set(key, { id: t.id, template: t.template, severity: t.severity, locations: [...keptLocs], frequency: keptLocs.length });
+                  }
+                }
+                // Merge new templates from re-scanned files
+                for (const t of logIndex.templates) {
+                  const key = `${t.severity}\x00${t.template}`;
+                  const existing = mergedMap.get(key);
+                  if (existing) {
+                    existing.locations.push(...t.locations);
+                    existing.frequency = existing.locations.length;
+                  } else {
+                    mergedMap.set(key, { id: t.id, template: t.template, severity: t.severity, locations: [...t.locations], frequency: t.frequency });
+                  }
+                }
+                // Re-index IDs sequentially
+                const mergedTemplates = [...mergedMap.values()].map((t, i) => ({ ...t, id: `log-template-${i}` }));
+                logIndex = { repo: repo.name, templates: mergedTemplates };
+              } catch { /* skip malformed cache */ }
+            }
+          }
+
           logIndexByRepo.set(repo.name, logIndex);
           await kvStore.set(`logTemplates:${repo.name}`, JSON.stringify(logIndex));
           log(`    ${logIndex.templates.length} log templates extracted`);

@@ -336,16 +336,16 @@ describe("SqliteGraphStore", () => {
       expect(remaining).toHaveLength(1);
     });
 
-    it("does not delete edges where the file is the target, not the source", async () => {
+    it("also deletes edges where the deleted file is the target (stale inbound refs)", async () => {
       await graphStore.addEdges([
         edge("myrepo:src/other.ts", "myrepo:src/a.ts", "imports", "myrepo"),
       ]);
 
       await graphStore.deleteEdgesForFiles("myrepo", ["src/a.ts"]);
 
+      // Inbound edges to a deleted file are stale and must be removed
       const remaining = await graphStore.getEdgesByKind("imports", "myrepo");
-      expect(remaining).toHaveLength(1);
-      expect(remaining[0]!.target).toBe("myrepo:src/a.ts");
+      expect(remaining).toHaveLength(0);
     });
 
     it("handles multiple files in a single call", async () => {

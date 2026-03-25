@@ -24,6 +24,8 @@ export class SqliteGraphStore implements GraphStore {
   private readonly stmtClearRepo: Database.Statement;
   private readonly stmtDeleteBySource: Database.Statement;
   private readonly stmtDeleteBySourcePrefix: Database.Statement;
+  private readonly stmtDeleteByTarget: Database.Statement;
+  private readonly stmtDeleteByTargetPrefix: Database.Statement;
   private readonly stmtBfsNoRepo: Database.Statement;
   private readonly stmtBfsWithRepo: Database.Statement;
   private readonly insertMany: Database.Transaction<
@@ -70,6 +72,13 @@ export class SqliteGraphStore implements GraphStore {
     );
     this.stmtDeleteBySourcePrefix = db.prepare(
       "DELETE FROM edges WHERE source LIKE ? ESCAPE '\\' AND json_extract(metadata, '$.repo') = ?",
+    );
+    // Target-side deletion: no metadata.repo filter — target column already encodes repo:path
+    this.stmtDeleteByTarget = db.prepare(
+      "DELETE FROM edges WHERE target = ?",
+    );
+    this.stmtDeleteByTargetPrefix = db.prepare(
+      "DELETE FROM edges WHERE target LIKE ? ESCAPE '\\'",
     );
 
     // Recursive CTE for BFS traversal without repo filter
@@ -198,9 +207,13 @@ export class SqliteGraphStore implements GraphStore {
     const txn = db.transaction(() => {
       for (const fp of filePaths) {
         const canonicalFile = repo + ":" + fp;
-        this.stmtDeleteBySource.run(canonicalFile, repo);
         const escaped = canonicalFile.replace(/[%_\\]/g, "\\$&");
+        // Remove edges where this file is the source
+        this.stmtDeleteBySource.run(canonicalFile, repo);
         this.stmtDeleteBySourcePrefix.run(escaped + "#%", repo);
+        // Remove edges where this file is the target (cross-repo refs to a deleted file)
+        this.stmtDeleteByTarget.run(canonicalFile);
+        this.stmtDeleteByTargetPrefix.run(escaped + "#%");
       }
     });
     txn();
