@@ -764,6 +764,7 @@ async function main(): Promise<void> {
         searchStore: stores.searchStore,
         mirrorDir,
         verbose,
+        seedUrl: values.repo,
       });
     } finally {
       stores.close();
@@ -1024,7 +1025,7 @@ Usage:
   mma compress [--db path]                      Gzip the analysis database
   mma dashboard [--db path] [--port 3000] [--host 127.0.0.1]
                                                 Serve local web dashboard
-  mma explore [--db path] [--config path] [--backend <name>] [-v]
+  mma explore [--repo <url>] [--db path] [--config path] [--backend <name>] [-v]
                                                 Interactive incremental indexing (guided repo discovery)
   mma index-org <org-name> [--concurrency N] [--language ts,js] [--batch-size N]
             [--llm-provider anthropic|openai] [--llm-model M]
