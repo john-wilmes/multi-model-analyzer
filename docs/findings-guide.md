@@ -572,3 +572,20 @@ Access: Graph edges are stored in the graph store, not the KV store. Use `graphS
 Full-text search (SQLite FTS5 with BM25 ranking) over file content, symbol names, and summaries. Powers natural language queries routed through the query engine.
 
 Access: Via the search store adapter and `mma query` command.
+
+## Technical Debt Estimates
+
+The dashboard and practices report show estimated remediation hours per finding. These are **rough heuristic estimates** based on industry conventions (similar to SonarQube and NDepend defaults), not calibrated against actual fix times. Example values:
+
+| Finding type | Estimate |
+|---|---|
+| Dead export | 10 min |
+| Always-on flag | 15 min |
+| Silent failure | 45 min |
+| Unstable dependency | 60 min |
+| Pain zone module | 120 min |
+| High churn+complexity hotspot | 180 min |
+
+The full table is in `packages/diagnostics/src/debt.ts`. Unknown rule IDs default to 30 minutes.
+
+These estimates are useful for **relative prioritization** (comparing repos or categories) but should not be used for sprint planning or delivery commitments. Actual remediation time varies widely depending on codebase familiarity, test coverage, and the scope of the change.
