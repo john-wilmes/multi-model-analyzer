@@ -148,7 +148,13 @@ export function pageRankToSarif(
   // (e.g. "novu-api:src/app.ts"). External packages (lodash, @novu/shared,
   // node:fs) lack this prefix.
   const repoPrefix = `${repo}:`;
-  const internal = result.ranked.filter(f => f.path.startsWith(repoPrefix));
+  const internal = result.ranked.filter(f => {
+    if (!f.path.startsWith(repoPrefix)) return false;
+    // Exclude compiled output / vendored paths that shouldn't produce findings
+    const relPath = f.path.slice(repoPrefix.length);
+    if (relPath.startsWith("dist/") || relPath.startsWith("node_modules/") || relPath.startsWith(".next/")) return false;
+    return true;
+  });
 
   // Use explicit minScore if provided, otherwise derive from internal distribution:
   // default to 10% of the top internal score (adapts to different graph sizes).

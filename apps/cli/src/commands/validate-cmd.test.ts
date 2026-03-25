@@ -492,17 +492,18 @@ describe("checkBlastRadius", () => {
     // Build a hub: src/core.ts is imported by many files => highest PageRank.
     // All nodes (src/core.ts + a-e) will appear in top-10.
     // Seed findings for every node so the recall loop also passes.
+    // Node IDs use "repo:path" format matching the real indexing pipeline (makeFileId).
     const edges = [
-      { source: "src/a.ts", target: "src/core.ts", kind: "imports" as const, metadata: { repo: "repo1" } },
-      { source: "src/b.ts", target: "src/core.ts", kind: "imports" as const, metadata: { repo: "repo1" } },
-      { source: "src/c.ts", target: "src/core.ts", kind: "imports" as const, metadata: { repo: "repo1" } },
-      { source: "src/d.ts", target: "src/core.ts", kind: "imports" as const, metadata: { repo: "repo1" } },
-      { source: "src/e.ts", target: "src/core.ts", kind: "imports" as const, metadata: { repo: "repo1" } },
+      { source: "repo1:src/a.ts", target: "repo1:src/core.ts", kind: "imports" as const, metadata: { repo: "repo1" } },
+      { source: "repo1:src/b.ts", target: "repo1:src/core.ts", kind: "imports" as const, metadata: { repo: "repo1" } },
+      { source: "repo1:src/c.ts", target: "repo1:src/core.ts", kind: "imports" as const, metadata: { repo: "repo1" } },
+      { source: "repo1:src/d.ts", target: "repo1:src/core.ts", kind: "imports" as const, metadata: { repo: "repo1" } },
+      { source: "repo1:src/e.ts", target: "repo1:src/core.ts", kind: "imports" as const, metadata: { repo: "repo1" } },
     ];
     await graph.addEdges(edges);
 
     // Flag all 6 nodes that will appear in PageRank results
-    const allNodes = ["src/core.ts", "src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts", "src/e.ts"];
+    const allNodes = ["repo1:src/core.ts", "repo1:src/a.ts", "repo1:src/b.ts", "repo1:src/c.ts", "repo1:src/d.ts", "repo1:src/e.ts"];
     const findings = allNodes.map((node) => ({
       ruleId: "structural/high-pagerank",
       level: "warning",
@@ -520,18 +521,19 @@ describe("checkBlastRadius", () => {
   it("fails when flagged module is NOT in PageRank top-10", async () => {
     // Graph of 3 nodes; src/leaf.ts is not in this graph at all.
     // repo stored in metadata so InMemoryGraphStore can filter correctly.
+    // Node IDs use "repo:path" format matching the real indexing pipeline.
     await graph.addEdges([
-      { source: "src/a.ts", target: "src/b.ts", kind: "imports" as const, metadata: { repo: "repo1" } },
-      { source: "src/b.ts", target: "src/c.ts", kind: "imports" as const, metadata: { repo: "repo1" } },
+      { source: "repo1:src/a.ts", target: "repo1:src/b.ts", kind: "imports" as const, metadata: { repo: "repo1" } },
+      { source: "repo1:src/b.ts", target: "repo1:src/c.ts", kind: "imports" as const, metadata: { repo: "repo1" } },
     ]);
 
-    // Flag src/leaf.ts which is not in the graph — cannot be in top-10
+    // Flag repo1:src/leaf.ts which is not in the graph — cannot be in top-10
     const findings = [
       {
         ruleId: "structural/high-pagerank",
         level: "warning",
         message: { text: "High blast radius" },
-        locations: [{ logicalLocations: [{ fullyQualifiedName: "src/leaf.ts" }] }],
+        locations: [{ logicalLocations: [{ fullyQualifiedName: "repo1:src/leaf.ts" }] }],
       },
     ];
     await kv.set("sarif:blastRadius:repo1", JSON.stringify(findings));

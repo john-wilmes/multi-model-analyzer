@@ -58,6 +58,15 @@ export function classifyFile(
   };
 }
 
+/** Paths that should never be indexed (compiled output, vendored deps). */
+const EXCLUDED_PATH_SEGMENTS = ["dist/", "node_modules/", ".next/", "build/output/"];
+
+function isExcludedPath(filePath: string): boolean {
+  return EXCLUDED_PATH_SEGMENTS.some(
+    (seg) => filePath.startsWith(seg) || filePath.includes(`/${seg}`),
+  );
+}
+
 export function classifyFiles(
   changeSet: ChangeSet,
 ): readonly ClassifiedFile[] {
@@ -65,7 +74,9 @@ export function classifyFiles(
     ...changeSet.addedFiles,
     ...changeSet.modifiedFiles,
   ];
-  return allFiles.map((f) => classifyFile(f, changeSet.repo));
+  return allFiles
+    .filter((f) => !isExcludedPath(f))
+    .map((f) => classifyFile(f, changeSet.repo));
 }
 
 async function isGitRepo(dirPath: string): Promise<boolean> {

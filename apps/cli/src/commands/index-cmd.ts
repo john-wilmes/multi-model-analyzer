@@ -183,12 +183,16 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     }
   }
 
-  // Load previous commit hashes (parallel KV reads)
+  // Load previous commit hashes (parallel KV reads).
+  // When --force-full-reindex is active, skip loading previous commits so
+  // detectChanges treats every file as new (full diff from null).
   const previousCommits = new Map<string, string>();
-  await Promise.all(repos.map(async (repo) => {
-    const prev = await kvStore.get(`commit:${repo.name}`);
-    if (prev) previousCommits.set(repo.name, prev);
-  }));
+  if (!options.forceFullReindex) {
+    await Promise.all(repos.map(async (repo) => {
+      const prev = await kvStore.get(`commit:${repo.name}`);
+      if (prev) previousCommits.set(repo.name, prev);
+    }));
+  }
 
   // Phase 1: Ingestion
   log("Phase 1: Detecting changes...");

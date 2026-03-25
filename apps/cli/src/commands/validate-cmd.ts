@@ -726,7 +726,12 @@ export async function checkBlastRadius(
       if (!top10) {
         const edges = await getImportEdges(graphStore, repo);
         const prResult = computePageRank(edges);
-        top10 = new Set(prResult.ranked.slice(0, 10).map((r) => r.path));
+        // Filter to internal nodes only (repo:path format) — external packages
+        // like lodash/jayson are excluded from pageRankToSarif findings, so they
+        // must be excluded from the validation baseline too.
+        const repoPrefix = `${repo}:`;
+        const internalRanked = prResult.ranked.filter((r) => r.path.startsWith(repoPrefix));
+        top10 = new Set(internalRanked.slice(0, 10).map((r) => r.path));
         prCache.set(repo, top10);
       }
 
@@ -746,8 +751,12 @@ export async function checkBlastRadius(
   for (const repo of sampledRepos) {
     const edges = await getImportEdges(graphStore, repo);
     const prResult = computePageRank(edges);
-    // pageRankToSarif() filters out nodes with score <= 0.03; align recall check
-    const top10 = prResult.ranked.slice(0, 10).filter((r) => r.score > 0.03);
+    // Filter to internal nodes (repo:path format) — external packages like
+    // lodash/jayson are excluded from pageRankToSarif findings.
+    const repoPrefix = `${repo}:`;
+    const internalRanked = prResult.ranked.filter((r) => r.path.startsWith(repoPrefix));
+    // pageRankToSarif() also filters out nodes below a score threshold; align recall check
+    const top10 = internalRanked.slice(0, 10).filter((r) => r.score > 0.03);
 
     const findings = allBlastRadius.get(repo) ?? [];
     const flaggedPaths = new Set(findings.map((f) => fqn(f)));
