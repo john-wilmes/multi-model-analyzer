@@ -48,6 +48,9 @@ interface CliConfig {
   readonly baselinePath?: string;
   readonly backend?: StorageBackend;
   readonly advisories?: readonly Advisory[];
+  readonly llmProvider?: "anthropic" | "openai" | "ollama";
+  readonly llmApiKey?: string;
+  readonly llmModel?: string;
 }
 
 async function main(): Promise<void> {
@@ -686,10 +689,12 @@ async function main(): Promise<void> {
     // falling back to CLI flags and defaults.
     let mirrorDir = resolve(values.mirrors ?? "mirrors");
     let orgBackend = earlyBackend;
+    let orgCfg: CliConfig | undefined;
     try {
       const configPath = resolve(values.config);
       const configRaw = await readFile(configPath, "utf-8");
       const cfg = JSON.parse(configRaw) as CliConfig;
+      orgCfg = cfg;
       if (!values.mirrors && typeof cfg.mirrorDir === "string" && cfg.mirrorDir.trim() !== "") {
         mirrorDir = resolve(dirname(configPath), cfg.mirrorDir);
       }
@@ -718,9 +723,9 @@ async function main(): Promise<void> {
         enrich: values.enrich,
         ollamaUrl: values["ollama-url"],
         ollamaModel: values["ollama-model"],
-        llmProvider: (values["llm-provider"] ?? "ollama") as "anthropic" | "openai" | "ollama",
-        llmApiKey: values["llm-api-key"],
-        llmModel: values["llm-model"],
+        llmProvider: (values["llm-provider"] ?? orgCfg?.llmProvider ?? "ollama") as "anthropic" | "openai" | "ollama",
+        llmApiKey: values["llm-api-key"] ?? orgCfg?.llmApiKey,
+        llmModel: values["llm-model"] ?? orgCfg?.llmModel,
       });
       if (result.failedRepos.length > 0) {
         console.error(`Failed repos: ${result.failedRepos.join(", ")}`);
@@ -793,7 +798,7 @@ async function main(): Promise<void> {
       process.exit(1);
     }
     // Warn on unknown top-level fields (catches typos)
-    const knownFields = new Set(["repos", "mirrorDir", "dbPath", "rules", "baselinePath", "backend", "advisories"]);
+    const knownFields = new Set(["repos", "mirrorDir", "dbPath", "rules", "baselinePath", "backend", "advisories", "llmProvider", "llmApiKey", "llmModel"]);
     for (const key of Object.keys(cfg)) {
       if (!knownFields.has(key)) {
         console.error(`warning: unknown config field "${key}" — possible typo`);
@@ -907,6 +912,9 @@ async function main(): Promise<void> {
           advisories: config.advisories,
           ollamaUrl: values["ollama-url"],
           ollamaModel: values["ollama-model"],
+          llmProvider: (values["llm-provider"] ?? config.llmProvider ?? "ollama") as "anthropic" | "openai" | "ollama",
+          llmApiKey: values["llm-api-key"] ?? config.llmApiKey,
+          llmModel: values["llm-model"] ?? config.llmModel,
         } as const;
 
         if (values.watch) {
@@ -1018,6 +1026,9 @@ Usage:
                                                 Serve local web dashboard
   mma explore [--db path] [--config path] [--backend <name>] [-v]
                                                 Interactive incremental indexing (guided repo discovery)
+  mma index-org <org-name> [--concurrency N] [--language ts,js] [--batch-size N]
+            [--llm-provider anthropic|openai] [--llm-model M]
+            [--force-full-reindex]             Scan & index a GitHub org
 
 Options:
   -c, --config    Path to config file (default: mma.config.json)
@@ -1040,9 +1051,12 @@ Options:
   --host          Host/IP to bind dashboard server (default: 127.0.0.1)
   --cors-origin   Allowed CORS origin(s) for the dashboard API (repeatable, e.g. --cors-origin http://localhost:5173)
   --force-full-reindex  Clear and rebuild graph for each repo (default: incremental)
-  --enrich        Enable LLM enrichment (Tier 3) via local Ollama
-  --ollama-url    Custom Ollama endpoint (default: http://localhost:11434)
-  --ollama-model  Custom Ollama model (default: qwen2.5-coder:1.5b)
+  --enrich        Enable LLM enrichment (Tier 3) during indexing
+  --ollama-url    Ollama endpoint (default: http://localhost:11434)
+  --ollama-model  Ollama model (default: qwen2.5-coder:1.5b)
+  --llm-provider  LLM backend: ollama (default), anthropic, or openai
+  --llm-api-key   API key for cloud LLM (or set ANTHROPIC_API_KEY / OPENAI_API_KEY)
+  --llm-model     Override model name (default: claude-haiku-4-5-20251001 / gpt-4o-mini)
   --backend       Storage backend: sqlite (default) or kuzu
   --transport     MCP transport: stdio (default) or http (use with serve)
   --exit-code     Exit with code 1 if new/updated findings exist (use with delta)

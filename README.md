@@ -74,11 +74,11 @@ All findings are SARIF v2.1.0 with logical locations only -- no source code leav
 - SARIF v2.1.0 output with built-in anonymization for safe sharing
 - MCP server with 26 tools for IDE/agent integration (`mma serve`) — stdio or HTTP transport
 - Web dashboard with dependency graphs, blast radius, and service catalog views
-- 3-tier summarization (2 free local tiers + optional Ollama LLM tier)
+- 3-tier summarization (2 free local tiers + optional LLM tier via Ollama, Anthropic, or OpenAI)
 - Design pattern detection (adapter, facade, observer, factory, singleton, repository, middleware, decorator)
 - Baseline sharing for incremental reindexing across teams — see [docs/baseline-sharing.md](docs/baseline-sharing.md)
 - Pluggable storage backends: SQLite (default) and Kuzu graph DB (`--backend kuzu`)
-- No cloud API required — everything runs locally (including optional Ollama LLM enrichment)
+- No cloud API required — everything runs locally by default; cloud LLM providers are optional
 
 ### Dashboard
 
@@ -141,16 +141,20 @@ mma compress         Compress/prune the SQLite DB to reduce disk usage
 mma audit            Parse npm audit JSON and check vulnerability reachability
 mma enrich           Standalone LLM enrichment (Tier 3 summaries via Ollama)
 mma explore          Interactive incremental indexing with guided repo discovery
+mma index-org        Scan a GitHub org and index all matching repos in batches
 ```
 
 Key flags that apply across commands:
 
 ```text
---backend kuzu   Use Kuzu graph DB instead of SQLite (applies to index, serve, explore, and others)
---transport http  Use HTTP transport for MCP server instead of stdio (applies to serve, default port 3001)
---enrich          Enable LLM enrichment (Tier 3) via local Ollama (requires Ollama running)
---ollama-url URL  Custom Ollama endpoint (default: http://localhost:11434)
---ollama-model M  Custom Ollama model (default: qwen2.5-coder:1.5b)
+--backend kuzu      Use Kuzu graph DB instead of SQLite (applies to index, serve, explore, and others)
+--transport http    Use HTTP transport for MCP server instead of stdio (applies to serve, default port 3001)
+--enrich            Enable LLM enrichment (Tier 3) during indexing
+--ollama-url URL    Ollama endpoint (default: http://localhost:11434)
+--ollama-model M    Ollama model (default: qwen2.5-coder:1.5b)
+--llm-provider P    LLM backend: ollama (default), anthropic, or openai
+--llm-api-key KEY   API key for cloud LLM (or set ANTHROPIC_API_KEY / OPENAI_API_KEY)
+--llm-model M       Override model name (default: claude-haiku-4-5-20251001 / gpt-4o-mini)
 ```
 
 ## Examples
@@ -216,13 +220,71 @@ Repos --> Ingestion --> Parsing --> Structural Analysis --> Heuristic Analysis
 
 **Parsing** uses [tree-sitter](https://tree-sitter.github.io/tree-sitter/) (WASM) for fast syntax-only parsing, with optional [ts-morph](https://ts-morph.com/) for type-resolved symbols.
 
-**Summarization** has 3 tiers -- the first 2 are free and local; tier 3 uses local Ollama:
+**Summarization** has 3 tiers -- the first 2 are free and deterministic; tier 3 uses an LLM:
 
 | Tier | Source | Cost | Example |
 |------|--------|------|---------|
 | 1 | Templates from AST | Free | "Accepts (patientId: string), returns Promise" |
 | 2 | Heuristics from naming | Free | "Fetches appointments for a patient" |
-| 3 | Ollama (local LLM) | Free | "Queries appointment table, maps results, handles pagination" |
+| 3 | LLM (Ollama/Anthropic/OpenAI) | Free or API cost | "Queries appointment table, maps results, handles pagination" |
+
+### LLM Enrichment (Tier 3)
+
+Tiers 1 and 2 are deterministic (no LLM). Tier 3 upgrades low-confidence summaries using an LLM.
+
+**Local (Ollama — default):**
+
+```bash
+mma index -c config.json --enrich
+# Requires Ollama running locally (http://localhost:11434)
+# Default model: qwen2.5-coder:1.5b
+```
+
+**Cloud (Anthropic / OpenAI):**
+
+```bash
+# Via environment variable (recommended):
+export ANTHROPIC_API_KEY=sk-ant-...
+mma index -c config.json --enrich --llm-provider anthropic
+
+# Via CLI flag:
+mma index -c config.json --enrich --llm-provider openai --llm-api-key sk-...
+
+# Custom model:
+mma index -c config.json --enrich --llm-provider anthropic --llm-model claude-sonnet-4-5-20250514
+```
+
+**Via config file (`mma.config.json`):**
+
+```json
+{
+  "mirrorDir": "./mirrors",
+  "llmProvider": "anthropic",
+  "llmModel": "claude-haiku-4-5-20251001",
+  "repos": [...]
+}
+```
+
+Set `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` as an environment variable — do not put API keys in the config file.
+
+### GitHub Org Indexing
+
+Use `mma index-org` to scan an entire GitHub org and index all TypeScript/JavaScript repos in batches:
+
+```bash
+# Scan and index the supabase org
+mma index-org supabase -c mma.config.json --enrich --llm-provider anthropic
+
+# With options:
+mma index-org my-org --concurrency 8 --batch-size 20 --language TypeScript,JavaScript
+```
+
+Flags:
+- `--concurrency N` — parallel repos per batch (default: 4)
+- `--batch-size N` — repos per batch before persisting (default: 20)
+- `--language` — comma-separated list of GitHub language filters (default: TypeScript,JavaScript)
+- `--force-full-reindex` — clear and rebuild graph for each repo
+- All `--enrich`, `--llm-provider`, `--llm-api-key`, `--llm-model` flags apply
 
 ## Architecture
 
@@ -253,6 +315,7 @@ Monorepo with npm workspaces:
 
 Optional:
 - [Ollama](https://ollama.com/) for tier-3 LLM summarization (free, runs locally)
+- Anthropic or OpenAI API key for cloud-based tier-3 summarization at scale (see `--llm-provider`)
 
 ## Data Handling
 
