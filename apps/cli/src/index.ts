@@ -1061,7 +1061,7 @@ Options:
   --backend       Storage backend: sqlite (default) or kuzu
   --transport     MCP transport: stdio (default) or http (use with serve)
   --exit-code     Exit with code 1 if new/updated findings exist (use with delta)
-  --repo          Filter to a single repo (affected, catalog) or seed URL (explore)
+  --repo          Repo name or URL (filter for affected/catalog/audit/enrich, seed for explore)
   --max-depth     Max blast radius depth (default: 5, use with affected)
   -h, --help      Show this help message
   --version       Show version number

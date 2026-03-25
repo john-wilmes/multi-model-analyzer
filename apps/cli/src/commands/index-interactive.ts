@@ -164,7 +164,7 @@ async function indexSingleRepo(
   options: ExploreCommandOptions,
   mirrorDir: string,
   verbose?: boolean,
-): Promise<void> {
+): Promise<boolean> {
   const { kvStore, graphStore, searchStore } = options;
 
   console.log(`\nIndexing ${repo.name}...`);
@@ -194,11 +194,13 @@ async function indexSingleRepo(
 
     await stateManager.markIndexed(repo.name);
     console.log(`  \u2713 ${repo.name} indexed successfully`);
+    return true;
   } catch (err) {
     console.error(
       `  \u2717 Failed to index ${repo.name}: ${err instanceof Error ? err.message : String(err)}`,
     );
     // State remains "indexing" — user can retry by re-running explore
+    return false;
   }
 }
 
@@ -373,8 +375,8 @@ async function handleCandidates(
 /** Detect the default branch of a remote git repo via ls-remote. Falls back to "main". */
 async function detectDefaultBranch(url: string): Promise<string> {
   try {
-    const { execSync } = await import("child_process");
-    const out = execSync(`git ls-remote --symref ${url} HEAD`, { encoding: "utf-8", timeout: 10000 });
+    const { execFileSync } = await import("node:child_process");
+    const out = execFileSync("git", ["ls-remote", "--symref", url, "HEAD"], { encoding: "utf-8", timeout: 10_000 });
     const match = out.match(/ref: refs\/heads\/(\S+)\s+HEAD/);
     return match?.[1] ?? "main";
   } catch {
@@ -384,11 +386,11 @@ async function detectDefaultBranch(url: string): Promise<string> {
 
 /** Derive a repo name from a clone URL using the last two path segments (org--repo). */
 function repoNameFromUrl(url: string): string {
-  const stripped = url.replace(/\.git$/, "");
-  const parts = stripped.split("/");
+  const stripped = url.replace(/\.git$/, "").replace(/\/+$/, "");
+  const parts = stripped.split(/[/:]/).filter(Boolean);
   return parts.length >= 2
     ? `${parts[parts.length - 2]}--${parts[parts.length - 1]}`
-    : (parts[parts.length - 1] ?? stripped);
+    : parts[parts.length - 1] ?? stripped;
 }
 
 /**
@@ -424,7 +426,10 @@ async function exploreSeedUrl(
   const existing = await stateManager.get(name);
   if (existing?.status !== "indexed") {
     await stateManager.addCandidate({ name, url: seedUrl, defaultBranch }, "user-selected");
-    await indexSingleRepo(seed, stateManager, options, mirrorDir, verbose);
+    const ok = await indexSingleRepo(seed, stateManager, options, mirrorDir, verbose);
+    if (!ok) {
+      console.warn(`  Warning: seed repo indexing failed — discovery will proceed without seed data.`);
+    }
   } else {
     console.log(`  ${name} is already indexed.`);
   }
@@ -653,6 +658,10 @@ async function promptForRepoUrl(
   };
 
   await stateManager.addCandidate({ name, url, defaultBranch }, "user-selected");
-  await indexSingleRepo(repo, stateManager, options, mirrorDir, verbose);
+  const ok = await indexSingleRepo(repo, stateManager, options, mirrorDir, verbose);
+  if (!ok) {
+    console.warn(`  Warning: failed to index ${name} — skipping.`);
+    return undefined;
+  }
   return repo;
 }
