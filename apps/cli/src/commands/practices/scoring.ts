@@ -53,26 +53,9 @@ function gradeHeadline(grade: string, score: number): string {
 // ---------------------------------------------------------------------------
 
 export function buildExecutiveSummary(
-  results: readonly SarifResult[],
-  structural: StructuralHealth,
+  atdiScore: number,
 ): ExecutiveSummary {
-  let score = 100;
-
-  for (const r of results) {
-    if (r.level === "error") score -= 15;
-    else if (r.level === "warning") score -= 3;
-  }
-
-  if (structural.repos.length > 0) {
-    const avgDist =
-      structural.repos.reduce((s, r) => s + r.avgDistance, 0) / structural.repos.length;
-    const avgPain =
-      structural.repos.reduce((s, r) => s + r.painZonePct, 0) / structural.repos.length;
-    score -= avgDist * 20;
-    score -= (avgPain / 100) * 10;
-  }
-
-  score = Math.round(Math.max(0, Math.min(100, score)));
+  const score = Math.round(Math.max(0, Math.min(100, atdiScore)));
   const grade = scoreToGrade(score);
   const headline = gradeHeadline(grade, score);
 

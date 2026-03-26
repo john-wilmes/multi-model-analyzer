@@ -71,15 +71,16 @@ export async function practicesCommand(
   const findings = prioritizeFindings(results);
   const scorecard = buildScorecard(results);
 
-  // Executive summary needs findings to determine top actions
-  const rawExec = buildExecutiveSummary(results, structural);
+  const atdi = computeAtdi(results, structural);
+
+  // Executive summary derives grade from ATDI (which normalizes by module count)
+  const rawExec = buildExecutiveSummary(atdi.score);
   const topActionSource =
     findings.fixNow.length > 0 ? findings.fixNow : findings.planFor;
   const topActions = topActionSource.slice(0, 3).map((g) => g.action);
   const executive = { ...rawExec, topActions };
 
   const recommendations = synthesizeRecommendations(findings, structural);
-  const atdi = computeAtdi(results, structural);
   const debt = computeDebtEstimate(results);
 
   // Apply topN to fixNow tier if requested
