@@ -2,12 +2,11 @@
  * Phase 3: Tree-sitter / ts-morph parsing.
  */
 
-import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { RepoConfig } from "@mma/core";
 import type { classifyFiles } from "@mma/ingestion";
 import { parseFiles } from "@mma/parsing";
-import { getFileContent, getFileContentBatch } from "@mma/ingestion";
+import { getFileContent } from "@mma/ingestion";
 import { checkBareRepo, resolveCommitForBare } from "./bare-repo.js";
 import type { PipelineContext } from "./types.js";
 

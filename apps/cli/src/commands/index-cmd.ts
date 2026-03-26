@@ -17,7 +17,6 @@
  */
 
 import type {
-  RepoConfig,
   ChangeSet,
   DependencyGraph,
   ParsedFile,

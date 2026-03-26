@@ -3,10 +3,9 @@
  * Also releases tree-sitter ASTs after this phase (last consumer of trees).
  */
 
-import { join } from "node:path";
 import type { RepoConfig, SarifResult, CallGraph } from "@mma/core";
 import { buildFeatureModel, extractConstraintsFromCode, validateFeatureModel } from "@mma/model-config";
-import { identifyLogRoots, traceBackwardFromLog, buildFaultTree, analyzeGaps, analyzeCascadingRisk, FAULT_RULES } from "@mma/model-fault";
+import { identifyLogRoots, traceBackwardFromLog, buildFaultTree, analyzeGaps, analyzeCascadingRisk } from "@mma/model-fault";
 import { buildControlFlowGraph, createCfgIdCounter } from "@mma/structural";
 import { findFunctionNodes, detectMissingErrorBoundaries } from "./ast-utils.js";
 import type { PipelineContext } from "./types.js";
@@ -15,8 +14,7 @@ export async function runPhaseModels(
   ctx: PipelineContext,
   repo: RepoConfig,
 ): Promise<void> {
-  const { log, mirrorDir, kvStore, graphStore, options } = ctx;
-  const repoPath = repo.localPath ?? join(mirrorDir, `${repo.name}.git`);
+  const { log, kvStore, graphStore } = ctx;
   const trees = ctx.treesByRepo.get(repo.name);
   const flagInventory = ctx.flagsByRepo.get(repo.name);
   const logIndex = ctx.logIndexByRepo.get(repo.name);
