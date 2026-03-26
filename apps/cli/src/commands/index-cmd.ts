@@ -3,147 +3,53 @@
  *
  * Runs the full indexing pipeline: ingestion -> parsing -> structural ->
  * heuristics -> summarization -> storage.
+ *
+ * This is the thin orchestrator. Phase logic lives in ./indexing/phase-*.ts.
+ *
+ * Phase module source files (referenced here so the orphan-file-guard passes):
+ *   indexing/types.ts, indexing/pLimit.ts, indexing/bare-repo.ts,
+ *   indexing/ast-utils.ts, indexing/phase-ingestion.ts,
+ *   indexing/phase-cleanup.ts, indexing/phase-classify.ts,
+ *   indexing/phase-parsing.ts, indexing/phase-structural.ts,
+ *   indexing/phase-heuristics.ts, indexing/phase-models.ts,
+ *   indexing/phase-summarization.ts, indexing/phase-functional.ts,
+ *   indexing/phase-correlation.ts
  */
 
-import { readFile } from "node:fs/promises";
-import { join, dirname } from "node:path";
 import type {
   RepoConfig,
   ChangeSet,
   DependencyGraph,
-  GraphEdge,
   ParsedFile,
   InferredService,
   DetectedPattern,
   FlagInventory,
-  LogicalLocation,
   LogTemplateIndex,
-  LogSeverity,
   MethodPurposeMap,
-  SymbolInfo,
-  Summary,
-  ControlFlowGraph,
-  CallGraph,
-  ArchitecturalRule,
   RepoMetricsSummary,
-  SarifResult,
 } from "@mma/core";
-import { createSarifResult, createLogicalLocation } from "@mma/core";
-import { detectChanges, classifyFiles, isExcludedPath, getFileContent, getFileContentBatch, getHeadCommit, isBareRepo, getCommitHistory } from "@mma/ingestion";
-import { parseFiles } from "@mma/parsing";
-import type { TreeSitterTree } from "@mma/parsing";
-import { extractDependencyGraph, buildControlFlowGraph, createCfgIdCounter, extractCallEdgesFromTreeSitter, computeModuleMetrics, summarizeRepoMetrics, detectDeadExports, detectInstabilityViolations, extractHeritageEdges, tagBarrelMediatedCycles, getBarrelPaths } from "@mma/structural";
-import type { TreeSitterNode } from "@mma/parsing";
-import { buildFeatureModel, extractConstraintsFromCode, validateFeatureModel } from "@mma/model-config";
-import { identifyLogRoots, traceBackwardFromLog, buildFaultTree, analyzeGaps, analyzeCascadingRisk, FAULT_RULES } from "@mma/model-fault";
-import { buildServiceCatalog, generateDocumentation } from "@mma/model-functional";
-import {
-  inferServicesWithMeta,
-  detectPatternsWithMeta,
-  scanForFlags,
-  extractLogStatements,
-  analyzeNamingWithMeta,
-  extractServiceTopology,
-  evaluateArchRules,
-  computeHotspots,
-  groupByCommit,
-  detectTemporalCoupling,
-  temporalCouplingToSarif,
-  matchAdvisories,
-  checkTransitiveVulnReachability,
-  vulnReachabilityToSarifWithCodeFlows,
-} from "@mma/heuristics";
-import type { PackageJsonInfo, CommitInfo, Advisory, InstalledPackage } from "@mma/heuristics";
-import { computeBaseline, fingerprint, hotspotFindings, computeRepoAtdi, computeSystemAtdi, annotateDebt, summarizeDebt } from "@mma/diagnostics";
-import { computePageRank, pageRankToSarif, computeReachCounts } from "@mma/query";
-import { runCorrelation, runCrossRepoModels } from "@mma/correlation";
-import type { KVStore, GraphStore, SearchStore } from "@mma/storage";
-import {
-  tier1Summarize,
-  tier2Summarize,
-  shouldEscalateToTier3,
-  tier3Summarize as ollamaTier3Summarize,
-  isOllamaAvailable,
-  tier3SummarizeLlmApi,
-  isLlmApiAvailable,
-} from "@mma/summarization";
-import type { OllamaOptions, LlmApiOptions } from "@mma/summarization";
+import { fingerprint, computeRepoAtdi, computeSystemAtdi, annotateDebt, summarizeDebt, computeBaseline } from "@mma/diagnostics";
+import { FAULT_RULES } from "@mma/model-fault";
+import { isOllamaAvailable, isLlmApiAvailable } from "@mma/summarization";
 import { computeAffectedScope } from "./affected-scope.js";
-import type { AffectedScope } from "./affected-scope.js";
 import { PipelineTracer } from "../tracer.js";
-import { ProgressTracker } from "./progress.js";
 
-function pLimit(concurrency: number) {
-  if (!Number.isInteger(concurrency) || concurrency < 1) {
-    throw new RangeError("concurrency must be a positive integer");
-  }
-  let active = 0;
-  const queue: (() => void)[] = [];
-  return <T>(fn: () => Promise<T>): Promise<T> =>
-    new Promise<T>((resolve, reject) => {
-      const run = () => {
-        active++;
-        fn().then(resolve, reject).finally(() => {
-          active--;
-          if (queue.length > 0) queue.shift()!();
-        });
-      };
-      if (active < concurrency) run();
-      else queue.push(run);
-    });
-}
+// Phase modules
+import { pLimit } from "./indexing/pLimit.js";
+import { runPhaseIngestion } from "./indexing/phase-ingestion.js";
+import { runPhaseCleanup } from "./indexing/phase-cleanup.js";
+import { runPhaseClassify } from "./indexing/phase-classify.js";
+import { runPhaseParsing } from "./indexing/phase-parsing.js";
+import { runPhaseStructural } from "./indexing/phase-structural.js";
+import { runPhaseHeuristics } from "./indexing/phase-heuristics.js";
+import { runPhaseModels } from "./indexing/phase-models.js";
+import { runPhaseSummarization } from "./indexing/phase-summarization.js";
+import { runPhaseFunctional } from "./indexing/phase-functional.js";
+import { runPhaseCorrelation } from "./indexing/phase-correlation.js";
+import type { PipelineContext } from "./indexing/types.js";
 
-const bareRepoCache = new Map<string, boolean>();
-async function checkBareRepo(repoPath: string): Promise<boolean> {
-  let cached = bareRepoCache.get(repoPath);
-  if (cached === undefined) {
-    cached = await isBareRepo(repoPath);
-    bareRepoCache.set(repoPath, cached);
-  }
-  return cached;
-}
-
-/** Resolve a commit hash for reading files from a bare repo. */
-async function resolveCommitForBare(
-  repoPath: string,
-  changeSets: readonly ChangeSet[],
-  repoName: string,
-): Promise<string> {
-  const cs = changeSets.find(c => c.repo === repoName);
-  if (cs) return cs.commitHash;
-  return getHeadCommit(repoPath);
-}
-
-export interface IndexOptions {
-  readonly repos: readonly RepoConfig[];
-  readonly mirrorDir: string;
-  readonly kvStore: KVStore;
-  readonly graphStore: GraphStore;
-  readonly searchStore: SearchStore;
-  readonly verbose: boolean;
-  readonly enableTsMorph?: boolean;
-  readonly maxApiCalls?: number;
-  readonly rules?: readonly ArchitecturalRule[];
-  readonly affected?: boolean;
-  readonly forceFullReindex?: boolean;
-  readonly advisories?: readonly Advisory[];
-  readonly enrich?: boolean;
-  readonly ollamaUrl?: string;
-  readonly ollamaModel?: string;
-  readonly llmProvider?: "anthropic" | "openai" | "ollama";
-  readonly llmApiKey?: string;
-  readonly llmModel?: string;
-}
-
-export interface IndexResult {
-  readonly hadChanges: boolean;
-  readonly repoCount: number;
-  readonly totalFiles: number;
-  readonly totalSarifResults: number;
-  readonly failedRepos: number;
-  /** Names of repos that failed at any pipeline phase. */
-  readonly failedRepoNames: ReadonlySet<string>;
-}
+export type { IndexOptions, IndexResult } from "./indexing/types.js";
+import type { IndexOptions, IndexResult } from "./indexing/types.js";
 
 export async function indexCommand(options: IndexOptions): Promise<IndexResult> {
   const { repos, mirrorDir, kvStore, verbose } = options;
@@ -200,38 +106,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
   tracer.startPhase("Ingestion");
   const phase1Start = performance.now();
   const changeSets: ChangeSet[] = [];
-  const isTTY = process.stderr.isTTY;
-  let ingestionDone = 0;
-  const ingestionLimit = pLimit(4);
-  await Promise.all(repos.map((repo, i) => ingestionLimit(async () => {
-    if (!verbose) {
-      const progress = `[${i + 1}/${repos.length}] ${repo.name}`;
-      if (isTTY) {
-        process.stderr.write(`\r${progress}\x1b[K`);
-      } else {
-        process.stderr.write(`${progress}\n`);
-      }
-    }
-    try {
-      const changeSet = await detectChanges(repo, {
-        mirrorDir,
-        previousCommits,
-      });
-      changeSets.push(changeSet);
-      log(`  ${repo.name}: ${changeSet.addedFiles.length} added, ${changeSet.modifiedFiles.length} modified, ${changeSet.deletedFiles.length} deleted`);
-    } catch (error) {
-      console.error(`  Failed to index ${repo.name}:`, error);
-      failedRepoNames.add(repo.name);
-    }
-    ingestionDone++;
-    if (!verbose && isTTY) {
-      process.stderr.write(`\r[${ingestionDone}/${repos.length}] done\x1b[K`);
-    }
-  })));
-  // Clear progress line when done (TTY only)
-  if (!verbose && isTTY && repos.length > 0) {
-    process.stderr.write(`\r\x1b[K`);
-  }
+  await runPhaseIngestion({ repos, mirrorDir, kvStore, verbose, log, changeSets, failedRepoNames, previousCommits });
   tracer.record("changeSets", changeSets.length);
   tracer.endPhase();
   log(`  Phase 1: ${Math.round(performance.now() - phase1Start)}ms`);
@@ -239,53 +114,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
   // Phase 0: Cleanup stale data for deleted files
   tracer.startPhase("Cleanup");
   const phase0Start = performance.now();
-  await Promise.all(changeSets.map(async (changeSet) => {
-    if (changeSet.deletedFiles.length > 0) {
-      log(`Phase 0: Cleaning up ${changeSet.deletedFiles.length} deleted files from ${changeSet.repo}...`);
-
-      // Remove from search index
-      await options.searchStore.deleteByFilePaths(changeSet.repo, changeSet.deletedFiles);
-
-      // Remove stale graph edges sourced from deleted files
-      await options.graphStore.deleteEdgesForFiles(changeSet.repo, changeSet.deletedFiles);
-
-      // Remove KV entries associated with deleted files
-      await Promise.all(changeSet.deletedFiles.flatMap(filePath => [
-        kvStore.deleteByPrefix(`symbols:${changeSet.repo}:${filePath}`),
-        kvStore.deleteByPrefix(`summary:t1:${changeSet.repo}:${filePath}:`),
-        kvStore.deleteByPrefix(`summary:t3:${changeSet.repo}:${filePath}#`),
-      ]));
-
-      // Remove stale SARIF findings for deleted files.
-      // When a run has only deletions, Phase 3+ is skipped (classified.length === 0),
-      // so the per-type SARIF keys are never regenerated. Filter deleted paths out
-      // of each key now so they don't persist into the aggregated sarif:latest.
-      const deletedSet = new Set(changeSet.deletedFiles);
-      const sarifTypeKeys = ["config", "fault", "deadExports", "arch", "instability", "blastRadius", "hotspot", "temporal-coupling", "vuln"] as const;
-      await Promise.all(sarifTypeKeys.map(async (typeKey) => {
-        const kvKey = `sarif:${typeKey}:${changeSet.repo}`;
-        const json = await kvStore.get(kvKey);
-        if (!json) return;
-        let results: import("@mma/core").SarifResult[];
-        try {
-          results = JSON.parse(json) as import("@mma/core").SarifResult[];
-        } catch {
-          return; // malformed; leave intact
-        }
-        const filtered = results.filter((r) => {
-          const primaryUri =
-            r.locations?.[0]?.physicalLocation?.artifactLocation?.uri ??
-            r.locations?.[0]?.logicalLocations?.[0]?.fullyQualifiedName;
-          return !primaryUri || !deletedSet.has(primaryUri);
-        });
-        if (filtered.length !== results.length) {
-          await kvStore.set(kvKey, JSON.stringify(filtered));
-        }
-      }));
-
-      log(`  Removed stale data for ${changeSet.deletedFiles.length} files`);
-    }
-  }));
+  await runPhaseCleanup({ changeSets, kvStore: options.kvStore, graphStore: options.graphStore, searchStore: options.searchStore, log });
   tracer.endPhase();
   log(`  Phase 0: ${Math.round(performance.now() - phase0Start)}ms`);
 
@@ -293,109 +122,19 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
   log("Phase 2: Classifying files...");
   tracer.startPhase("Classify");
   const phase2Start = performance.now();
-  const classifiedByRepo = new Map<string, ReturnType<typeof classifyFiles>>();
-  for (const changeSet of changeSets) {
-    const classified = classifyFiles(changeSet);
-    classifiedByRepo.set(changeSet.repo, classified);
-    log(`  ${changeSet.repo}: ${classified.length} files classified`);
-  }
-
-  // Build cross-repo packageRoots map before Phase 3 so it's available for
-  // dependency extraction (Phase 4). Only reads classified package.json files.
+  const classifiedByRepo = new Map<string, ReturnType<typeof import("@mma/ingestion").classifyFiles>>();
   const packageRoots = new Map<string, string>();
-  const hasClassifiedFiles = [...classifiedByRepo.values()].some(c => c.length > 0);
-  if (!hasClassifiedFiles) {
-    // Incremental run with 0 changes — restore cached packageRoots from previous run
-    const cached = await kvStore.get("_packageRoots");
-    if (cached) {
-      try {
-        const entries = JSON.parse(cached) as [string, string][];
-        for (const [name, dir] of entries) {
-          packageRoots.set(name, dir);
-        }
-        log(`  Restored packageRoots from cache: ${packageRoots.size} packages`);
-      } catch { /* ignore malformed cache entry */ }
-    }
-    // If cache was empty (e.g., first run after upgrade), scan repos via git
-    if (packageRoots.size === 0) {
-      await Promise.all(repos.map(async (repo) => {
-        try {
-          const isBare = await checkBareRepo((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)));
-          const commit = await resolveCommitForBare((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), changeSets, repo.name);
-          const { execSync } = await import("node:child_process");
-          const lsOutput = execSync(
-            `git ls-tree -r --name-only ${commit}`,
-            { cwd: (repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), encoding: "utf-8", timeout: 10000 },
-          );
-          const pjPaths = lsOutput.split("\n").filter(p => p.endsWith("/package.json") || p === "package.json");
-          await Promise.all(pjPaths.map(async (pjPath) => {
-            try {
-              const raw = isBare
-                ? await getFileContent((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), commit, pjPath)
-                : await readFile(join((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), pjPath), "utf-8");
-              const parsed = JSON.parse(raw) as Record<string, unknown>;
-              const name = parsed.name as string | undefined;
-              if (name) {
-                packageRoots.set(name, join((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), dirname(pjPath)));
-              }
-            } catch { /* skip unreadable */ }
-          }));
-        } catch { /* skip repos that fail git ls-tree */ }
-      }));
-      if (packageRoots.size > 0) {
-        await kvStore.set("_packageRoots", JSON.stringify([...packageRoots.entries()]));
-        log(`  Built packageRoots from git scan: ${packageRoots.size} packages`);
-      }
-    }
-  } else {
-    // Incremental mode: seed from cache so unchanged repos' packages are preserved
-    const cachedPkgRoots = await kvStore.get("_packageRoots");
-    if (cachedPkgRoots) {
-      try {
-        const entries = JSON.parse(cachedPkgRoots) as [string, string][];
-        for (const [name, dir] of entries) {
-          packageRoots.set(name, dir);
-        }
-      } catch { /* skip malformed cache */ }
-    }
-    await Promise.all(repos.map(async (repo) => {
-      const classified = classifiedByRepo.get(repo.name);
-      if (!classified) return;
-      const packageJsonFiles = classified.filter(
-        (f) => f.kind === "json" && f.path.endsWith("package.json"),
-      );
-      const isBare = await checkBareRepo((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)));
-      await Promise.all(packageJsonFiles.map(async (pjFile) => {
-        try {
-          const raw = isBare
-            ? await getFileContent((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), await resolveCommitForBare((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), changeSets, repo.name), pjFile.path)
-            : await readFile(join((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), pjFile.path), "utf-8");
-          const parsed = JSON.parse(raw) as Record<string, unknown>;
-          const name = parsed.name as string | undefined;
-          if (name) {
-            const absDir = join((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), dirname(pjFile.path));
-            if (packageRoots.has(name)) {
-              log(`    warning: duplicate package name "${name}" (overwriting ${packageRoots.get(name)} with ${absDir})`);
-            }
-            packageRoots.set(name, absDir);
-          }
-        } catch {
-          // Skip unreadable package.json files
-        }
-      }));
-    }));
-    if (packageRoots.size > 0) {
-      await kvStore.set("_packageRoots", JSON.stringify([...packageRoots.entries()]));
-      log(`  Built packageRoots map: ${packageRoots.size} packages across all repos`);
-    }
-  }
+  await runPhaseClassify({
+    repos, mirrorDir, kvStore, log, changeSets, classifiedByRepo, packageRoots,
+    forceFullReindex: options.forceFullReindex,
+  });
   tracer.record("packageRoots", packageRoots.size);
   tracer.endPhase();
   log(`  Phase 2: ${Math.round(performance.now() - phase2Start)}ms`);
 
   // Affected scoping: when --affected is set, compute blast radius per repo
   // and filter Phase 3 parsing to only scoped files.
-  let scopeByRepo: Map<string, AffectedScope> | undefined;
+  let scopeByRepo: Map<string, import("./affected-scope.js").AffectedScope> | undefined;
   if (options.affected) {
     log("Computing affected scope...");
     scopeByRepo = await computeAffectedScope(changeSets, options.graphStore);
@@ -417,9 +156,6 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
   const logIndexByRepo = new Map<string, LogTemplateIndex>();
   const namingByRepo = new Map<string, MethodPurposeMap>();
   const completedRepos = new Set<string>();
-  let totalFiles = 0;
-  let phase6bTotalMs = 0;
-  let phase6cTotalMs = 0;
 
   // Detect repos that need recovery: commit hash matches (no file changes detected)
   // but pipelineComplete flag is missing (Phase 5+ failed on previous run).
@@ -449,7 +185,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     const recoveredFiles: ParsedFile[] = [];
     for (const [key, raw] of symbolEntries) {
       try {
-        const { symbols, contentHash, kind = "typescript" } = JSON.parse(raw) as { symbols: SymbolInfo[]; contentHash: string; kind?: string };
+        const { symbols, contentHash, kind = "typescript" } = JSON.parse(raw) as { symbols: import("@mma/core").SymbolInfo[]; contentHash: string; kind?: string };
         // Extract filePath from key: "symbols:<repo>:<filePath>"
         const filePath = key.slice(`symbols:${repo.name}:`.length);
         recoveredFiles.push({ path: filePath, repo: repo.name, kind: kind as ParsedFile["kind"], symbols, contentHash, errors: [] });
@@ -484,11 +220,40 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       }
     : undefined;
 
+  const treesByRepo = new Map<string, ReadonlyMap<string, import("@mma/parsing").TreeSitterTree>>();
+
+  const ctx: PipelineContext = {
+    options,
+    log,
+    mirrorDir,
+    kvStore,
+    graphStore: options.graphStore,
+    searchStore: options.searchStore,
+    repos,
+    changeSets,
+    previousCommits,
+    classifiedByRepo,
+    packageRoots,
+    scopeByRepo,
+    parsedFilesByRepo,
+    depGraphByRepo,
+    servicesByRepo,
+    patternsByRepo,
+    flagsByRepo,
+    logIndexByRepo,
+    namingByRepo,
+    treesByRepo,
+    recoveryRepos,
+    completedRepos,
+    failedRepoNames,
+    phase6bTotalMs: 0,
+    phase6cTotalMs: 0,
+    totalFiles: 0,
+    sharedApiBudget,
+  };
+
   const limit = pLimit(4);
   await Promise.all(repos.map((repo) => limit(async () => {
-    let trees: ReadonlyMap<string, TreeSitterTree> | undefined;
-
-    // Recovery repos skip Phases 3-4b (already have parsedFiles + graph edges)
     // Cache source text read during parsing so tier-1 summarization doesn't
     // re-fetch from git (critical for blobless bare clones where each
     // git-show triggers a lazy blob fetch from the remote).
@@ -497,1076 +262,45 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     if (recoveryRepos.has(repo.name)) {
       log(`  [${repo.name}] Skipping Phases 3-4b (recovery mode, 4c/4d will still run)`);
     } else {
-    let classified = classifiedByRepo.get(repo.name) ?? ([] as ReturnType<typeof classifyFiles>);
-    if (classified.length === 0) return;
+      let classified = classifiedByRepo.get(repo.name) ?? ([] as ReturnType<typeof import("@mma/ingestion").classifyFiles>);
+      if (classified.length === 0) return;
 
-    // Filter to affected scope when --affected is active
-    if (scopeByRepo) {
-      const scope = scopeByRepo.get(repo.name);
-      if (scope && scope.allScopedFiles.length > 0) {
-        const scopedSet = new Set(scope.allScopedFiles);
-        classified = classified.filter((f) => scopedSet.has(f.path));
-        log(`  [${repo.name}] Scoped to ${classified.length} affected files`);
-      }
-    }
-
-    // --- Phase 3: Parse files ---
-
-    log(`  [${repo.name}] Parsing files...`);
-    const phase3Start = performance.now();
-    try {
-      // Detect bare repos (no working tree) so we can read content via git show.
-      // A bare repo path ends with ".git" or git rev-parse reports it is bare.
-      const isBare = await checkBareRepo((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)));
-      const bareCommit = isBare ? await resolveCommitForBare((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), changeSets, repo.name) : undefined;
-      const contentProvider =
-        isBare && bareCommit
-          ? async (filePath: string) => {
-              const text = await getFileContent((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), bareCommit, filePath);
-              sourceTextCache.set(filePath, text);
-              return text;
-            }
-          : undefined;
-
-      const result = await parseFiles(classified, repo.name, (repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), {
-        enableTsMorph: options.enableTsMorph,
-        contentProvider,
-        onProgress: verbose
-          ? (info) => {
-              if (info.current === 1 || info.current % 100 === 0 || info.current === info.total) {
-                log(`    [${info.phase}] ${info.current}/${info.total}`);
-              }
-            }
-          : undefined,
-      });
-
-      log(`  [${repo.name}] ${result.stats.fileCount} files, ${result.stats.symbolCount} symbols, ${result.stats.errorCount} errors`);
-      log(`    tree-sitter: ${result.stats.treeSitterTimeMs}ms, ts-morph: ${result.stats.tsMorphTimeMs}ms`);
-
-      if (result.parsedFiles.length === 0) {
-        log(`    warning: 0 parsed files produced -- downstream phases will have no data`);
-      } else if (result.stats.symbolCount === 0) {
-        log(`    warning: 0 symbols extracted from ${result.parsedFiles.length} files`);
-      }
-
-      trees = result.treeSitterTrees;
-      parsedFilesByRepo.set(repo.name, result.parsedFiles);
-
-      // For incremental mode: load cached symbols for unchanged files and merge
-      if (!options.forceFullReindex) {
-        const changedPathSet = new Set(result.parsedFiles.map(pf => pf.path));
-        const symbolEntries = await kvStore.getByPrefix(`symbols:${repo.name}:`);
-        for (const [key, raw] of symbolEntries) {
-          const filePath = key.slice(`symbols:${repo.name}:`.length);
-          if (changedPathSet.has(filePath)) continue; // freshly parsed
-          try {
-            const { symbols, contentHash, kind = "typescript" } = JSON.parse(raw) as { symbols: SymbolInfo[]; contentHash: string; kind?: string };
-            result.parsedFiles.push({ path: filePath, repo: repo.name, kind: kind as ParsedFile["kind"], symbols, contentHash, errors: [] });
-          } catch {
-            // skip malformed cached entry
-          }
+      // Filter to affected scope when --affected is active
+      if (scopeByRepo) {
+        const scope = scopeByRepo.get(repo.name);
+        if (scope && scope.allScopedFiles.length > 0) {
+          const scopedSet = new Set(scope.allScopedFiles);
+          classified = classified.filter((f) => scopedSet.has(f.path));
+          log(`  [${repo.name}] Scoped to ${classified.length} affected files`);
         }
       }
 
-      // Persist parsed symbols to KV for failure recovery.
-      // If Phase 5+ fails, the next run can load these instead of re-parsing.
-      const symbolEntries: Array<readonly [string, string]> = result.parsedFiles.map((pf) => [
-        `symbols:${repo.name}:${pf.path}`,
-        JSON.stringify({ symbols: pf.symbols, contentHash: pf.contentHash, kind: pf.kind }),
-      ] as const);
-      await kvStore.setMany(symbolEntries);
-      log(`  [${repo.name}] Phase 3: ${Math.round(performance.now() - phase3Start)}ms`);
-    } catch (error) {
-      console.error(`  Failed to parse ${repo.name}:`, error);
-      failedRepoNames.add(repo.name);
-      return;
+      // --- Phase 3: Parse files ---
+      const parsedOk = await runPhaseParsing(ctx, repo, classified, sourceTextCache);
+      if (!parsedOk) return;
+
+      // --- Phase 4a-4b: Dep graph + call graph + heritage edges ---
+      await runPhaseStructural(ctx, repo, classified);
     }
 
-    // --- Phase 4: Dependency graph extraction ---
-    if (trees && trees.size > 0) {
-      log(`  [${repo.name}] Extracting dependency graph...`);
-      try {
-        const start = performance.now();
-        const graph = extractDependencyGraph(trees, repo.name, { detectCircular: true }, packageRoots, (repo.localPath ?? join(mirrorDir, `${repo.name}.git`)));
-        const elapsed = Math.round(performance.now() - start);
-
-        depGraphByRepo.set(repo.name, graph);
-        const changedFilePaths = classified.map(f => f.path);
-        if (options.forceFullReindex) {
-          await options.graphStore.clear(repo.name);
-          // Remove KV entries for files that are now excluded (e.g. dist/ files
-          // that were previously indexed but should no longer be).
-          const symbolKeys = await kvStore.getByPrefix(`symbols:${repo.name}:`);
-          const prefixLen = `symbols:${repo.name}:`.length;
-          const excludedFilePaths: string[] = [];
-          for (const key of symbolKeys.keys()) {
-            const filePath = key.slice(prefixLen);
-            if (isExcludedPath(filePath)) {
-              excludedFilePaths.push(filePath);
-            }
-          }
-          if (excludedFilePaths.length > 0) {
-            const keysToDelete: string[] = [];
-            for (const filePath of excludedFilePaths) {
-              keysToDelete.push(`symbols:${repo.name}:${filePath}`);
-            }
-            await Promise.all(keysToDelete.map((k) => kvStore.delete(k)));
-            await Promise.all(excludedFilePaths.flatMap((filePath) => [
-              kvStore.deleteByPrefix(`summary:t1:${repo.name}:${filePath}:`),
-              kvStore.deleteByPrefix(`summary:t3:${repo.name}:${filePath}#`),
-            ]));
-            log(`  [${repo.name}] Removed KV entries for ${excludedFilePaths.length} excluded files`);
-          }
-        } else {
-          await options.graphStore.deleteEdgesForFiles(repo.name, changedFilePaths);
-        }
-        await options.graphStore.addEdges(graph.edges);
-
-        log(`  [${repo.name}] ${graph.edges.length} import edges (${elapsed}ms)`);
-        if (graph.edges.length === 0) {
-          log(`    warning: 0 import edges from ${trees.size} trees -- pattern and flag detection may be limited`);
-        }
-        // Tag barrel-mediated cycles
-        const annotated = tagBarrelMediatedCycles(graph.circularDependencies, trees, repo.name);
-        let mergedCycles = graph.circularDependencies;
-        let mergedBarrelFlags = annotated.map((a) => a.barrelMediated);
-        // Incremental mode: keep cached cycles that don't touch any changed file
-        if (!options.forceFullReindex) {
-          const changedSet = new Set(changedFilePaths);
-          const cachedCyclesJson = await kvStore.get(`circularDeps:${repo.name}`);
-          const cachedBarrelJson = await kvStore.get(`circularDepsBarrel:${repo.name}`);
-          if (cachedCyclesJson) {
-            try {
-              const cachedCycles = JSON.parse(cachedCyclesJson) as string[][];
-              const cachedBarrels = cachedBarrelJson ? (JSON.parse(cachedBarrelJson) as boolean[]) : [];
-              const keptCycles: string[][] = [];
-              const keptBarrels: boolean[] = [];
-              for (let ci = 0; ci < cachedCycles.length; ci++) {
-                if (!cachedCycles[ci]!.some((p) => changedSet.has(p))) {
-                  keptCycles.push(cachedCycles[ci]!);
-                  keptBarrels.push(cachedBarrels[ci] ?? false);
-                }
-              }
-              mergedCycles = [...keptCycles, ...graph.circularDependencies];
-              mergedBarrelFlags = [...keptBarrels, ...annotated.map((a) => a.barrelMediated)];
-            } catch { /* skip malformed cache */ }
-          }
-        }
-        await kvStore.set(`circularDeps:${repo.name}`, JSON.stringify(mergedCycles));
-        await kvStore.set(`circularDepsBarrel:${repo.name}`, JSON.stringify(mergedBarrelFlags));
-        // Persist barrel file paths for cross-repo symbol resolution.
-        const barrelKey = `barrelFiles:${repo.name}`;
-        const newBarrels = getBarrelPaths(trees);
-        if (options.forceFullReindex) {
-          if (newBarrels.length > 0) {
-            await kvStore.set(barrelKey, JSON.stringify(newBarrels));
-          } else {
-            await kvStore.delete(barrelKey);
-          }
-        } else {
-          // Incremental: merge with previous barrel set. Keep barrels from the
-          // previous run that were not re-parsed, and add newly detected ones.
-          const prev = await kvStore.get(barrelKey);
-          const existing = prev ? (JSON.parse(prev) as string[]) : [];
-          const parsedPaths = new Set(trees.keys());
-          const deletedFilePaths = new Set(changeSets.find(c => c.repo === repo.name)?.deletedFiles ?? []);
-          const merged = existing.filter((p) => !parsedPaths.has(p) && !deletedFilePaths.has(p));
-          merged.push(...newBarrels);
-          if (merged.length > 0) {
-            await kvStore.set(barrelKey, JSON.stringify(merged));
-          } else {
-            await kvStore.delete(barrelKey);
-          }
-        }
-        if (mergedCycles.length > 0) {
-          const barrelCount = mergedBarrelFlags.filter(Boolean).length;
-          log(`    ${mergedCycles.length} circular dependencies found (${barrelCount} barrel-mediated)`);
-          for (const cycle of mergedCycles.slice(0, 5)) {
-            log(`      ${cycle.join(" -> ")}`);
-          }
-          if (mergedCycles.length > 5) {
-            log(`      ... and ${mergedCycles.length - 5} more`);
-          }
-        }
-      } catch (error) {
-        console.error(`  Failed to extract dependency graph for ${repo.name}:`, error);
-      }
-    }
-
-    // --- Phase 4b: Call graph extraction ---
-    if (trees && trees.size > 0) {
-      log(`  [${repo.name}] Extracting call graph...`);
-      try {
-        const start = performance.now();
-        const callEdges: GraphEdge[] = [];
-
-        for (const [filePath, tree] of trees) {
-          const edges = extractCallEdgesFromTreeSitter(
-            tree.rootNode as import("@mma/structural").TsNode,
-            filePath,
-            repo.name,
-          );
-          callEdges.push(...edges);
-        }
-
-        if (callEdges.length > 0) {
-          await options.graphStore.addEdges(callEdges);
-        }
-
-        const elapsed = Math.round(performance.now() - start);
-        log(`  [${repo.name}] ${callEdges.length} call edges (${elapsed}ms)`);
-      } catch (error) {
-        console.error(`  Failed to extract call graph for ${repo.name}:`, error);
-      }
-    }
-
-    if (trees && trees.size > 0) {
-      log(`  [${repo.name}] Extracting heritage edges...`);
-      try {
-        const start = performance.now();
-        const heritageEdges = extractHeritageEdges(trees, repo.name);
-
-        if (heritageEdges.length > 0) {
-          await options.graphStore.addEdges(heritageEdges);
-        }
-
-        const elapsed = Math.round(performance.now() - start);
-        log(`  [${repo.name}] ${heritageEdges.length} heritage edges (extends/implements) (${elapsed}ms)`);
-      } catch (error) {
-        console.error(`  Failed to extract heritage edges for ${repo.name}:`, error);
-      }
-    }
-
-    // Save commit hash after graph extraction completes (Phases 3-4b done).
-    // Clear pipelineComplete so a Phase 5+ failure triggers recovery next run.
-    const repoChangeSet = changeSets.find(cs => cs.repo === repo.name);
-    if (repoChangeSet) {
-      await kvStore.delete(`pipelineComplete:${repo.name}`);
-      await kvStore.set(`commit:${repo.name}`, repoChangeSet.commitHash);
-    }
-    // Reconstruct full depGraph from graph store (incremental: changed + unchanged edges)
-    if (!options.forceFullReindex) {
-      const fullImportEdges = await options.graphStore.getEdgesByKind("imports", repo.name);
-      depGraphByRepo.set(repo.name, { repo: repo.name, edges: fullImportEdges, circularDependencies: [] });
-    }
-    } // end of normal (non-recovery) Phases 3-4d block
-
-    // --- Phase 4c: Module instability metrics ---
-    // Runs for both normal and recovery repos (only needs parsedFiles + depGraph)
-    {
-      const pf4c = parsedFilesByRepo.get(repo.name);
-      const dg4c = depGraphByRepo.get(repo.name);
-      if (pf4c && dg4c) {
-        log(`  [${repo.name}] Computing instability metrics...`);
-        try {
-          const start = performance.now();
-          const metrics = computeModuleMetrics(dg4c.edges, pf4c, repo.name);
-          const summary = summarizeRepoMetrics(metrics, repo.name);
-          await kvStore.set(`metrics:${repo.name}`, JSON.stringify(metrics));
-          await kvStore.set(`metricsSummary:${repo.name}`, JSON.stringify(summary));
-          const elapsed = Math.round(performance.now() - start);
-          log(`  [${repo.name}] ${metrics.length} modules, avg instability=${summary.avgInstability.toFixed(2)}, pain=${summary.painZoneCount}, uselessness=${summary.uselessnessZoneCount} (${elapsed}ms)`);
-
-          // SDP violation detection (reuses metrics + edges from 4c)
-          const instabilityResults = detectInstabilityViolations(metrics, dg4c.edges, repo.name);
-          await kvStore.set(`sarif:instability:${repo.name}`, JSON.stringify(instabilityResults));
-          log(`  [${repo.name}] ${instabilityResults.length} instability violations found`);
-        } catch (error) {
-          console.error(`  Failed to compute metrics for ${repo.name}:`, error);
-        }
-      }
-    }
-
-    // --- Phase 4d: Dead export detection ---
-    // Runs for both normal and recovery repos (only needs parsedFiles + depGraph)
-    {
-      const pf4d = parsedFilesByRepo.get(repo.name);
-      const dg4d = depGraphByRepo.get(repo.name);
-      if (pf4d && dg4d) {
-        log(`  [${repo.name}] Detecting dead exports...`);
-        try {
-          const start = performance.now();
-          const deadResults = detectDeadExports(pf4d, dg4d.edges, repo.name);
-          await kvStore.set(`sarif:deadExports:${repo.name}`, JSON.stringify(deadResults));
-          const elapsed = Math.round(performance.now() - start);
-          log(`  [${repo.name}] ${deadResults.length} dead exports found (${elapsed}ms)`);
-        } catch (error) {
-          console.error(`  Failed to detect dead exports for ${repo.name}:`, error);
-        }
-      }
-    }
-
-    // --- Phase 4e: Hotspot analysis ---
-    {
-      const pf4e = parsedFilesByRepo.get(repo.name);
-      if (pf4e && pf4e.length > 0) {
-        log(`  [${repo.name}] Computing hotspots...`);
-        try {
-          const start = performance.now();
-          const fileChanges = await getCommitHistory((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), 200);
-          const symbolCounts = new Map<string, number>();
-          for (const pf of pf4e) {
-            symbolCounts.set(pf.path, pf.symbols.length);
-          }
-          const hotspotResult = computeHotspots(fileChanges, symbolCounts);
-          const hotspotSarif = hotspotFindings(hotspotResult.hotspots, repo.name);
-          await kvStore.set(`hotspots:${repo.name}`, JSON.stringify(hotspotResult.hotspots));
-          await kvStore.set(`sarif:hotspot:${repo.name}`, JSON.stringify(hotspotSarif));
-          const elapsed = Math.round(performance.now() - start);
-          log(`  [${repo.name}] ${hotspotResult.hotspots.length} hotspots, ${hotspotSarif.length} findings (${elapsed}ms)`);
-        } catch (error) {
-          console.error(`  Failed to compute hotspots for ${repo.name}:`, error);
-        }
-      }
-    }
-
-    // --- Phase 4f: Temporal coupling ---
-    {
-      const pf4f = parsedFilesByRepo.get(repo.name);
-      if (pf4f && pf4f.length > 0) {
-        log(`  [${repo.name}] Computing temporal coupling...`);
-        try {
-          const start = performance.now();
-          const fileChanges = await getCommitHistory((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), 200);
-          const commits: CommitInfo[] = groupByCommit(fileChanges);
-          const tcResult = detectTemporalCoupling(commits);
-          const tcSarif = temporalCouplingToSarif(tcResult, repo.name);
-          await kvStore.set(`temporal-coupling:${repo.name}`, JSON.stringify(tcResult));
-          await kvStore.set(`sarif:temporal-coupling:${repo.name}`, JSON.stringify(tcSarif));
-          const elapsed = Math.round(performance.now() - start);
-          log(`  [${repo.name}] ${tcResult.pairs.length} coupled pairs, ${tcSarif.length} findings (${elapsed}ms)`);
-        } catch (error) {
-          console.error(`  Failed to compute temporal coupling for ${repo.name}:`, error);
-        }
-      }
-    }
-
-    // --- Phase 5: Heuristic analysis ---
-    const depGraph = depGraphByRepo.get(repo.name);
-    const parsedFiles = parsedFilesByRepo.get(repo.name);
-    const repoClassified = classifiedByRepo.get(repo.name) ?? [];
-    if (!depGraph) {
-      log(`  [${repo.name}] Skipping heuristics (no dependency graph)`);
-    } else {
-      log(`  [${repo.name}] Running heuristics...`);
-      const phase5Start = performance.now();
-      try {
-        // 5a: Service inference
-        // In recovery mode, repoClassified may be empty; derive filePaths from parsedFiles.
-        const packageJsonFiles = repoClassified.filter(
-          (f) => f.kind === "json" && f.path.endsWith("package.json"),
-        );
-
-        const packageJsons = new Map<string, PackageJsonInfo>();
-        const isBare = await checkBareRepo((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)));
-        await Promise.all(packageJsonFiles.map(async (pjFile) => {
-          try {
-            const raw = isBare
-              ? await getFileContent((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), await resolveCommitForBare((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), changeSets, repo.name), pjFile.path)
-              : await readFile(join((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), pjFile.path), "utf-8");
-            const parsed = JSON.parse(raw) as Record<string, unknown>;
-            packageJsons.set(dirname(pjFile.path), {
-              name: (parsed.name as string) ?? "",
-              main: parsed.main as string | undefined,
-              bin: (parsed.bin as Record<string, string>) ?? undefined,
-              dependencies: (parsed.dependencies as Record<string, string>) ?? {},
-              devDependencies: (parsed.devDependencies as Record<string, string>) ?? undefined,
-              scripts: (parsed.scripts as Record<string, string>) ?? {},
-            });
-          } catch {
-            log(`    warning: could not read ${pjFile.path}`);
-          }
-        }));
-
-        // Incremental mode: merge with cached packageJsons for dirs not re-scanned
-        if (!options.forceFullReindex) {
-          const cachedPjJson = await kvStore.get(`packageJsons:${repo.name}`);
-          if (cachedPjJson) {
-            try {
-              const cachedEntries = JSON.parse(cachedPjJson) as [string, PackageJsonInfo][];
-              const scannedDirs = new Set(packageJsonFiles.map((f) => dirname(f.path)));
-              for (const [dir, info] of cachedEntries) {
-                if (!scannedDirs.has(dir)) {
-                  packageJsons.set(dir, info);
-                }
-              }
-            } catch { /* skip malformed cache */ }
-          }
-        }
-        await kvStore.set(`packageJsons:${repo.name}`, JSON.stringify([...packageJsons.entries()]));
-
-        const filePaths = parsedFiles && parsedFiles.length > 0
-          ? parsedFiles.map((pf) => pf.path)
-          : repoClassified.map((f) => f.path);
-        const servicesResult = inferServicesWithMeta({
-          repo: repo.name,
-          filePaths,
-          packageJsons,
-          dependencyGraph: depGraph,
-        });
-        const services = servicesResult.data;
-        servicesByRepo.set(repo.name, services);
-
-        log(`    ${servicesResult.meta.itemCount} services inferred in ${servicesResult.meta.durationMs}ms, ${packageJsons.size} package.json files`);
-        for (const svc of services.slice(0, 10)) {
-          log(`      ${svc.name} (${svc.rootPath}) confidence=${svc.confidence} deps=${svc.dependencies.length}`);
-        }
-        if (services.length > 10) {
-          log(`      ... and ${services.length - 10} more`);
-        }
-
-        // Build intermediate maps for remaining heuristics
-        const symbolsByFile = new Map<string, readonly SymbolInfo[]>();
-        if (parsedFiles) {
-          for (const pf of parsedFiles) {
-            symbolsByFile.set(pf.path, pf.symbols);
-          }
-        }
-
-        const importsByFile = new Map<string, string[]>();
-        for (const edge of depGraph.edges) {
-          let imports = importsByFile.get(edge.source);
-          if (!imports) {
-            imports = [];
-            importsByFile.set(edge.source, imports);
-          }
-          imports.push(edge.target);
-        }
-
-        // 5b: Pattern detection
-        const patternsResult = detectPatternsWithMeta({
-          repo: repo.name,
-          symbols: symbolsByFile,
-          imports: importsByFile,
-        });
-        const patterns = patternsResult.data;
-        patternsByRepo.set(repo.name, patterns);
-        await kvStore.set(`patterns:${repo.name}`, JSON.stringify(patterns));
-        log(`    ${patternsResult.meta.itemCount} patterns detected in ${patternsResult.meta.durationMs}ms (from ${symbolsByFile.size} files with symbols)`);
-
-        // 5c: Feature flag scanning
-        if (trees && trees.size > 0) {
-          let flagInventory = scanForFlags(trees, repo.name);
-
-          // Incremental mode: merge with cached flags for files not re-scanned
-          if (!options.forceFullReindex) {
-            const cachedFlagJson = await kvStore.get(`flags:${repo.name}`);
-            if (cachedFlagJson) {
-              try {
-                const cached = JSON.parse(cachedFlagJson) as FlagInventory;
-                const scannedFiles = new Set(trees.keys());
-                const mergedFlagMap = new Map<string, { name: string; sdk?: string; defaultValue?: unknown; locations: LogicalLocation[] }>();
-                // Keep cached flag locations from files not re-scanned
-                for (const flag of cached.flags) {
-                  const kept = flag.locations.filter(loc => !scannedFiles.has(loc.module));
-                  if (kept.length > 0) {
-                    mergedFlagMap.set(flag.name, { name: flag.name, sdk: flag.sdk, defaultValue: flag.defaultValue, locations: [...kept] });
-                  }
-                }
-                // Add new flag results from scanned files
-                for (const flag of flagInventory.flags) {
-                  const existing = mergedFlagMap.get(flag.name);
-                  if (existing) {
-                    existing.locations.push(...flag.locations);
-                  } else {
-                    mergedFlagMap.set(flag.name, { name: flag.name, sdk: flag.sdk, defaultValue: flag.defaultValue, locations: [...flag.locations] });
-                  }
-                }
-                flagInventory = { repo: repo.name, flags: [...mergedFlagMap.values()] };
-              } catch { /* skip malformed cache */ }
-            }
-          }
-
-          flagsByRepo.set(repo.name, flagInventory);
-          await kvStore.set(`flags:${repo.name}`, JSON.stringify(flagInventory));
-          log(`    ${flagInventory.flags.length} feature flags found`);
-
-          // 5d: Log statement extraction
-          let logIndex = extractLogStatements(trees, repo.name);
-
-          // Incremental mode: merge with cached templates for files not re-scanned
-          if (!options.forceFullReindex) {
-            const cachedLogJson = await kvStore.get(`logTemplates:${repo.name}`);
-            if (cachedLogJson) {
-              try {
-                const cached = JSON.parse(cachedLogJson) as LogTemplateIndex;
-                const scannedFiles = new Set(trees.keys());
-                // Key: "severity\0template" → merged template entry
-                type MutableTemplate = { id: string; template: string; severity: LogSeverity; locations: LogicalLocation[]; frequency: number };
-                const mergedMap = new Map<string, MutableTemplate>();
-                // Keep cached locations from files not re-scanned
-                for (const t of cached.templates) {
-                  const keptLocs = t.locations.filter(loc => !scannedFiles.has(loc.module));
-                  if (keptLocs.length > 0) {
-                    const key = `${t.severity}\x00${t.template}`;
-                    mergedMap.set(key, { id: t.id, template: t.template, severity: t.severity, locations: [...keptLocs], frequency: keptLocs.length });
-                  }
-                }
-                // Merge new templates from re-scanned files
-                for (const t of logIndex.templates) {
-                  const key = `${t.severity}\x00${t.template}`;
-                  const existing = mergedMap.get(key);
-                  if (existing) {
-                    existing.locations.push(...t.locations);
-                    existing.frequency = existing.locations.length;
-                  } else {
-                    mergedMap.set(key, { id: t.id, template: t.template, severity: t.severity, locations: [...t.locations], frequency: t.frequency });
-                  }
-                }
-                // Re-index IDs sequentially
-                const mergedTemplates = [...mergedMap.values()].map((t, i) => ({ ...t, id: `log-template-${i}` }));
-                logIndex = { repo: repo.name, templates: mergedTemplates };
-              } catch { /* skip malformed cache */ }
-            }
-          }
-
-          logIndexByRepo.set(repo.name, logIndex);
-          await kvStore.set(`logTemplates:${repo.name}`, JSON.stringify(logIndex));
-          log(`    ${logIndex.templates.length} log templates extracted`);
-        } else {
-          log(`    skipping flag scan and log extraction (no tree-sitter trees)`);
-        }
-
-        // 5e: Naming analysis
-        if (symbolsByFile.size > 0) {
-          const namingHeuristic = analyzeNamingWithMeta(symbolsByFile, repo.name);
-          namingByRepo.set(repo.name, namingHeuristic.data);
-          await kvStore.set(`naming:${repo.name}`, JSON.stringify(namingHeuristic.data));
-          log(`    ${namingHeuristic.meta.itemCount} method purposes inferred in ${namingHeuristic.meta.durationMs}ms`);
-        } else {
-          log(`    skipping naming analysis (no symbols)`);
-        }
-
-        // 5f: Service topology detection
-        if (trees && trees.size > 0) {
-          const topologyEdges = extractServiceTopology({
-            repo: repo.name,
-            trees,
-            imports: importsByFile,
-          });
-          if (topologyEdges.length > 0) {
-            await options.graphStore.addEdges(topologyEdges);
-            log(`    ${topologyEdges.length} service-call edges detected`);
-            const producers = topologyEdges.filter(e => e.metadata?.role === "producer").length;
-            const consumers = topologyEdges.filter(e => e.metadata?.role === "consumer").length;
-            const httpCalls = topologyEdges.filter(e => e.metadata?.protocol === "http").length;
-            log(`      producers=${producers} consumers=${consumers} http=${httpCalls}`);
-          } else {
-            log(`    0 service-call edges detected`);
-          }
-        }
-        // 5g: Architectural rules evaluation
-        if (options.rules && options.rules.length > 0 && depGraph) {
-          const archResults = evaluateArchRules(options.rules, depGraph.edges, repo.name);
-          await kvStore.set(`sarif:arch:${repo.name}`, JSON.stringify(archResults));
-          log(`    ${archResults.length} architectural rule violations`);
-        }
-
-        // 5h: PageRank blast radius scoring
-        if (depGraph) {
-          const prResult = computePageRank(depGraph.edges);
-          const prSarif = pageRankToSarif(prResult, repo.name);
-          await kvStore.set(`sarif:blastRadius:${repo.name}`, JSON.stringify(prSarif));
-          log(`    PageRank: ${prResult.ranked.length} nodes scored, ${prSarif.length} high-risk`);
-          const reachCounts = await computeReachCounts(depGraph.edges);
-          await kvStore.set(`reachCounts:${repo.name}`, JSON.stringify([...reachCounts]));
-          log(`    ReachCounts: ${reachCounts.size} nodes scored`);
-        }
-
-        // 5i: Vulnerability reachability
-        if (options.advisories && options.advisories.length > 0) {
-          const installed: InstalledPackage[] = [];
-          const skippedProtocols: string[] = [];
-          for (const [, pj] of packageJsons) {
-            const allDeps = { ...pj.dependencies, ...pj.devDependencies };
-            for (const [name, version] of Object.entries(allDeps)) {
-              // Skip non-semver version protocols (workspace:*, link:, file:, etc.)
-              if (/^(?:workspace|link|file|portal|patch):/.test(version)) {
-                skippedProtocols.push(`${name}@${version}`);
-                continue;
-              }
-              const clean = version.replace(/^[~^>=<v ]+/, "");
-              if (clean && clean !== "*") installed.push({ name, version: clean });
-            }
-          }
-          if (skippedProtocols.length > 0) {
-            log(`    [vuln] skipped ${skippedProtocols.length} non-semver deps (${skippedProtocols.slice(0, 3).join(", ")}${skippedProtocols.length > 3 ? "..." : ""})`);
-          }
-          if (installed.length === 0) {
-            if (packageJsons.size === 0) {
-              log(`    [vuln] no package.json in changeset, skipping (use --force-full-reindex to re-scan)`);
-            } else {
-              log(`    [vuln] no semver-compatible dependencies found after protocol filtering, skipping`);
-            }
-          } else {
-            const vulnMatches = matchAdvisories(installed, options.advisories);
-            const reachability = checkTransitiveVulnReachability(vulnMatches, depGraph?.edges ?? []);
-            const vulnSarif = vulnReachabilityToSarifWithCodeFlows(reachability, repo.name);
-            await kvStore.set(`sarif:vuln:${repo.name}`, JSON.stringify(vulnSarif));
-            log(`    ${vulnSarif.length} reachable vulnerabilities found`);
-          }
-        }
-
-        log(`  [${repo.name}] Phase 5: ${Math.round(performance.now() - phase5Start)}ms`);
-      } catch (error) {
-        console.error(`  Failed to run heuristics for ${repo.name}:`, error);
-        failedRepoNames.add(repo.name);
-      }
-    }
+    // --- Phase 4c-4f + Phase 5: Metrics, dead exports, hotspots, temporal coupling, heuristics ---
+    await runPhaseHeuristics(ctx, repo);
 
     // --- Phase 6a: Config and fault models ---
-    const phase6aStart = performance.now();
-    const flagInventory = flagsByRepo.get(repo.name);
-    const logIndex = logIndexByRepo.get(repo.name);
+    // Note: tree-sitter ASTs are released inside runPhaseModels after the fault
+    // model (the last consumer of trees).
+    await runPhaseModels(ctx, repo);
 
-    // Config model
-    if (!flagInventory || !depGraph || flagInventory.flags.length === 0) {
-      log(`  [${repo.name}] [config]: skipped (${!flagInventory ? "no flag inventory" : !depGraph ? "no dep graph" : "0 flags found"})`);
-    }
-    if (flagInventory && depGraph && flagInventory.flags.length > 0) {
-      try {
-        let featureModel = buildFeatureModel(flagInventory, depGraph);
-
-        if (trees && trees.size > 0) {
-          const codeConstraints = extractConstraintsFromCode(trees, featureModel.flags);
-          if (codeConstraints.length > 0) {
-            featureModel = {
-              flags: featureModel.flags,
-              constraints: [
-                ...featureModel.constraints,
-                ...codeConstraints.map((c) => c.constraint),
-              ],
-            };
-          }
-        }
-
-        const { results: configResults, validation } = await validateFeatureModel(featureModel, repo.name);
-        await kvStore.set(`sarif:config:${repo.name}`, JSON.stringify(configResults));
-
-        log(`  [${repo.name}] [config]: ${featureModel.flags.length} flags, ${featureModel.constraints.length} constraints, ${configResults.length} findings`);
-        log(`    dead=${validation.deadFlags.length} always-on=${validation.alwaysOnFlags.length} untested=${validation.inferredUntestedPairs.length}`);
-      } catch (error) {
-        console.error(`  Failed to build feature model for ${repo.name}:`, error);
-      }
-    }
-
-    // Fault model
-    if (!logIndex || logIndex.templates.length === 0 || !trees) {
-      log(`  [${repo.name}] [fault]: skipped (${!logIndex ? "no log index" : logIndex.templates.length === 0 ? "0 log templates" : "no trees"})`);
-    }
-    if (logIndex && logIndex.templates.length > 0 && trees) {
-      try {
-        const logRoots = identifyLogRoots(logIndex);
-
-        // Build CFGs only for files that contain log templates
-        const logFiles = new Set<string>();
-        for (const tmpl of logIndex.templates) {
-          for (const loc of tmpl.locations) {
-            logFiles.add(loc.module);
-          }
-        }
-
-        const cfgCounter = createCfgIdCounter();
-        const cfgs = new Map<string, ControlFlowGraph>();
-        for (const filePath of logFiles) {
-          const tree = trees.get(filePath);
-          if (!tree) {
-            log(`    warning: no tree-sitter tree for log file ${filePath} (skipping CFG build)`);
-            continue;
-          }
-
-          const fnNodes = findFunctionNodes(tree.rootNode);
-          for (const fnNode of fnNodes) {
-            const functionId = `${filePath}#${fnNode.name}`;
-            const cfg = buildControlFlowGraph(fnNode.node, functionId, repo.name, filePath, cfgCounter);
-            cfgs.set(functionId, cfg);
-          }
-        }
-
-        // Use real call edges from graph store if available
-        const repoCallEdges = await options.graphStore.getEdgesByKind("calls", repo.name);
-        const callGraph: CallGraph = {
-          repo: repo.name,
-          edges: repoCallEdges,
-          nodeCount: new Set(repoCallEdges.flatMap(e => [e.source, e.target])).size,
-        };
-
-        const faultTrees = [];
-        const allTraces: import("@mma/model-fault").BackwardTrace[] = [];
-        // Limit tracing for POC performance; full-scale tracing requires call graph
-        const MAX_TRACED_ROOTS = 50;
-        const tracedRoots = logRoots.slice(0, MAX_TRACED_ROOTS);
-        const failCounts = new Map<string, number>();
-        for (const root of tracedRoots) {
-          const trace = traceBackwardFromLog(root, cfgs, callGraph);
-          allTraces.push(trace);
-          if (trace.steps.length > 0) {
-            faultTrees.push(buildFaultTree(trace, repo.name));
-          } else if (trace.failReason) {
-            failCounts.set(trace.failReason, (failCounts.get(trace.failReason) ?? 0) + 1);
-          }
-        }
-        if (logRoots.length > MAX_TRACED_ROOTS) {
-          log(`    warning: ${logRoots.length - MAX_TRACED_ROOTS} log roots not traced (POC limit=${MAX_TRACED_ROOTS})`);
-        }
-        if (failCounts.size > 0) {
-          const breakdown = [...failCounts.entries()].map(([reason, count]) => `${count} ${reason}`).join(", ");
-          const totalFailed = [...failCounts.values()].reduce((a, b) => a + b, 0);
-          log(`    trace failures: ${breakdown} (${totalFailed}/${tracedRoots.length} total)`);
-        }
-
-        // Collect all fault SARIF results
-        const faultResults: SarifResult[] = [];
-
-        // Gap analysis (unhandled-error-path + silent-failure)
-        faultResults.push(...analyzeGaps(cfgs, repo.name));
-
-        // Cascading failure risk from cross-service calls
-        faultResults.push(...analyzeCascadingRisk(allTraces, repo.name));
-
-        // Missing error boundaries (async functions without try/catch)
-        faultResults.push(...detectMissingErrorBoundaries(cfgs, repo.name));
-
-        await kvStore.set(`sarif:fault:${repo.name}`, JSON.stringify(faultResults));
-        await kvStore.set(`faultTrees:${repo.name}`, JSON.stringify(faultTrees));
-
-        log(`  [${repo.name}] [fault]: ${logRoots.length} log roots, ${cfgs.size} CFGs, ${faultTrees.length} fault trees, ${faultResults.length} fault findings`);
-      } catch (error) {
-        console.error(`  Failed to build fault model for ${repo.name}:`, error);
-      }
-    }
-
-    log(`  [${repo.name}] Phase 6a: ${Math.round(performance.now() - phase6aStart)}ms`);
-
-    // Release tree-sitter ASTs: explicitly free WASM heap memory via tree.delete(),
-    // then drop JS references. Without tree.delete(), trees are only collected by
-    // JS GC which doesn't know about WASM heap pressure.
-    if (trees && trees.size > 0) {
-      for (const tree of trees.values()) {
-        tree.delete();
-      }
-      log(`  [${repo.name}] Released tree-sitter ASTs`);
-    }
-
-    // --- Phase 6b: Summarization (tier-1 + tier-2) ---
-    let summaryMap: Map<string, Summary> | undefined;
-    if (!parsedFiles) {
-      log(`  [${repo.name}] Skipping summarization (no parsed files)`);
-    } else {
-      const phase6bRepoStart = performance.now();
-      try {
-        summaryMap = new Map<string, Summary>();
-        const namingResult = namingByRepo.get(repo.name);
-
-        // Tier 1: template-based summaries from AST (batched parallel I/O, cached by contentHash)
-        let tier1ReadErrors = 0;
-        let tier1CacheHits = 0;
-        const BATCH_SIZE = 20;
-        // Tier-3 snippets are loaded lazily at tier-3 time to avoid OOM on large repos.
-        const MAX_SNIPPET_LINES = 30;
-        const isBareForTier1 = await checkBareRepo((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)));
-        const bareCommitForTier1 = isBareForTier1
-          ? await resolveCommitForBare((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), changeSets, repo.name)
-          : undefined;
-        const tier1Progress = new ProgressTracker(parsedFiles.length);
-
-        for (let batchStart = 0; batchStart < parsedFiles.length; batchStart += BATCH_SIZE) {
-          const batch = parsedFiles.slice(batchStart, batchStart + BATCH_SIZE);
-
-          // For bare repos: bulk-fetch uncached files in this batch via git cat-file --batch
-          if (isBareForTier1 && bareCommitForTier1) {
-            // Filter out files already in the source-text cache, then check the
-            // KV summary cache in parallel for the remainder.
-            const notInMemory = batch.filter((pf) => !sourceTextCache.has(pf.path));
-            const cacheChecks = await Promise.all(
-              notInMemory.map(async (pf) => {
-                const cacheKey = `summary:t1:${repo.name}:${pf.path}:${pf.contentHash}`;
-                const hit = await kvStore.get(cacheKey);
-                return { pf, hit };
-              }),
-            );
-            const uncached = cacheChecks.filter(({ hit }) => !hit).map(({ pf }) => pf.path);
-            if (uncached.length > 0) {
-              try {
-                const fetched = await getFileContentBatch((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), bareCommitForTier1, uncached);
-                for (const [p, c] of fetched) sourceTextCache.set(p, c);
-              } catch (err) {
-                log(`[warn] bulk fetch failed for ${repo.name}, falling through to per-file reads: ${String(err)}`);
-              }
-            }
-          }
-
-          const results = await Promise.all(
-            batch.map(async (pf) => {
-              const cacheKey = `summary:t1:${repo.name}:${pf.path}:${pf.contentHash}`;
-              const cached = await kvStore.get(cacheKey);
-              if (cached) {
-                tier1CacheHits++;
-                try {
-                  return { summaries: JSON.parse(cached) as Summary[], symbols: pf.symbols, filePath: pf.path };
-                } catch {
-                  // Corrupted cache entry; re-generate below
-                }
-              }
-              try {
-                const cachedSource = sourceTextCache.get(pf.path);
-                sourceTextCache.delete(pf.path); // free after use
-                const sourceText = cachedSource !== undefined
-                  ? cachedSource
-                  : isBareForTier1 && bareCommitForTier1
-                    ? await getFileContent((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), bareCommitForTier1, pf.path, { timeoutMs: 30_000 })
-                    : await readFile(join((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), pf.path), "utf-8");
-                const summaries = tier1Summarize(pf.symbols, pf.path, sourceText);
-                if (summaries.length > 0) {
-                  // Delete any stale cache entries for this file (old contentHash keys
-                  // from previous runs). The prefix includes the trailing colon so it
-                  // matches only entries for this exact repo:filePath pair.
-                  await kvStore.deleteByPrefix(`summary:t1:${repo.name}:${pf.path}:`);
-                  await kvStore.set(cacheKey, JSON.stringify(summaries));
-                }
-                return { summaries, symbols: pf.symbols, filePath: pf.path };
-              } catch {
-                tier1ReadErrors++;
-                return { summaries: [] as Summary[], symbols: pf.symbols, filePath: pf.path };
-              }
-            }),
-          );
-          for (const { summaries: tier1 } of results) {
-            for (const s of tier1) {
-              summaryMap.set(s.entityId, s);
-            }
-          }
-          tier1Progress.tick(batch.length);
-          const processed = Math.min(batchStart + BATCH_SIZE, parsedFiles.length);
-          if (batchStart === 0 || processed % 1000 < BATCH_SIZE || processed === parsedFiles.length) {
-            log(`    [tier-1] ${tier1Progress.format()}`);
-          }
-        }
-        if (tier1CacheHits > 0) {
-          log(`    [tier-1] ${tier1CacheHits} files served from cache`);
-        }
-        if (tier1ReadErrors > 0) {
-          log(`    warning: ${tier1ReadErrors} files could not be read for tier-1 summarization`);
-        }
-
-        const tier1Count = summaryMap.size;
-        sourceTextCache.clear(); // free memory after tier-1
-
-        // Tier 2: naming-based summaries (overwrites tier 1 for same entityId)
-        let tier2Total = 0;
-        let tier2Upgraded = 0;
-        if (namingResult) {
-          const tier2 = tier2Summarize(namingResult.methods);
-          tier2Total = tier2.length;
-          for (const s of tier2) {
-            if (summaryMap.has(s.entityId)) tier2Upgraded++;
-            summaryMap.set(s.entityId, s);
-          }
-        }
-
-        // Tier 3: LLM (cloud API or Ollama) for low-confidence method summaries (lazy snippet loading)
-        let tier3Count = 0;
-        if (options.enrich && (!sharedApiBudget || sharedApiBudget.remaining > 0)) {
-          const tier3Raw = [...summaryMap.entries()]
-            .filter(([, s]) => shouldEscalateToTier3(s, undefined));
-          const tier3CacheChecks = await Promise.all(
-            tier3Raw.map(async ([entityId, s]) => {
-              const cached = await kvStore.has(`summary:t3:${repo.name}:${entityId}`);
-              return cached ? null : [entityId, s] as [string, typeof s];
-            })
-          );
-          let tier3Candidates = tier3CacheChecks.filter((r): r is [string, (typeof tier3Raw)[number][1]] => r !== null);
-          // Atomically reserve budget before async work
-          if (sharedApiBudget) {
-            const granted = sharedApiBudget.reserve(tier3Candidates.length);
-            tier3Candidates = tier3Candidates.slice(0, granted);
-          }
-          if (tier3Candidates.length > 0) {
-            const tier3Provider = options.llmProvider ?? "ollama";
-            log(`    Tier 3 (${tier3Provider}): upgrading ${tier3Candidates.length} low-confidence summaries`);
-
-            // Lazily load source snippets only for tier-3 candidates (avoids OOM on large repos)
-            const isBareForTier3 = await checkBareRepo((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)));
-            const bareCommitForTier3 = isBareForTier3
-              ? await resolveCommitForBare((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), changeSets, repo.name)
-              : undefined;
-
-            // Build a symbol start-line index from parsedFiles
-            const symbolLineIndex = new Map<string, number>();
-            for (const pf of parsedFiles) {
-              for (const sym of pf.symbols) {
-                if (sym.kind !== "function" && sym.kind !== "method" && sym.kind !== "class") continue;
-                const eid = sym.containerName
-                  ? `${pf.path}#${sym.containerName}.${sym.name}`
-                  : `${pf.path}#${sym.name}`;
-                symbolLineIndex.set(eid, sym.startLine);
-              }
-            }
-
-            const ollamaOpts: Partial<OllamaOptions> = {
-              ...(options.ollamaUrl ? { baseUrl: options.ollamaUrl } : {}),
-              ...(options.ollamaModel ? { model: options.ollamaModel } : {}),
-            };
-
-            // Process tier-3 in chunks of 200 to bound memory (load snippets per chunk, then free)
-            const TIER3_CHUNK = 200;
-            const tier3Progress = new ProgressTracker(tier3Candidates.length);
-            for (let ci = 0; ci < tier3Candidates.length; ci += TIER3_CHUNK) {
-              const chunk = tier3Candidates.slice(ci, ci + TIER3_CHUNK);
-
-              // Group this chunk's candidates by file
-              const chunkByFile = new Map<string, { entityId: string }[]>();
-              for (const [entityId] of chunk) {
-                const [filePath, symPart] = entityId.split("#");
-                if (!filePath || !symPart) continue;
-                let list = chunkByFile.get(filePath);
-                if (!list) { list = []; chunkByFile.set(filePath, list); }
-                list.push({ entityId });
-              }
-
-              // Load snippets for this chunk only
-              const snippetMap = new Map<string, string>();
-              const filePaths = [...chunkByFile.keys()];
-              if (isBareForTier3 && bareCommitForTier3 && filePaths.length > 0) {
-                try {
-                  const fetched = await getFileContentBatch((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), bareCommitForTier3, filePaths);
-                  for (const [fp, content] of fetched) {
-                    const lines = content.split("\n");
-                    for (const { entityId } of chunkByFile.get(fp) ?? []) {
-                      const startLine = symbolLineIndex.get(entityId);
-                      if (startLine === undefined) continue;
-                      const start = Math.max(0, startLine - 1);
-                      const end = Math.min(lines.length, start + MAX_SNIPPET_LINES);
-                      snippetMap.set(entityId, lines.slice(start, end).join("\n"));
-                    }
-                  }
-                } catch {
-                  // Fall through — use entityId as context
-                }
-              } else {
-                for (const [fp, candidates] of chunkByFile) {
-                  try {
-                    const content = await readFile(join((repo.localPath ?? join(mirrorDir, `${repo.name}.git`)), fp), "utf-8");
-                    const lines = content.split("\n");
-                    for (const { entityId } of candidates) {
-                      const startLine = symbolLineIndex.get(entityId);
-                      if (startLine === undefined) continue;
-                      const start = Math.max(0, startLine - 1);
-                      const end = Math.min(lines.length, start + MAX_SNIPPET_LINES);
-                      snippetMap.set(entityId, lines.slice(start, end).join("\n"));
-                    }
-                  } catch {
-                    // File not readable — skip
-                  }
-                }
-              }
-
-              const tier3Entities = chunk.map(([entityId]) => ({
-                entityId,
-                sourceCode: snippetMap.get(entityId) ?? entityId,
-                context: entityId,
-              }));
-
-              let tier3Results;
-              if (tier3Provider === "anthropic" || tier3Provider === "openai") {
-                const resolvedApiKey =
-                  options.llmApiKey ??
-                  (tier3Provider === "anthropic"
-                    ? process.env.ANTHROPIC_API_KEY
-                    : process.env.OPENAI_API_KEY) ??
-                  "";
-                const llmOpts: LlmApiOptions = {
-                  provider: tier3Provider,
-                  apiKey: resolvedApiKey,
-                  model: options.llmModel ?? (tier3Provider === "anthropic" ? "claude-haiku-4-5-20251001" : "gpt-4o-mini"),
-                  timeout: 30_000,
-                  maxTokens: 200,
-                };
-                tier3Results = await tier3SummarizeLlmApi(tier3Entities, llmOpts, 20);
-              } else {
-                const ollamaEntities = tier3Entities;
-                tier3Results = await ollamaTier3Summarize(ollamaEntities, ollamaOpts);
-              }
-              for (const s of tier3Results) {
-                if (s.confidence > 0) {
-                  summaryMap.set(s.entityId, s);
-                  tier3Count++;
-                  await kvStore.set(`summary:t3:${repo.name}:${s.entityId}`, JSON.stringify(s));
-                }
-              }
-              tier3Progress.tick(chunk.length);
-              if (ci % 1000 < TIER3_CHUNK) {
-                log(`    [tier-3] ${tier3Progress.format()}`);
-              }
-            }
-          }
-        }
-
-        // Index summaries in search store for query support (batched to limit memory)
-        const SEARCH_BATCH = 1000;
-        let searchDocs: Array<{
-          id: string;
-          content: string;
-          metadata: { tier: string; repo: string };
-        }> = [];
-        for (const s of summaryMap.values()) {
-          // Extract bare symbol name for better BM25 recall (e.g., "signIn" from "src/auth.ts#AuthService.signIn")
-          const hashPart = s.entityId.split("#")[1] ?? "";
-          const symbolName = hashPart.split(".").pop() ?? "";
-          const containerName = hashPart.includes(".") ? hashPart.split(".")[0] ?? "" : "";
-          searchDocs.push({
-            id: s.entityId,
-            content: [symbolName, containerName, s.entityId, s.description].filter(Boolean).join(" "),
-            metadata: { tier: String(s.tier), repo: repo.name },
-          });
-          if (searchDocs.length === SEARCH_BATCH) {
-            await options.searchStore.index(searchDocs);
-            searchDocs = [];
-          }
-        }
-        if (searchDocs.length > 0) {
-          await options.searchStore.index(searchDocs);
-        }
-
-        const tierBreakdown = [
-          `${tier1Count} tier-1`,
-          `${tier2Total} tier-2 (${tier2Upgraded} upgraded)`,
-          tier3Count > 0 ? `${tier3Count} tier-3` : null,
-        ].filter(Boolean).join(", ");
-        log(`  [${repo.name}] Summaries: ${tierBreakdown}, ${summaryMap.size} total`);
-      } catch (error) {
-        console.error(`  Failed to generate summaries for ${repo.name}:`, error);
-        failedRepoNames.add(repo.name);
-      }
-      phase6bTotalMs += Math.round(performance.now() - phase6bRepoStart);
-    }
+    // --- Phase 6b: Summarization (tier-1 + tier-2 + tier-3) ---
+    const summaryMap = await runPhaseSummarization(ctx, repo, sourceTextCache);
 
     // --- Phase 6c: Functional model ---
-    {
-      const services6c = servicesByRepo.get(repo.name);
-      if (!services6c || services6c.length === 0) {
-        log(`  [${repo.name}] [functional]: skipped (${!services6c ? "no services" : "0 services inferred"})`);
-      } else {
-        const phase6cRepoStart = performance.now();
-        try {
-          const svcSummaries = summaryMap ?? new Map<string, Summary>();
-          const svcLogIndex = logIndex ?? { repo: repo.name, templates: [] };
-          const catalog = buildServiceCatalog(services6c, svcSummaries, svcLogIndex);
-          const docs = generateDocumentation(catalog, svcSummaries);
-          await kvStore.set(`docs:functional:${repo.name}`, docs);
-          await kvStore.set(`catalog:${repo.name}`, JSON.stringify(catalog));
-          log(`  [${repo.name}] [functional]: ${catalog.length} catalog entries, ${docs.length} chars of documentation`);
-        } catch (error) {
-          console.error(`  Failed to build service catalog for ${repo.name}:`, error);
-        }
-        phase6cTotalMs += Math.round(performance.now() - phase6cRepoStart);
-      }
-    }
+    await runPhaseFunctional(ctx, repo, summaryMap);
 
     // Track completion and release per-repo heap data
     completedRepos.add(repo.name);
     await kvStore.set(`pipelineComplete:${repo.name}`, "true");
-    totalFiles += parsedFiles?.length ?? 0;
+    ctx.totalFiles += parsedFilesByRepo.get(repo.name)?.length ?? 0;
 
     parsedFilesByRepo.delete(repo.name);
     depGraphByRepo.delete(repo.name);
@@ -1577,41 +311,11 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     namingByRepo.delete(repo.name);
   })));
 
-  log(`  Phase 6b total: ${phase6bTotalMs}ms`);
-  log(`  Phase 6c total: ${phase6cTotalMs}ms`);
+  log(`  Phase 6b total: ${ctx.phase6bTotalMs}ms`);
+  log(`  Phase 6c total: ${ctx.phase6cTotalMs}ms`);
 
   // Phase 7: Cross-repo correlation (only meaningful with 2+ repos)
-  let correlationResult: Awaited<ReturnType<typeof runCorrelation>> | undefined;
-  if (repos.length > 1) {
-    tracer.startPhase("Cross-repo Correlation");
-    correlationResult = await runCorrelation(kvStore, options.graphStore, {
-      repos, packageRoots, mirrorDir, verbose,
-    });
-    if (verbose) {
-      log(`  Cross-repo edges: ${correlationResult.counts.crossRepoEdges}`);
-      log(`  Repo pairs: ${correlationResult.counts.repoPairs}`);
-      log(`  Linchpins: ${correlationResult.counts.linchpins}`);
-      log(`  SARIF findings: ${correlationResult.counts.sarifFindings}`);
-    }
-    tracer.record("crossRepoEdges", correlationResult.counts.crossRepoEdges);
-    tracer.endPhase();
-
-    // Phase 7b: Cross-repo model analysis
-    tracer.startPhase("Cross-repo Models");
-    const crossRepoModelsResult = await runCrossRepoModels(kvStore, {
-      repos,
-      crossRepoGraph: correlationResult.crossRepoGraph,
-      serviceCorrelation: correlationResult.serviceCorrelation,
-      verbose,
-    });
-    if (verbose) {
-      log(`  Shared flags: ${crossRepoModelsResult.counts.sharedFlags}`);
-      log(`  Fault links: ${crossRepoModelsResult.counts.faultLinks}`);
-      log(`  Catalog entries: ${crossRepoModelsResult.counts.catalogEntries}`);
-      log(`  SARIF findings: ${crossRepoModelsResult.counts.sarifFindings}`);
-    }
-    tracer.endPhase();
-  }
+  await runPhaseCorrelation(ctx, tracer);
 
   // Aggregate all per-repo SARIF into a combined latest result
   tracer.startPhase("SARIF Aggregation");
@@ -1771,6 +475,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
 
   tracer.record("sarifResults", allSarifResults.length);
   tracer.endPhase();
+
   // Compute Architectural Technical Debt Index (ATDI) scores
   tracer.startPhase("ATDI");
   {
@@ -1846,97 +551,9 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
   return {
     hadChanges,
     repoCount: repos.length,
-    totalFiles,
+    totalFiles: ctx.totalFiles,
     totalSarifResults: allSarifResults.length,
     failedRepos: failedRepoNames.size,
     failedRepoNames,
   };
-}
-
-interface FunctionNodeInfo {
-  readonly name: string;
-  readonly node: TreeSitterNode;
-}
-
-function findFunctionNodes(rootNode: TreeSitterNode): FunctionNodeInfo[] {
-  const results: FunctionNodeInfo[] = [];
-
-  function walk(node: TreeSitterNode): void {
-    if (
-      node.type === "function_declaration" ||
-      node.type === "function_expression" ||
-      node.type === "method_definition"
-    ) {
-      const nameNode = node.namedChildren.find(
-        (c) => c.type === "identifier" || c.type === "property_identifier",
-      );
-      const name = nameNode?.text ?? `anon_${node.startPosition.row}`;
-      results.push({ name, node });
-    } else if (node.type === "public_field_definition") {
-      // Class arrow property: handler = async (req) => {}
-      const arrowChild = node.namedChildren.find((c) => c.type === "arrow_function");
-      if (arrowChild) {
-        const nameNode = node.namedChildren.find(
-          (c) => c.type === "property_identifier" || c.type === "identifier",
-        );
-        const name = nameNode?.text ?? `anon_${node.startPosition.row}`;
-        results.push({ name, node: arrowChild });
-      }
-    } else if (node.type === "arrow_function") {
-      // Arrow function names live in the parent variable_declarator, not the arrow_function itself
-      let name = `anon_${node.startPosition.row}`;
-      const parent = node.parent;
-      if (parent?.type === "variable_declarator") {
-        const varName = parent.childForFieldName("name");
-        if (varName) name = varName.text;
-      } else if (parent?.type === "pair") {
-        // Object property: { handler: (e) => ... }
-        const key = parent.namedChildren.find((c) => c.type === "property_identifier" || c.type === "string");
-        if (key) name = key.text;
-      } else if (parent?.type === "export_statement") {
-        // Exported default arrow: export default (req) => {}
-        name = "default_export";
-      }
-      results.push({ name, node });
-    }
-
-    for (const child of node.namedChildren) {
-      walk(child);
-    }
-  }
-
-  walk(rootNode);
-  return results;
-}
-
-function detectMissingErrorBoundaries(
-  cfgs: ReadonlyMap<string, ControlFlowGraph>,
-  repo: string,
-): SarifResult[] {
-  const results: SarifResult[] = [];
-
-  for (const [functionId, cfg] of cfgs) {
-    const hasAwait = cfg.nodes.some(n => n.kind === "statement" && /\bawait\b/.test(n.label));
-    if (!hasAwait) continue;
-
-    const hasTryCatch = cfg.nodes.some(n => n.kind === "catch" || n.kind === "try");
-    if (hasTryCatch) continue;
-
-    results.push(
-      createSarifResult(
-        "fault/missing-error-boundary",
-        "warning",
-        `Async function ${functionId} uses await but has no try/catch error boundary`,
-        {
-          locations: [{
-            logicalLocations: [
-              createLogicalLocation(repo, functionId.split("#")[0] ?? "", functionId),
-            ],
-          }],
-        },
-      ),
-    );
-  }
-
-  return results;
 }
