@@ -6,6 +6,7 @@
  */
 
 import { input, select, checkbox, confirm } from "@inquirer/prompts";
+import { execFile } from "node:child_process";
 import type { KVStore, GraphStore, SearchStore } from "@mma/storage";
 import {
   scanGitHubOrg,
@@ -13,11 +14,13 @@ import {
   scanRepoPackages,
   buildPackageMap,
 } from "@mma/ingestion";
-import type { DiscoveredRepo, RepoPackages } from "@mma/ingestion";
+import type { DiscoveredRepo, RepoPackages, PackageMap } from "@mma/ingestion";
 import {
   RepoStateManager,
   discoverConnections,
+  extractPackageName,
 } from "@mma/correlation";
+import { extractRepo } from "@mma/core";
 
 export interface ExploreCommandOptions {
   readonly kvStore: KVStore;
@@ -25,11 +28,18 @@ export interface ExploreCommandOptions {
   readonly searchStore: SearchStore;
   readonly mirrorDir: string;
   readonly verbose?: boolean;
+  readonly seedUrl?: string;
 }
 
 export async function exploreCommand(options: ExploreCommandOptions): Promise<void> {
   const { kvStore, mirrorDir, verbose } = options;
   const stateManager = new RepoStateManager(kvStore);
+
+  // If a seed URL was provided, skip org/dir scan and start from that single repo.
+  if (options.seedUrl) {
+    await exploreSeedUrl(options.seedUrl, stateManager, options);
+    return;
+  }
 
   // Step 1: Check for existing state
   const existingStates = await stateManager.getAll();
@@ -169,7 +179,7 @@ async function indexSingleRepo(
         {
           name: repo.name,
           url: repo.url,
-          branch: repo.defaultBranch,
+          branch: repo.defaultBranch || undefined,
           // For local repos the url is the filesystem path; for remote repos
           // omit localPath so index-cmd falls back to mirrorDir.
           localPath: repo.url.startsWith("/") ? repo.url : undefined,
@@ -359,4 +369,340 @@ async function handleCandidates(
 
     await indexSingleRepo(repo, stateManager, options, mirrorDir, verbose);
   }
+}
+
+/**
+ * Derive a stable, org-qualified identifier from a clone URL.
+ * Returns "owner/repo" when the URL has at least two path segments, otherwise
+ * falls back to just the repo basename.  Always strips .git and query/hash.
+ */
+function repoNameFromUrl(url: string): string {
+  const cleaned = (url.replace(/\.git$/, "").split(/[?#]/)[0] ?? "").replace(/\/$/, "");
+  // Strip scheme + host to get the path segments (works for https:// and git@)
+  const path = cleaned.replace(/^(?:https?:\/\/|git@)[^/:]+[/:]/, "");
+  const parts = path.split("/").filter(Boolean);
+  if (parts.length >= 2) {
+    return `${parts[parts.length - 2]}/${parts[parts.length - 1]}`;
+  }
+  const name = parts[parts.length - 1] ?? "";
+  if (!name) throw new Error(`Could not derive repo name from URL: ${url}`);
+  return name;
+}
+
+/**
+ * Probe the remote to detect its default branch.
+ * Uses `git ls-remote --symref <url> HEAD` and parses the `ref: refs/heads/<branch>` line.
+ * Falls back to "main" if the probe fails or the output is unparseable.
+ */
+async function detectDefaultBranch(url: string): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    execFile("git", ["ls-remote", "--symref", url, "HEAD"], { timeout: 10_000 }, (err, stdout) => {
+      if (err) {
+        resolve(undefined);
+        return;
+      }
+      const match = /^ref: refs\/heads\/(\S+)\tHEAD$/m.exec(stdout);
+      resolve(match?.[1]);
+    });
+  });
+}
+
+/**
+ * Entry point for `mma explore --repo <url>`.
+ * Indexes a single seed repo then runs a lazy outward-discovery loop.
+ */
+async function exploreSeedUrl(
+  seedUrl: string,
+  stateManager: RepoStateManager,
+  options: ExploreCommandOptions,
+): Promise<void> {
+  const { mirrorDir, verbose } = options;
+  let name: string;
+  try {
+    name = repoNameFromUrl(seedUrl);
+  } catch (err) {
+    console.error(`Invalid repo URL: ${err instanceof Error ? err.message : String(err)}`);
+    return;
+  }
+
+  console.log(`\nStarting from ${name} (${seedUrl})`);
+  console.log("  Detecting default branch...");
+  const detectedBranch = await detectDefaultBranch(seedUrl);
+  console.log(detectedBranch ? `  Default branch: ${detectedBranch}` : "  Default branch: (not detected, will use remote HEAD)");
+
+  const seed: DiscoveredRepo = {
+    name,
+    fullName: name,
+    url: seedUrl,
+    sshUrl: seedUrl,
+    defaultBranch: detectedBranch ?? "",
+    language: null,
+    updatedAt: new Date().toISOString(),
+    archived: false,
+    fork: false,
+    starCount: 0,
+    description: null,
+  };
+
+  const existing = await stateManager.get(name);
+  if (existing?.status !== "indexed") {
+    await stateManager.addCandidate({ name, url: seedUrl, defaultBranch: detectedBranch ?? "" }, "user-selected");
+    await indexSingleRepo(seed, stateManager, options, mirrorDir, verbose);
+    const postIndex = await stateManager.get(name);
+    if (postIndex?.status !== "indexed") return;
+  } else {
+    console.log(`  ${name} is already indexed.`);
+  }
+
+  await lazyDiscoveryLoop(seed, stateManager, options);
+}
+
+/**
+ * Discovery loop for the single-URL entry path.
+ *
+ * Unlike the full `discoveryLoop`, this builds the package map incrementally —
+ * starting from just the seed and growing as the user adds more repos.
+ * When structured connection discovery finds nothing (sparse package map),
+ * it surfaces unresolved external imports and lets the user provide URLs.
+ */
+async function lazyDiscoveryLoop(
+  seedRepo: DiscoveredRepo,
+  stateManager: RepoStateManager,
+  options: ExploreCommandOptions,
+): Promise<void> {
+  const { graphStore, mirrorDir, verbose } = options;
+
+  const allRepos: DiscoveredRepo[] = [seedRepo];
+  const allRepoPackages: RepoPackages[] = [];
+
+  try {
+    const pkgs = await scanRepoPackages(seedRepo.url, seedRepo.name, {
+      mirrorDir,
+      branch: seedRepo.defaultBranch,
+    });
+    allRepoPackages.push(pkgs);
+  } catch {
+    // seed may not have a package.json
+  }
+
+  let packageMap: PackageMap = buildPackageMap(allRepoPackages);
+  let currentRepo = seedRepo;
+
+  while (true) {
+    // 1. Try structured connection discovery (works when packageMap has entries)
+    const connections = await discoverConnections({
+      indexedRepo: currentRepo.name,
+      graphStore,
+      packageMap,
+      stateManager,
+      allRepoPackages,
+    });
+
+    if (connections.length > 0) {
+      console.log(`\nConnections from ${currentRepo.name}:`);
+      for (const conn of connections) {
+        console.log(`  ${conn.repo} (${conn.connectionType}, ${conn.edgeCount} edges)`);
+      }
+
+      const selected = await checkbox({
+        message: "Which repos should we index? (space to select, enter to confirm)",
+        choices: [
+          ...connections.map((c) => ({
+            name: `${c.repo} (${c.connectionType}, ${c.edgeCount} edges)`,
+            value: c.repo,
+          })),
+          { name: "-- Done exploring --", value: "__done__" },
+        ],
+      });
+
+      if (selected.includes("__done__") || selected.length === 0) break;
+
+      for (const conn of connections) {
+        if (!selected.includes(conn.repo)) {
+          try { await stateManager.markIgnored(conn.repo); } catch { /* skip */ }
+        }
+      }
+
+      let lastSuccessful: DiscoveredRepo | undefined;
+      for (const repoName of selected) {
+        if (repoName === "__done__") continue;
+        const knownRepo = allRepos.find((r) => r.name === repoName);
+        if (knownRepo) {
+          await indexSingleRepo(knownRepo, stateManager, options, mirrorDir, verbose);
+          if ((await stateManager.get(knownRepo.name))?.status === "indexed") {
+            lastSuccessful = knownRepo;
+          }
+        } else {
+          // Connection resolved by name but no URL yet — prompt user
+          const added = await promptForRepoUrl(repoName, stateManager, options);
+          if (added) {
+            allRepos.push(added);
+            await addToPackageMap(added, allRepoPackages, mirrorDir);
+            packageMap = buildPackageMap(allRepoPackages);
+            lastSuccessful = added;
+          }
+        }
+      }
+
+      if (lastSuccessful) currentRepo = lastSuccessful;
+      continue;
+    }
+
+    // 2. No structured connections — surface unresolved external imports
+    const unresolved = await findUnresolvedImports(
+      currentRepo.name,
+      graphStore,
+      packageMap,
+      stateManager,
+    );
+
+    if (unresolved.length === 0) {
+      console.log("\nNo more connections found.");
+      break;
+    }
+
+    console.log(`\nUnresolved external imports from ${currentRepo.name}:`);
+    const chosen = await checkbox({
+      message: "Select packages to provide a repo URL for (space to select, enter to confirm):",
+      choices: [
+        ...unresolved.map((pkg) => ({ name: pkg, value: pkg })),
+        { name: "-- Done exploring --", value: "__done__" },
+      ],
+    });
+
+    if (chosen.includes("__done__") || chosen.length === 0) break;
+
+    // Mark packages the user skipped as ignored so they don't resurface
+    for (const pkg of unresolved) {
+      if (!chosen.includes(pkg)) {
+        try { await stateManager.addCandidate({ name: pkg, url: "" }, "user-selected"); } catch { /* already in state machine */ }
+        try { await stateManager.markIgnored(pkg); } catch { /* skip */ }
+      }
+    }
+
+    let lastSuccessful: DiscoveredRepo | undefined;
+    for (const pkg of chosen) {
+      if (pkg === "__done__") continue;
+      const added = await promptForRepoUrl(pkg, stateManager, options);
+      if (added) {
+        allRepos.push(added);
+        await addToPackageMap(added, allRepoPackages, mirrorDir);
+        packageMap = buildPackageMap(allRepoPackages);
+        lastSuccessful = added;
+      }
+    }
+
+    if (!lastSuccessful) break;
+    currentRepo = lastSuccessful;
+  }
+
+  const summary = await stateManager.summary();
+  console.log(`\nExploration complete:`);
+  console.log(`  Indexed: ${summary.indexed}`);
+  console.log(`  Candidates remaining: ${summary.candidate}`);
+  console.log(`  Ignored: ${summary.ignored}`);
+}
+
+/**
+ * Scan a newly added repo's package.json and append its entries to allRepoPackages.
+ */
+async function addToPackageMap(
+  repo: DiscoveredRepo,
+  allRepoPackages: RepoPackages[],
+  mirrorDir: string,
+): Promise<void> {
+  try {
+    const pkgs = await scanRepoPackages(repo.url, repo.name, {
+      mirrorDir,
+      branch: repo.defaultBranch,
+    });
+    allRepoPackages.push(pkgs);
+  } catch {
+    // repo may not have a package.json
+  }
+}
+
+/**
+ * Find external package names imported by a repo that can't be resolved to known repos.
+ * These are candidates for the user to provide URLs for.
+ */
+async function findUnresolvedImports(
+  repoName: string,
+  graphStore: GraphStore,
+  packageMap: PackageMap,
+  stateManager: RepoStateManager,
+): Promise<string[]> {
+  const seen = new Set<string>();
+  for (const kind of ["imports", "depends-on"] as const) {
+    const edges = await graphStore.getEdgesByKind(kind, repoName);
+    for (const edge of edges) {
+      if (extractRepo(edge.target) !== undefined) continue; // already a resolved repo ID
+      const pkg = extractPackageName(edge.target);
+      if (pkg === null) continue;
+      if (packageMap.packageToRepo.has(pkg)) continue; // already resolved via package map
+      const state = await stateManager.get(pkg);
+      if (state?.status === "indexed" || state?.status === "ignored") continue;
+      seen.add(pkg);
+    }
+  }
+  return [...seen].sort();
+}
+
+/**
+ * Prompt the user for a clone URL for a package/repo name they want to add.
+ * Indexes the repo if a URL is provided; marks it ignored if skipped.
+ */
+async function promptForRepoUrl(
+  packageOrRepoName: string,
+  stateManager: RepoStateManager,
+  options: ExploreCommandOptions,
+): Promise<DiscoveredRepo | undefined> {
+  const { mirrorDir, verbose } = options;
+  const url = (
+    await input({
+      message: `Repo URL for "${packageOrRepoName}" (leave blank to skip):`,
+    })
+  ).trim();
+
+  if (!url) {
+    // Mark as ignored so it doesn't keep appearing
+    try {
+      await stateManager.addCandidate({ name: packageOrRepoName, url: "" }, "user-selected");
+    } catch {
+      // already known — just mark ignored
+    }
+    await stateManager.markIgnored(packageOrRepoName);
+    return undefined;
+  }
+
+  let name: string;
+  try {
+    name = repoNameFromUrl(url);
+  } catch {
+    console.error(`  Invalid URL: ${url}`);
+    return undefined;
+  }
+  const detectedBranch = await detectDefaultBranch(url);
+  const repo: DiscoveredRepo = {
+    name,
+    fullName: name,
+    url,
+    sshUrl: url,
+    defaultBranch: detectedBranch ?? "",
+    language: null,
+    updatedAt: new Date().toISOString(),
+    archived: false,
+    fork: false,
+    starCount: 0,
+    description: null,
+  };
+
+  const existing = await stateManager.get(name);
+  if (existing?.status !== "indexed") {
+    await stateManager.addCandidate({ name, url, defaultBranch: detectedBranch ?? "" }, "user-selected");
+    await indexSingleRepo(repo, stateManager, options, mirrorDir, verbose);
+    const postIndex = await stateManager.get(name);
+    if (postIndex?.status !== "indexed") return undefined;
+  }
+  return repo;
 }

@@ -77,7 +77,7 @@ export async function dispatchCommand(
         mirrorDir: serveMirrorDir,
         indexRepo: async (repoConfig) => {
           const result = await indexCommand({
-            repos: [{ name: repoConfig.name, localPath: repoConfig.localPath, url: "", branch: "" }],
+            repos: [{ name: repoConfig.name, localPath: repoConfig.localPath, url: "" }],
             mirrorDir: serveMirrorDir,
             kvStore: stores.kvStore,
             graphStore: stores.graphStore,
@@ -659,6 +659,7 @@ export async function dispatchCommand(
         searchStore: stores.searchStore,
         mirrorDir,
         verbose,
+        seedUrl: values.repo,
       });
     } finally {
       stores.close();

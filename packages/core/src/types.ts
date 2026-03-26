@@ -10,7 +10,7 @@
 export interface RepoConfig {
   readonly name: string;
   readonly url: string;
-  readonly branch: string;
+  readonly branch?: string;
   readonly localPath?: string;
 }
 
