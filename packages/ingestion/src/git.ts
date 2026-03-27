@@ -64,8 +64,20 @@ export async function fetchLocalRepo(
   } catch (err) {
     // Non-fatal: no origin, no network, etc. The caller will still index
     // whatever commit is locally available.
-    const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`[git] fetch origin skipped for ${repoPath}: ${msg}\n`);
+    //
+    // git fetch emits branch/tag listing to stderr even on success, and the
+    // full dump ends up in err.message when the exit code is non-zero. Filter
+    // to lines that indicate real problems (fatal:, error:, etc.) so we don't
+    // spam the console with hundreds of branch names.
+    const raw = err instanceof Error ? err.message : String(err);
+    const meaningful = raw
+      .split("\n")
+      .filter((line) => /fatal:|error:|permission denied|could not|unable to|repository .* does not exist/i.test(line))
+      .join("\n")
+      .trim();
+    if (meaningful) {
+      process.stderr.write(`[git] fetch origin failed for ${repoPath}: ${meaningful}\n`);
+    }
   }
 }
 
