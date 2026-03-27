@@ -47,6 +47,61 @@ export async function isBareRepo(repoPath: string): Promise<boolean> {
   }
 }
 
+/**
+ * Fetch from origin in a local (non-bare) working copy.
+ * Safe to call unconditionally — logs a warning and continues if there is no
+ * origin remote or the network is unavailable.
+ */
+export async function fetchLocalRepo(
+  repoPath: string,
+  timeout?: number,
+): Promise<void> {
+  try {
+    await execFileAsync("git", ["fetch", "origin"], {
+      cwd: repoPath,
+      timeout: timeout ?? 120_000,
+    });
+  } catch (err) {
+    // Non-fatal: no origin, no network, etc. The caller will still index
+    // whatever commit is locally available.
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`[git] fetch origin skipped for ${repoPath}: ${msg}\n`);
+  }
+}
+
+/**
+ * Resolve the tip commit for a branch, preferring the remote tracking ref
+ * (origin/<branch>) so we always index the latest pushed state rather than
+ * whatever happens to be checked out locally.
+ *
+ * Resolution order:
+ *   1. refs/remotes/origin/<branch>  — remote tracking ref after a fetch
+ *   2. <branch>                      — local branch
+ *   3. HEAD                          — fallback
+ */
+export async function getTrackedCommit(
+  repoPath: string,
+  branch?: string,
+): Promise<string> {
+  const candidates: string[] = [];
+  if (branch) {
+    candidates.push(`refs/remotes/origin/${branch}`, branch);
+  }
+  candidates.push("HEAD");
+
+  for (const ref of candidates) {
+    try {
+      const { stdout } = await execFileAsync("git", ["rev-parse", ref], {
+        cwd: repoPath,
+      });
+      return stdout.trim();
+    } catch {
+      // try next candidate
+    }
+  }
+  throw new Error(`Cannot resolve any ref in ${repoPath} (tried: ${candidates.join(", ")})`);
+}
+
 export async function getHeadCommit(repoPath: string, branch?: string): Promise<string> {
   const ref = branch ?? "HEAD";
   try {

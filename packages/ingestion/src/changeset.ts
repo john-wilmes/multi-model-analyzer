@@ -1,6 +1,6 @@
 import type { ChangeSet, ClassifiedFile, RepoConfig } from "@mma/core";
 import { classifyFileKind } from "@mma/core";
-import { cloneOrFetch, diffFiles, getHeadCommit } from "./git.js";
+import { cloneOrFetch, diffFiles, getHeadCommit, fetchLocalRepo, getTrackedCommit } from "./git.js";
 import { access } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -13,19 +13,22 @@ export async function detectChanges(
   repo: RepoConfig,
   options: ChangeDetectionOptions,
 ): Promise<ChangeSet> {
-  // If localPath exists and is a git repo, use it directly (skip clone/fetch).
-  // This supports pre-cloned working copies alongside bare mirrors.
+  // If localPath exists and is a git repo, fetch from origin first to ensure
+  // we index the latest remote state on the configured branch, not whatever
+  // happens to be checked out locally.
   let repoPath: string;
+  let currentCommit: string;
   if (repo.localPath !== undefined && await isGitRepo(repo.localPath)) {
     repoPath = repo.localPath;
+    await fetchLocalRepo(repoPath);
+    currentCommit = await getTrackedCommit(repoPath, repo.branch);
   } else {
     repoPath = await cloneOrFetch(repo.url, repo.name, {
       mirrorDir: options.mirrorDir,
       branch: repo.branch,
     });
+    currentCommit = await getHeadCommit(repoPath, repo.branch);
   }
-
-  const currentCommit = await getHeadCommit(repoPath, repo.branch);
   const previousCommit = options.previousCommits.get(repo.name) ?? null;
 
   const { added, modified, deleted } = await diffFiles(
