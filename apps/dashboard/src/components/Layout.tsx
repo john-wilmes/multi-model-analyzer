@@ -522,7 +522,7 @@ export default function Layout() {
       </aside>
 
       {/* Main content */}
-      <main className={`${mainMargin} flex-1 p-6 transition-all duration-200`}>
+      <main className={`${mainMargin} flex-1 p-6 transition-all duration-200 min-w-0 overflow-x-hidden`}>
         {breadcrumbs.length > 0 && (
           <nav aria-label="Breadcrumb" className="flex items-center gap-1 text-sm text-slate-500 dark:text-slate-400 mb-4 flex-wrap">
             <Link

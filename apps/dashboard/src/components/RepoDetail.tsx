@@ -207,6 +207,7 @@ export default function RepoDetail() {
           <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">
             {coupling.commitsAnalyzed} commits analyzed &middot; Top 10 co-changing file pairs
           </p>
+          <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-xs text-slate-500 dark:text-slate-400 border-b dark:border-slate-700">
@@ -235,6 +236,7 @@ export default function RepoDetail() {
                 ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 
@@ -254,6 +256,7 @@ export default function RepoDetail() {
         {findings.length === 0 ? (
           <p className="text-slate-500 dark:text-slate-400 text-sm">No findings for this repository.</p>
         ) : (
+          <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-xs text-slate-500 dark:text-slate-400 border-b dark:border-slate-700">
@@ -268,7 +271,7 @@ export default function RepoDetail() {
                   <td className="py-2 pr-3">
                     <SharedSeverityBadge severity={f.level ?? 'note'} />
                   </td>
-                  <td className="py-2 pr-3 font-mono text-xs text-slate-600 dark:text-slate-400">
+                  <td className="py-2 pr-3 font-mono text-xs text-slate-600 dark:text-slate-400 whitespace-nowrap">
                     {f.ruleId ?? '-'}
                   </td>
                   <td className="py-2 text-slate-700 dark:text-slate-300 truncate max-w-xs">
@@ -278,6 +281,7 @@ export default function RepoDetail() {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </div>
     </div>

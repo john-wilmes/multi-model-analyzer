@@ -175,6 +175,68 @@ export async function handleCrossRepoFaults(
   }
 }
 
+export async function handleRepoFlags(
+  _req: IncomingMessage,
+  res: ServerResponse,
+  kvStore: KVStore,
+  query: ParsedQuery,
+  corsOrigin: string | undefined,
+): Promise<void> {
+  type RepoFlag = { name: string; repo: string; source: string; line?: number; file?: string };
+
+  const repoFilter = query.single["repo"];
+  const search = query.single["search"]?.toLowerCase();
+  const limit = Math.min(parseInt(query.single["limit"] ?? "100", 10) || 100, 1000);
+  const offset = Math.max(parseInt(query.single["offset"] ?? "0", 10) || 0, 0);
+
+  try {
+    // Get the repo list
+    const reposRaw = await kvStore.get("repos");
+    const repos: string[] = reposRaw ? (JSON.parse(reposRaw) as string[]) : [];
+
+    // Collect flags from each repo
+    const allFlags: RepoFlag[] = [];
+    const targetRepos = repoFilter ? repos.filter((r) => r === repoFilter) : repos;
+
+    for (const repoName of targetRepos) {
+      const raw = await kvStore.get(`flags:${repoName}`);
+      if (!raw) continue;
+      try {
+        type StoredFlag = { name: string; locations?: Array<{ repo: string; module: string; line?: number }>; sdk?: string };
+        const parsed = JSON.parse(raw) as StoredFlag[];
+        for (const flag of parsed) {
+          if (!flag.name) continue;
+          const locations = flag.locations ?? [{ repo: repoName, module: '' }];
+          for (const loc of locations) {
+            allFlags.push({
+              name: flag.name,
+              repo: repoName,
+              source: flag.sdk ?? 'env',
+              file: loc.module || undefined,
+              line: loc.line,
+            });
+          }
+        }
+      } catch {
+        // Skip corrupted entries
+      }
+    }
+
+    let filtered = search ? allFlags.filter((f) =>
+      f.name.toLowerCase().includes(search) ||
+      f.repo.toLowerCase().includes(search) ||
+      (f.file?.toLowerCase().includes(search) ?? false)
+    ) : allFlags;
+
+    const total = filtered.length;
+    filtered = filtered.slice(offset, offset + limit);
+
+    return sendJson(res, { flags: filtered, total, limit, offset }, 200, corsOrigin);
+  } catch {
+    return sendJson(res, { flags: [], total: 0, limit, offset }, 200, corsOrigin);
+  }
+}
+
 export async function handleCrossRepoCatalog(
   _req: IncomingMessage,
   res: ServerResponse,

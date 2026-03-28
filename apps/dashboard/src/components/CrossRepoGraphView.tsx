@@ -372,15 +372,15 @@ export default function CrossRepoGraphView() {
             label: 'data(label)',
             width: 'data(size)',
             height: 'data(size)',
-            'font-size': '11px',
+            'font-size': '12px',
             color: '#e2e8f0',
             'text-valign': 'bottom',
             'text-outline-color': '#0f172a',
-            'text-outline-width': 1,
+            'text-outline-width': 2,
             'text-margin-y': 6,
             'border-width': 2,
             'border-color': '#2563eb',
-            'min-zoomed-font-size': 14,
+            'min-zoomed-font-size': 6,
           } as cytoscape.Css.Node,
         },
         {
@@ -591,7 +591,7 @@ export default function CrossRepoGraphView() {
   const resolutionPct = totalEdges > 0 ? Math.round((resolvedEdges / totalEdges) * 100) : 0;
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 min-w-0">
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-semibold text-slate-800 dark:text-slate-100">
           Cross-Repo Dependency Graph
@@ -612,9 +612,9 @@ export default function CrossRepoGraphView() {
           No cross-repo dependency data available. Run <code className="font-mono text-xs bg-slate-100 dark:bg-slate-700 px-1 rounded">mma index</code> with 2+ repos to generate correlation data.
         </div>
       ) : (
-        <div className="flex gap-4">
+        <div className="flex gap-4 min-w-0 overflow-x-auto">
           {/* Graph */}
-          <div className="flex-1 bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 relative" style={{ minHeight: 500 }}>
+          <div className="flex-1 min-w-0 bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 relative" style={{ minHeight: 500 }}>
 
             {/* Controls toolbar */}
             <div className="flex items-center gap-3 p-2 border-b border-slate-200 dark:border-slate-700 flex-wrap">

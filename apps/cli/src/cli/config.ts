@@ -112,6 +112,15 @@ export async function loadConfig(
     }
 
     config = cfg as unknown as CliConfig;
+
+    // Expand ${ENV_VAR} references in llmApiKey
+    if (typeof config.llmApiKey === "string" && config.llmApiKey.includes("${")) {
+      const expanded = config.llmApiKey.replace(
+        /\$\{(\w+)\}/g,
+        (_, name) => process.env[name] ?? "",
+      );
+      config = { ...config, llmApiKey: expanded };
+    }
   } catch {
     console.error(`Could not read config file: ${configPath}`);
     console.error("Create an mma.config.json with repos and mirrorDir.");

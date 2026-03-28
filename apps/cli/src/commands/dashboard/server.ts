@@ -34,6 +34,7 @@ import {
   handleCrossRepoFeatures,
   handleCrossRepoFaults,
   handleCrossRepoCatalog,
+  handleRepoFlags,
 } from "./routes/cross-repo.js";
 
 export interface DashboardOptions {
@@ -106,6 +107,8 @@ export async function handleApi(
   if (path === "/api/cross-repo-faults") return handleCrossRepoFaults(req, res, kvStore, query, corsOrigin);
 
   if (path === "/api/cross-repo-catalog") return handleCrossRepoCatalog(req, res, kvStore, query, corsOrigin);
+
+  if (path === "/api/repo-flags") return handleRepoFlags(req, res, kvStore, query, corsOrigin);
 
   if (path === "/api/repo-states") return handleRepoStates(req, res, kvStore, query, corsOrigin);
 

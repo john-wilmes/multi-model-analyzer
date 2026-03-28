@@ -258,6 +258,26 @@ export async function fetchCrossRepoCatalog(repo?: string, pagination?: Paginati
   return fetchJson(`${BASE}/api/cross-repo-catalog${qs ? `?${qs}` : ''}`);
 }
 
+// -- Per-Repo Flag Types --
+
+export interface RepoFlag {
+  name: string;
+  repo: string;
+  source: string;
+  file?: string;
+  line?: number;
+}
+
+export async function fetchRepoFlags(repo?: string, search?: string, pagination?: PaginationParams): Promise<{ flags: RepoFlag[]; total: number; limit: number; offset: number }> {
+  const params = new URLSearchParams();
+  if (repo) params.set('repo', repo);
+  if (search) params.set('search', search);
+  if (pagination?.limit !== undefined) params.set('limit', String(pagination.limit));
+  if (pagination?.offset !== undefined) params.set('offset', String(pagination.offset));
+  const qs = params.toString();
+  return fetchJson(`${BASE}/api/repo-flags${qs ? `?${qs}` : ''}`);
+}
+
 // -- Repo State Types --
 
 export interface RepoStateInfo {

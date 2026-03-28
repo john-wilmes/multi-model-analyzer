@@ -272,22 +272,22 @@ export default function Overview() {
                   : 'bg-green-400';
               const shortPath = h.filePath.split('/').slice(-2).join('/');
               return (
-                <div key={`${h.repo}/${h.filePath}`} className="flex flex-col gap-0.5">
-                  <div className="flex items-center gap-2">
-                    <span className="w-48 text-xs text-slate-700 dark:text-slate-300 truncate" title={`[${h.repo}] ${h.filePath}`}>
+                <div key={`${h.repo}/${h.filePath}`} className="flex flex-col gap-0.5 min-w-0">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="w-40 shrink-0 text-xs text-slate-700 dark:text-slate-300 truncate" title={`[${h.repo}] ${h.filePath}`}>
                       {shortPath}
                     </span>
-                    <div className="flex-1 bg-slate-100 dark:bg-slate-700 rounded h-3">
+                    <div className="flex-1 min-w-0 bg-slate-100 dark:bg-slate-700 rounded h-3">
                       <div
                         className={`${barColor} h-3 rounded transition-all`}
                         style={{ width: `${h.hotspotScore}%` }}
                       />
                     </div>
-                    <span className="w-8 text-right text-xs font-medium text-slate-700 dark:text-slate-300">
+                    <span className="w-8 shrink-0 text-right text-xs font-medium text-slate-700 dark:text-slate-300">
                       {h.hotspotScore}
                     </span>
                   </div>
-                  <span className="text-xs text-slate-400 dark:text-slate-500 pl-48">
+                  <span className="text-xs text-slate-400 dark:text-slate-500 pl-40 truncate">
                     {h.churn} commits · {h.symbolCount} symbols · {h.repo}
                   </span>
                 </div>
