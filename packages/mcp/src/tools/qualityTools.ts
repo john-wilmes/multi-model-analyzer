@@ -43,8 +43,23 @@ export function registerQualityTools(server: McpServer, stores: Stores): void {
       });
     }
 
-    result.sort((a, b) => (b["hotspotScore"] as number) - (a["hotspotScore"] as number));
-    return jsonResult(paginated(result, skip, maxResults));
+    // Re-normalize scores globally across all repos so the cross-repo ranking
+    // is meaningful (per-repo scores are each independently normalized to 100).
+    let maxChurn = 0;
+    let maxSymbols = 0;
+    for (const h of result) {
+      const c = h["churn"] as number ?? 0;
+      const s = h["symbolCount"] as number ?? 0;
+      if (c > maxChurn) maxChurn = c;
+      if (s > maxSymbols) maxSymbols = s;
+    }
+    const normalized = result.map((h) => {
+      const churnScore = maxChurn > 0 ? ((h["churn"] as number ?? 0) / maxChurn) * 100 : 0;
+      const complexityScore = maxSymbols > 0 ? ((h["symbolCount"] as number ?? 0) / maxSymbols) * 100 : 0;
+      return { ...h, hotspotScore: Math.round((churnScore + complexityScore) / 2) };
+    });
+    normalized.sort((a, b) => (b.hotspotScore) - (a.hotspotScore));
+    return jsonResult(paginated(normalized, skip, maxResults));
   });
 
   // 22. Temporal coupling (files that change together without declared dependency)

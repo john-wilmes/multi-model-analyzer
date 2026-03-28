@@ -1356,9 +1356,9 @@ describe("get_hotspots", () => {
     const server = createMockServer();
     const stores = makeStores();
     await stores.kvStore.set("hotspots:repo-a", JSON.stringify([
-      { file: "src/low.ts", hotspotScore: 30, churnScore: 0.3, complexityScore: 0.4 },
-      { file: "src/big.ts", hotspotScore: 85, churnScore: 0.9, complexityScore: 0.8 },
-      { file: "src/mid.ts", hotspotScore: 55, churnScore: 0.6, complexityScore: 0.5 },
+      { file: "src/low.ts", hotspotScore: 30, churn: 3, symbolCount: 40 },
+      { file: "src/big.ts", hotspotScore: 85, churn: 9, symbolCount: 80 },
+      { file: "src/mid.ts", hotspotScore: 55, churn: 6, symbolCount: 50 },
     ]));
     register(server, stores);
     const invoker = makeInvoker(server);
@@ -1369,11 +1369,14 @@ describe("get_hotspots", () => {
       results: Array<{ file: string; hotspotScore: number; repo: string }>;
     };
     expect(parsed.total).toBe(3);
-    expect(parsed.results[0]!.hotspotScore).toBe(85);
+    // Re-normalized: big.ts = round((9/9*100 + 80/80*100)/2) = 100
+    expect(parsed.results[0]!.hotspotScore).toBe(100);
     expect(parsed.results[0]!.file).toBe("src/big.ts");
     expect(parsed.results[0]!.repo).toBe("repo-a");
-    expect(parsed.results[1]!.hotspotScore).toBe(55);
-    expect(parsed.results[2]!.hotspotScore).toBe(30);
+    // mid.ts = round((6/9*100 + 50/80*100)/2) = round((66.7+62.5)/2) = 65
+    expect(parsed.results[1]!.hotspotScore).toBe(65);
+    // low.ts = round((3/9*100 + 40/80*100)/2) = round((33.3+50)/2) = 42
+    expect(parsed.results[2]!.hotspotScore).toBe(42);
   });
 
   it("filters hotspots by repo", async () => {
