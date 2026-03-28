@@ -47,7 +47,7 @@ export async function runPhaseModels(
       await kvStore.set(`sarif:config:${repo.name}`, JSON.stringify(configResults));
 
       log(`  [${repo.name}] [config]: ${featureModel.flags.length} flags, ${featureModel.constraints.length} constraints, ${configResults.length} findings`);
-      log(`    dead=${validation.deadFlags.length} always-on=${validation.alwaysOnFlags.length} untested=${validation.inferredUntestedPairs.length}`);
+      log(`    dead=${validation.deadFlags.length} always-on=${validation.alwaysOnFlags.length} untested=${validation.inferredUntestedPairs.length} unused-registry=${validation.unusedRegistryFlags.length} unregistered=${validation.unregisteredFlags.length}`);
     } catch (error) {
       console.error(`  Failed to build feature model for ${repo.name}:`, error);
     }

@@ -64,6 +64,12 @@ Implemented in `packages/heuristics/src/temporal-coupling.ts`. Detects co-change
 
 Implemented in `packages/heuristics/src/vuln-match.ts`. Matches npm audit advisories against import graph reachability.
 
+## Planned
+
+### Configuration Validation & Feature Interaction Analysis
+
+Extend static analysis to cover application settings, credentials, and their interactions with feature flags. Enable agents to validate configurations before deployment using constraint satisfaction. Phased approach: settings scanner, unified constraint extraction, SAT-based validation, combinatorial interaction testing. See [config-validation-plan.md](config-validation-plan.md) for the detailed design.
+
 ## Lower Priority
 
 ### Data Flow / Taint Tracking

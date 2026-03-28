@@ -14,6 +14,8 @@ export interface RepoConfig {
   readonly localPath?: string;
   readonly flagRegistryFilePaths?: readonly string[];
   readonly flagRegistryEnumName?: string;
+  readonly rolloutCallMethods?: readonly string[];
+  readonly flagPropertyName?: string;
 }
 
 export interface ChangeSet {

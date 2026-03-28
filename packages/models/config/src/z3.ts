@@ -21,6 +21,8 @@ export interface Z3ValidationResult {
   /** Inferred flag pairs with no explicit test coverage. Named "inferred" to
    * clarify this is static inference only — no runtime coverage data is used. */
   readonly inferredUntestedPairs: readonly string[][];
+  readonly unusedRegistryFlags: readonly string[];
+  readonly unregisteredFlags: readonly string[];
 }
 
 export const CONFIG_RULES: readonly SarifReportingDescriptor[] = [
@@ -59,6 +61,20 @@ export const CONFIG_RULES: readonly SarifReportingDescriptor[] = [
     },
     defaultConfiguration: { level: "error", enabled: true },
   },
+  {
+    id: "config/unused-registry-flag",
+    shortDescription: {
+      text: "Flag defined in registry enum but not referenced in code",
+    },
+    defaultConfiguration: { level: "note", enabled: true },
+  },
+  {
+    id: "config/unregistered-flag",
+    shortDescription: {
+      text: "Flag used in code but missing from registry enum",
+    },
+    defaultConfiguration: { level: "warning", enabled: true },
+  },
 ];
 
 export async function validateFeatureModel(
@@ -73,6 +89,8 @@ export async function validateFeatureModel(
   const alwaysOnFlags = findAlwaysOnFlags(model);
   const impossibleCombinations = findImpossibleCombinations(model);
   const inferredUntestedPairs = findInferredUntestedPairs(model);
+  const unusedRegistryFlags = findUnusedRegistryFlags(model);
+  const unregisteredFlags = findUnregisteredFlags(model);
 
   const results: SarifResult[] = [];
 
@@ -122,6 +140,36 @@ export async function validateFeatureModel(
     );
   }
 
+  for (const flag of unusedRegistryFlags) {
+    results.push(
+      createSarifResult(
+        "config/unused-registry-flag",
+        "note",
+        `Flag "${flag}" is defined in the registry enum but not referenced in code`,
+        {
+          locations: [{
+            logicalLocations: [createLogicalLocation(repo, flag)],
+          }],
+        },
+      ),
+    );
+  }
+
+  for (const flag of unregisteredFlags) {
+    results.push(
+      createSarifResult(
+        "config/unregistered-flag",
+        "warning",
+        `Flag "${flag}" is used in code but missing from the registry enum`,
+        {
+          locations: [{
+            logicalLocations: [createLogicalLocation(repo, flag)],
+          }],
+        },
+      ),
+    );
+  }
+
   return {
     results,
     validation: {
@@ -129,6 +177,8 @@ export async function validateFeatureModel(
       alwaysOnFlags,
       impossibleCombinations,
       inferredUntestedPairs,
+      unusedRegistryFlags,
+      unregisteredFlags,
     },
   };
 }
@@ -225,4 +275,31 @@ function findInferredUntestedPairs(model: FeatureModel): string[][] {
   return model.constraints
     .filter((c) => c.source === "inferred" && c.flags.length === 2)
     .map((c) => [...c.flags]);
+}
+
+/**
+ * Flags defined in the registry enum but not referenced elsewhere in code.
+ *
+ * A registry-only flag has `isRegistry: true` and exactly one location
+ * (the registry file itself). Flags that are both registered and detected
+ * in code retain their code locations, so `locations.length > 1`.
+ */
+function findUnusedRegistryFlags(model: FeatureModel): string[] {
+  return model.flags
+    .filter((f) => f.isRegistry === true && f.locations.length <= 1)
+    .map((f) => f.name);
+}
+
+/**
+ * Flags used in code but not present in the registry enum.
+ *
+ * Only emitted when a registry exists (at least one flag has `isRegistry`),
+ * otherwise every flag would be "unregistered" which is not useful.
+ */
+function findUnregisteredFlags(model: FeatureModel): string[] {
+  const hasRegistry = model.flags.some((f) => f.isRegistry === true);
+  if (!hasRegistry) return [];
+  return model.flags
+    .filter((f) => f.isRegistry !== true)
+    .map((f) => f.name);
 }

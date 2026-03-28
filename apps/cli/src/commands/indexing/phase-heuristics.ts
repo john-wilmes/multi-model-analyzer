@@ -294,7 +294,7 @@ export async function runPhaseHeuristics(
         try { allRegistryFlags = JSON.parse(registryJson); } catch { /* skip */ }
       }
 
-      let flagInventory = scanForFlags(trees, repo.name, { registryFlags: allRegistryFlags, registryEnumName: repo.flagRegistryEnumName });
+      let flagInventory = scanForFlags(trees, repo.name, { registryFlags: allRegistryFlags, registryEnumName: repo.flagRegistryEnumName, rolloutCallMethods: repo.rolloutCallMethods, flagPropertyName: repo.flagPropertyName });
 
       // Incremental mode: merge with cached flags for files not re-scanned
       if (!options.forceFullReindex) {

@@ -31,6 +31,8 @@ describe("CONFIG_RULES", () => {
     expect(ids).toContain("config/missing-constraint");
     expect(ids).toContain("config/untested-interaction");
     expect(ids).toContain("config/format-violation");
+    expect(ids).toContain("config/unused-registry-flag");
+    expect(ids).toContain("config/unregistered-flag");
   });
 });
 
@@ -172,5 +174,74 @@ describe("validateFeatureModel", () => {
     const alwaysOnResult = results.find((r) => r.ruleId === "config/always-on-flag");
     expect(alwaysOnResult).toBeDefined();
     expect(alwaysOnResult!.level).toBe("note");
+  });
+});
+
+describe("unused-registry-flag detection", () => {
+  it("detects a registry flag with only one location (unused)", async () => {
+    const flag: FeatureFlag = {
+      name: "myFlag",
+      locations: [{ repo: "r", module: "registry.ts" }],
+      isRegistry: true,
+    };
+    const model = makeModel([flag], []);
+
+    const { results } = await validateFeatureModel(model, "r");
+
+    const found = results.find((r) => r.ruleId === "config/unused-registry-flag");
+    expect(found).toBeDefined();
+  });
+
+  it("does not flag a registry flag that appears in multiple locations", async () => {
+    const flag: FeatureFlag = {
+      name: "myFlag",
+      locations: [
+        { repo: "r", module: "a.ts" },
+        { repo: "r", module: "b.ts" },
+      ],
+      isRegistry: true,
+    };
+    const model = makeModel([flag], []);
+
+    const { results } = await validateFeatureModel(model, "r");
+
+    const found = results.find((r) => r.ruleId === "config/unused-registry-flag");
+    expect(found).toBeUndefined();
+  });
+});
+
+describe("unregistered-flag detection", () => {
+  it("detects a non-registry flag when a registry flag exists in the model", async () => {
+    const registryFlag: FeatureFlag = {
+      name: "registryFlag",
+      locations: [
+        { repo: "r", module: "registry.ts" },
+        { repo: "r", module: "a.ts" },
+      ],
+      isRegistry: true,
+    };
+    const unregisteredFlag: FeatureFlag = {
+      name: "orphanFlag",
+      locations: [{ repo: "r", module: "b.ts" }],
+    };
+    const model = makeModel([registryFlag, unregisteredFlag], []);
+
+    const { results } = await validateFeatureModel(model, "r");
+
+    const found = results.find(
+      (r) => r.ruleId === "config/unregistered-flag" && r.message.text.includes("orphanFlag"),
+    );
+    expect(found).toBeDefined();
+  });
+
+  it("does not report unregistered flags when no registry flags exist", async () => {
+    const flagA: FeatureFlag = { name: "flagA", locations: [{ repo: "r", module: "a.ts" }] };
+    const flagB: FeatureFlag = { name: "flagB", locations: [{ repo: "r", module: "b.ts" }] };
+    const model = makeModel([flagA, flagB], []);
+
+    const { results } = await validateFeatureModel(model, "r");
+
+    const found = results.find((r) => r.ruleId === "config/unregistered-flag");
+    expect(found).toBeUndefined();
   });
 });

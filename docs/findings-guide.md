@@ -11,6 +11,8 @@ Reference for all diagnostics produced by Multi-Model Analyzer. Each finding app
 | `config/missing-constraint` | warning | Configuration | Flag used without dependency validation |
 | `config/untested-interaction` | note | Configuration | Flag pair lacks test coverage |
 | `config/format-violation` | error | Configuration | Parameter violates type/range constraint |
+| `config/unused-registry-flag` | warning | Configuration | Registry flag declared but never consumed |
+| `config/unregistered-flag` | note | Configuration | Flag exists in code but not in the registry |
 | `fault/unhandled-error-path` | warning | Fault Tree | Catch block with no logging or re-throw |
 | `fault/silent-failure` | warning | Fault Tree | Error condition swallowed silently |
 | `fault/missing-error-boundary` | warning | Fault Tree | Async operation with no error handler |
@@ -112,6 +114,30 @@ These rules validate feature flag models built from code scanning. Constraint ch
 **Action:** Fix the parameter value to conform to its declared constraints. This is the highest-severity configuration finding because it indicates a concrete misconfiguration.
 
 **When to ignore:** Rarely safe to ignore. If the constraint definition is wrong rather than the value, update the constraint.
+
+### `config/unused-registry-flag`
+
+**Severity:** warning
+
+**What it means:** A flag that is marked as the authoritative registry definition (`isRegistry: true`) appears in only one location — the registry itself. This means the flag was declared in the registry but is never referenced in any consuming code.
+
+**Trigger:** `flag.isRegistry === true && flag.locations.length <= 1`. The registry entry is counted as one location; a flag with no additional usages has length 1 (or 0).
+
+**Action:** Either add usages of the flag in consuming code, or remove the registry entry if the flag is no longer needed. Registry flags with no consumers add dead weight to the feature model.
+
+**When to ignore:** Flags that are pre-declared in the registry in advance of rollout. If the flag is actively being developed and consumption code is forthcoming, it is safe to suppress temporarily.
+
+### `config/unregistered-flag`
+
+**Severity:** note
+
+**What it means:** A feature flag appears in code but has no corresponding registry entry. The model contains at least one registry flag (`isRegistry: true`), indicating a registry is in use for this codebase, but this flag was not registered there.
+
+**Trigger:** The model contains at least one flag with `isRegistry === true`, and this flag does not have `isRegistry === true`. Only fires when a registry exists — models with no registry flags produce no `config/unregistered-flag` findings.
+
+**Action:** Add the flag to the feature registry so it is tracked, searchable, and subject to lifecycle governance (e.g., stale-flag cleanup). Unregistered flags are invisible to tooling that relies on the registry.
+
+**When to ignore:** Flags that are intentionally managed outside the registry (e.g., third-party SDK flags or infrastructure toggles that follow a different governance process). Document the exception if suppressing.
 
 ---
 
