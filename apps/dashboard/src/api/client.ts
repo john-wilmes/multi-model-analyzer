@@ -268,12 +268,13 @@ export interface RepoFlag {
   line?: number;
 }
 
-export async function fetchRepoFlags(repo?: string, search?: string, pagination?: PaginationParams): Promise<{ flags: RepoFlag[]; total: number; limit: number; offset: number }> {
+export async function fetchRepoFlags(repo?: string, search?: string, pagination?: PaginationParams & { excludeSource?: string }): Promise<{ flags: RepoFlag[]; total: number; limit: number; offset: number }> {
   const params = new URLSearchParams();
   if (repo) params.set('repo', repo);
   if (search) params.set('search', search);
   if (pagination?.limit !== undefined) params.set('limit', String(pagination.limit));
   if (pagination?.offset !== undefined) params.set('offset', String(pagination.offset));
+  if (pagination?.excludeSource) params.set('excludeSource', pagination.excludeSource);
   const qs = params.toString();
   return fetchJson(`${BASE}/api/repo-flags${qs ? `?${qs}` : ''}`);
 }

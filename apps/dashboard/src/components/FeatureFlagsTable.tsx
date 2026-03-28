@@ -5,7 +5,7 @@ import type { SharedFlag, RepoFlag } from '../api/client.ts';
 type SortKey = 'name' | 'repoCount' | 'coordinated';
 type SortDir = 'asc' | 'desc';
 type AllFlagsSortKey = 'name' | 'repo' | 'source';
-type ViewTab = 'shared' | 'all';
+type ViewTab = 'shared' | 'code' | 'all';
 
 const PAGE_SIZE = 25;
 
@@ -189,7 +189,7 @@ function SharedFlagsView({ repo }: { repo?: string }) {
 
 // ── All Flags view ───────────────────────────────────────────────────────────
 
-function AllFlagsView({ repo }: { repo?: string }) {
+function AllFlagsView({ repo, excludeSource }: { repo?: string; excludeSource?: string }) {
   const [flags, setFlags] = useState<RepoFlag[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -215,7 +215,7 @@ function AllFlagsView({ repo }: { repo?: string }) {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    fetchRepoFlags(repo, debouncedSearch || undefined, { limit: PAGE_SIZE, offset: page * PAGE_SIZE })
+    fetchRepoFlags(repo, debouncedSearch || undefined, { limit: PAGE_SIZE, offset: page * PAGE_SIZE, excludeSource })
       .then((data) => {
         if (cancelled) return;
         setFlags(Array.isArray(data.flags) ? data.flags : []);
@@ -373,37 +373,37 @@ function AllFlagsView({ repo }: { repo?: string }) {
 // ── Main component ───────────────────────────────────────────────────────────
 
 export default function FeatureFlagsTable({ repo }: Props) {
-  const [activeTab, setActiveTab] = useState<ViewTab>('shared');
+  const [activeTab, setActiveTab] = useState<ViewTab>('code');
+
+  const tabs: { key: ViewTab; label: string }[] = [
+    { key: 'code', label: 'Code' },
+    { key: 'shared', label: 'Shared' },
+    { key: 'all', label: 'All' },
+  ];
 
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-xl font-semibold text-slate-800 dark:text-slate-100">Feature Flags</h2>
         <div className="inline-flex rounded-lg border border-slate-300 dark:border-slate-600 overflow-hidden">
-          <button
-            onClick={() => setActiveTab('shared')}
-            className={`px-3 py-1.5 text-sm font-medium transition-colors ${
-              activeTab === 'shared'
-                ? 'bg-blue-600 text-white'
-                : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'
-            }`}
-          >
-            Shared Flags
-          </button>
-          <button
-            onClick={() => setActiveTab('all')}
-            className={`px-3 py-1.5 text-sm font-medium transition-colors ${
-              activeTab === 'all'
-                ? 'bg-blue-600 text-white'
-                : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'
-            }`}
-          >
-            All Flags
-          </button>
+          {tabs.map((t) => (
+            <button
+              key={t.key}
+              onClick={() => setActiveTab(t.key)}
+              className={`px-3 py-1.5 text-sm font-medium transition-colors ${
+                activeTab === t.key
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
         </div>
       </div>
 
       {activeTab === 'shared' && <SharedFlagsView repo={repo} />}
+      {activeTab === 'code' && <AllFlagsView repo={repo} excludeSource="registry" />}
       {activeTab === 'all' && <AllFlagsView repo={repo} />}
     </div>
   );

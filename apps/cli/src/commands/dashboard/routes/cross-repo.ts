@@ -186,6 +186,7 @@ export async function handleRepoFlags(
 
   const repoFilter = query.single["repo"];
   const search = query.single["search"]?.toLowerCase();
+  const excludeSource = query.single["excludeSource"];
   const limit = Math.min(parseInt(query.single["limit"] ?? "100", 10) || 100, 1000);
   const offset = Math.max(parseInt(query.single["offset"] ?? "0", 10) || 0, 0);
 
@@ -215,7 +216,11 @@ export async function handleRepoFlags(
         for (const flag of parsed) {
           if (!flag.name) continue;
           const locations = flag.locations ?? [{ repo: repoName, module: '' }];
+          const seenFiles = new Set<string>();
           for (const loc of locations) {
+            const fileKey = loc.module || '';
+            if (seenFiles.has(fileKey)) continue;
+            seenFiles.add(fileKey);
             allFlags.push({
               name: flag.name,
               repo: repoName,
@@ -230,11 +235,35 @@ export async function handleRepoFlags(
       }
     }
 
-    let filtered = search ? allFlags.filter((f) =>
+    // Include registry-only flags (canonical enum entries not yet seen in any repo)
+    if (!repoFilter) {
+      const registryRaw = await kvStore.get("flagRegistry");
+      if (registryRaw) {
+        try {
+          const registry = JSON.parse(registryRaw) as Array<{ name: string; description?: string; namespaces?: string[] }>;
+          const seenNames = new Set(allFlags.map((f) => f.name));
+          for (const reg of registry) {
+            if (!reg.name || seenNames.has(reg.name)) continue;
+            allFlags.push({
+              name: reg.name,
+              repo: "model-repository",
+              source: "registry",
+              file: undefined,
+              line: undefined,
+            });
+          }
+        } catch { /* skip malformed registry */ }
+      }
+    }
+
+    let filtered = excludeSource
+      ? allFlags.filter((f) => f.source !== excludeSource)
+      : allFlags;
+    filtered = search ? filtered.filter((f) =>
       f.name.toLowerCase().includes(search) ||
       f.repo.toLowerCase().includes(search) ||
       (f.file?.toLowerCase().includes(search) ?? false)
-    ) : allFlags;
+    ) : filtered;
 
     const total = filtered.length;
     filtered = filtered.slice(offset, offset + limit);

@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import cytoscape from 'cytoscape';
 import cytoscapeDagre from 'cytoscape-dagre';
 import { fetchCrossRepoGraph, fetchAtdi, fetchRepoStates, type CrossRepoGraphData, type AtdiRepoScore, type RepoStateInfo } from '../api/client.ts';
+import { GraphControls } from './shared/GraphControls.tsx';
 
 // Debounce helper (avoids external deps)
 function useDebounce<T>(value: T, delay: number): T {
@@ -707,6 +708,7 @@ export default function CrossRepoGraphView() {
             )}
 
             <div ref={cyRef} style={{ width: '100%', height: 500 }} />
+            <GraphControls cyInstanceRef={cyInstanceRef} />
 
             {hoveredEdge && (
               <div

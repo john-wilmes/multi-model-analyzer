@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { fetchRepos, fetchMetricsSummary, fetchPractices, fetchHotspots, fetchAllMetrics, fetchAtdi, type ModuleMetric, type SystemAtdi } from '../api/client.ts';
+import { fetchRepos, fetchMetricsSummary, fetchPractices, fetchHotspots, fetchAtdi, type SystemAtdi } from '../api/client.ts';
 import CrossRepoChart, { type RepoPoint } from './CrossRepoChart.tsx';
-import MainSequenceChart from './MainSequenceChart.tsx';
 import AtdiGauge from './AtdiGauge.tsx';
 import AtdiByRepoChart from './AtdiByRepoChart.tsx';
 import DebtBreakdownChart from './DebtBreakdownChart.tsx';
@@ -110,16 +109,14 @@ export default function Overview() {
   const [repoPoints, setRepoPoints] = useState<RepoPoint[]>([]);
   const [practices, setPractices] = useState<PracticesData | null>(null);
   const [hotspots, setHotspots] = useState<HotspotEntry[]>([]);
-  const [moduleMetrics, setModuleMetrics] = useState<ModuleMetric[]>([]);
   const [atdiData, setAtdiData] = useState<SystemAtdi | null>(null);
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
 
   useEffect(() => {
-    Promise.all([fetchRepos(), fetchMetricsSummary(), fetchPractices(), fetchHotspots(), fetchAllMetrics(), fetchAtdi().catch(() => null)])
-      .then(([reposData, metricsSummary, practicesData, hotspotsData, allMetricsData, atdi]) => {
+    Promise.all([fetchRepos(), fetchMetricsSummary(), fetchPractices(), fetchHotspots(), fetchAtdi().catch(() => null)])
+      .then(([reposData, metricsSummary, practicesData, hotspotsData, atdi]) => {
         setAtdiData(atdi as SystemAtdi | null);
-        setModuleMetrics(allMetricsData as ModuleMetric[]);
         setHotspots((hotspotsData as HotspotEntry[]).slice(0, 10));
         const pd = practicesData as PracticesData;
         setPractices(pd);
@@ -297,18 +294,7 @@ export default function Overview() {
         </div>
       )}
 
-      {/* Module-level main sequence */}
-      {moduleMetrics.length > 0 && (
-        <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 p-4">
-          <h2 className="text-lg font-semibold text-slate-800 dark:text-slate-100 mb-2">
-            Main Sequence — All Modules
-          </h2>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">
-            Each point is a module. Color indicates zone classification. Distance from the diagonal measures architectural balance.
-          </p>
-          <MainSequenceChart modules={moduleMetrics} />
-        </div>
-      )}
+      {/* Module-level main sequence — hidden until ts-morph provides real coupling data */}
 
       {/* Cross-repo main sequence chart */}
       {repoPoints.length > 0 && (
