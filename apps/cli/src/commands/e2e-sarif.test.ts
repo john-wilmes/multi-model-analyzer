@@ -64,6 +64,7 @@ vi.mock("@mma/heuristics", () => ({
   inferServicesWithMeta: vi.fn().mockReturnValue({ services: [], warnings: [] }),
   detectPatterns: vi.fn().mockReturnValue([]),
   scanForFlags: vi.fn().mockReturnValue({ flags: [] }),
+  extractFlagRegistry: vi.fn().mockReturnValue([]),
   extractLogStatements: vi.fn().mockReturnValue({ repo: "", templates: [] }),
   analyzeNaming: vi.fn().mockReturnValue({ methods: [] }),
   extractServiceTopology: vi.fn().mockReturnValue([]),

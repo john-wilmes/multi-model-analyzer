@@ -4,7 +4,7 @@ export type { ServiceInferenceInput, PackageJsonInfo, NestJsRole } from "./servi
 export { detectPatterns, detectPatternsWithMeta } from "./patterns.js";
 export type { PatternDetectionInput } from "./patterns.js";
 
-export { scanForFlags } from "./flags.js";
+export { scanForFlags, extractFlagRegistry, extractFlagRegistryFromText } from "./flags.js";
 export type { FlagScannerOptions } from "./flags.js";
 
 export { extractLogStatements } from "./logs.js";

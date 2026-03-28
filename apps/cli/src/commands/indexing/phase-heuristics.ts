@@ -18,6 +18,8 @@ import {
   inferServicesWithMeta,
   detectPatternsWithMeta,
   scanForFlags,
+  extractFlagRegistry,
+  extractFlagRegistryFromText,
   extractLogStatements,
   analyzeNamingWithMeta,
   extractServiceTopology,
@@ -240,8 +242,54 @@ export async function runPhaseHeuristics(
     log(`    ${patternsResult.meta.itemCount} patterns detected in ${patternsResult.meta.durationMs}ms (from ${symbolsByFile.size} files with symbols)`);
 
     // 5c: Feature flag scanning
+    // Try to extract the flag registry (canonical enum) regardless of whether trees are available.
+    // In incremental mode, unchanged repos have no trees, so use a text-based fallback.
+    if (!await kvStore.get("flagRegistry")) {
+      let registryFlags: import("@mma/core").FeatureFlag[] = [];
+      if (trees && trees.size > 0) {
+        const enumFiles = [...trees.keys()].filter(f => f.includes("feature-flags") || f.includes("featureFlags"));
+        let fileTexts: Map<string, string> | undefined;
+        if (enumFiles.length > 0) {
+          fileTexts = new Map();
+          for (const ef of enumFiles) {
+            try {
+              const text = isBare
+                ? await getFileContent(repoPath, await resolveCommitForBare(repoPath, changeSets, repo.name), ef)
+                : await readFile(join(repoPath, ef), "utf-8");
+              fileTexts.set(ef, text);
+            } catch { /* file may not exist on disk */ }
+          }
+        }
+        registryFlags = extractFlagRegistry(trees, repo.name, fileTexts);
+      } else {
+        // Text-based fallback: use classified file list to find enum file and read from disk/git
+        const enumCandidates = repoClassified.filter(f =>
+          f.path.includes("feature-flags") || f.path.includes("featureFlags"));
+        for (const candidate of enumCandidates) {
+          try {
+            const text = isBare
+              ? await getFileContent(repoPath, await resolveCommitForBare(repoPath, changeSets, repo.name), candidate.path)
+              : await readFile(join(repoPath, candidate.path), "utf-8");
+            registryFlags = extractFlagRegistryFromText(text, candidate.path, repo.name);
+            if (registryFlags.length > 0) break;
+          } catch { /* file read may fail */ }
+        }
+      }
+      if (registryFlags.length > 0) {
+        await kvStore.set("flagRegistry", JSON.stringify(registryFlags));
+        log(`    ${registryFlags.length} registry flags extracted from enum`);
+      }
+    }
+
     if (trees && trees.size > 0) {
-      let flagInventory = scanForFlags(trees, repo.name);
+      // Load registry from KV (may come from this repo or a previously indexed repo)
+      let allRegistryFlags: import("@mma/core").FeatureFlag[] | undefined;
+      const registryJson = await kvStore.get("flagRegistry");
+      if (registryJson) {
+        try { allRegistryFlags = JSON.parse(registryJson); } catch { /* skip */ }
+      }
+
+      let flagInventory = scanForFlags(trees, repo.name, { registryFlags: allRegistryFlags });
 
       // Incremental mode: merge with cached flags for files not re-scanned
       if (!options.forceFullReindex) {

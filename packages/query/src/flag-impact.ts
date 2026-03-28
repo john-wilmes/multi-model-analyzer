@@ -26,6 +26,8 @@ export interface FlagInventoryEntry {
   readonly sdk?: string;
   readonly locationCount: number;
   readonly modules: string[];
+  readonly isRegistry?: boolean;
+  readonly description?: string;
 }
 
 export interface FlagImpactResult {
@@ -54,7 +56,7 @@ export interface AffectedService {
  */
 export async function getFlagInventory(
   kvStore: KVStore,
-  options?: { repo?: string; search?: string; limit?: number; offset?: number },
+  options?: { repo?: string; search?: string; limit?: number; offset?: number; registryOnly?: boolean; unregistered?: boolean },
 ): Promise<FlagInventoryResult> {
   const limit = options?.limit ?? 50;
   const offset = options?.offset ?? 0;
@@ -85,16 +87,24 @@ export async function getFlagInventory(
         sdk: flag.sdk,
         locationCount: flag.locations.length,
         modules: [...new Set(flag.locations.map((l) => l.module))],
+        isRegistry: flag.isRegistry,
+        description: flag.description,
       });
     }
   }
 
-  const page = allEntries.slice(offset, offset + limit);
+  const filtered = allEntries.filter((entry) => {
+    if (options?.registryOnly && !entry.isRegistry) return false;
+    if (options?.unregistered && entry.isRegistry) return false;
+    return true;
+  });
+
+  const page = filtered.slice(offset, offset + limit);
   return {
-    total: allEntries.length,
+    total: filtered.length,
     returned: page.length,
     offset,
-    hasMore: offset + limit < allEntries.length,
+    hasMore: offset + limit < filtered.length,
     flags: page,
   };
 }

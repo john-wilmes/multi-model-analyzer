@@ -189,6 +189,9 @@ export interface FeatureFlag {
   readonly locations: readonly LogicalLocation[];
   readonly sdk?: string;
   readonly defaultValue?: unknown;
+  readonly isRegistry?: boolean;
+  readonly description?: string;
+  readonly namespaces?: readonly string[];
 }
 
 export interface FlagInventory {

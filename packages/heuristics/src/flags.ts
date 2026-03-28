@@ -15,6 +15,7 @@ import type { TreeSitterNode, TreeSitterTree } from "@mma/parsing";
 export interface FlagScannerOptions {
   readonly customPatterns?: readonly RegExp[];
   readonly sdkImports?: readonly string[];
+  readonly registryFlags?: readonly FeatureFlag[];
 }
 
 const DEFAULT_SDK_IMPORTS = [
@@ -108,6 +109,23 @@ export function scanForFlags(
       );
       for (const flag of customFlags) {
         mergeFlag(flagMap, flag);
+      }
+    }
+  }
+
+  // Merge registry flags: annotate detected flags and add undetected ones
+  if (options.registryFlags) {
+    for (const regFlag of options.registryFlags) {
+      const existing = flagMap.get(regFlag.name);
+      if (existing) {
+        flagMap.set(regFlag.name, {
+          ...existing,
+          isRegistry: true,
+          description: regFlag.description ?? existing.description,
+          namespaces: regFlag.namespaces ?? existing.namespaces,
+        });
+      } else {
+        flagMap.set(regFlag.name, regFlag);
       }
     }
   }
@@ -408,6 +426,185 @@ function findRolloutFlags(
       }
     }
   });
+
+  return flags;
+}
+
+/**
+ * Extract a canonical FeatureFlags enum registry from the provided files.
+ *
+ * Looks for an `enum_declaration` named exactly `FeatureFlags` and extracts
+ * each member's string value (right-hand side of `=`). Also attempts to
+ * extract `description` and `namespaces` from a companion `FeatureFlagsMetadata`
+ * const using regex over the raw file text.
+ *
+ * Returns one FeatureFlag per enum member, each tagged with `isRegistry: true`
+ * and `sdk: "FeatureFlags"`.
+ *
+ * @param files     Map of filePath -> TreeSitterTree (same format as scanForFlags)
+ * @param repo      Repository name/identifier
+ * @param fileTexts Optional map of filePath -> raw file text, used for metadata extraction
+ */
+export function extractFlagRegistry(
+  files: ReadonlyMap<string, TreeSitterTree>,
+  repo: string,
+  fileTexts?: ReadonlyMap<string, string>,
+): FeatureFlag[] {
+  for (const [filePath, tree] of files) {
+    const text = fileTexts?.get(filePath);
+    const result = extractFlagRegistryFromNode(tree.rootNode, filePath, repo, text);
+    if (result.length > 0) return result;
+  }
+  return [];
+}
+
+/**
+ * Text-only fallback for extracting the flag registry when tree-sitter trees
+ * are unavailable (e.g., incremental mode with no file changes).
+ * Uses regex to parse the FeatureFlags enum and its metadata.
+ */
+export function extractFlagRegistryFromText(
+  text: string,
+  filePath: string,
+  repo: string,
+): FeatureFlag[] {
+  // Extract enum members: KeyName = 'string-value'
+  const enumMatch = text.match(/enum\s+FeatureFlags\s*\{([^}]+)\}/s);
+  if (!enumMatch) return [];
+
+  const enumBody = enumMatch[1]!;
+  const memberPattern = /(\w+)\s*=\s*['"]([^'"]+)['"]/g;
+  const enumValues = new Map<string, string>();
+  for (const m of enumBody.matchAll(memberPattern)) {
+    enumValues.set(m[1]!, m[2]!);
+  }
+  if (enumValues.size === 0) return [];
+
+  // Extract metadata (same regex as tree-sitter path)
+  const metadataMap = new Map<string, { description?: string; namespaces?: string[] }>();
+  const descPattern = /\[FeatureFlags\.(\w+)\][^}]*?description:\s*['"]([^'"]+)['"]/gs;
+  for (const match of text.matchAll(descPattern)) {
+    const keyName = match[1];
+    const description = match[2];
+    if (!keyName || !description) continue;
+    const entry = metadataMap.get(keyName) ?? {};
+    entry.description = description;
+    metadataMap.set(keyName, entry);
+  }
+  const nsPattern = /\[FeatureFlags\.(\w+)\][^}]*?namespaces:\s*\[([^\]]*)\]/gs;
+  for (const match of text.matchAll(nsPattern)) {
+    const keyName = match[1];
+    const nsContent = match[2];
+    if (!keyName || nsContent === undefined) continue;
+    const namespaces = [...nsContent.matchAll(/['"]([^'"]+)['"]/g)].map((m) => m[1] ?? "").filter(Boolean);
+    if (namespaces.length > 0) {
+      const entry = metadataMap.get(keyName) ?? {};
+      entry.namespaces = namespaces;
+      metadataMap.set(keyName, entry);
+    }
+  }
+
+  const flags: FeatureFlag[] = [];
+  for (const [keyName, stringValue] of enumValues) {
+    const meta = metadataMap.get(keyName);
+    flags.push({
+      name: stringValue,
+      isRegistry: true,
+      locations: [{ repo, module: filePath }],
+      sdk: "FeatureFlags",
+      ...(meta?.description !== undefined ? { description: meta.description } : {}),
+      ...(meta?.namespaces !== undefined ? { namespaces: meta.namespaces } : {}),
+    });
+  }
+  return flags;
+}
+
+function extractFlagRegistryFromNode(
+  root: TreeSitterNode,
+  filePath: string,
+  repo: string,
+  fileText: string | undefined,
+): FeatureFlag[] {
+  // Step 1: Find the FeatureFlags enum and build keyName -> stringValue map
+  const enumValues = new Map<string, string>(); // keyName -> string value
+
+  visitAll(root, (n) => {
+    if (n.type !== "enum_declaration") return;
+    const nameNode = n.namedChildren.find(
+      (c) => c.type === "identifier" || c.type === "type_identifier",
+    );
+    if (!nameNode || nameNode.text !== "FeatureFlags") return;
+
+    const body = n.namedChildren.find((c) => c.type === "enum_body");
+    if (!body) return;
+
+    for (const member of body.namedChildren) {
+      if (member.type === "enum_assignment") {
+        const keyNode = member.namedChildren.find(
+          (c) => c.type === "property_identifier" || c.type === "identifier",
+        );
+        const valueNode = member.namedChildren.find(
+          (c) => c.type === "string" || c.type === "template_string",
+        );
+        if (keyNode && valueNode) {
+          const stringValue = (extractStringLiteral(valueNode) ?? valueNode.text).replace(/['"]/g, "");
+          enumValues.set(keyNode.text, stringValue);
+        }
+      } else if (member.type === "property_identifier" || member.type === "identifier") {
+        // Enum member without explicit value — use the key name as value
+        enumValues.set(member.text, member.text);
+      }
+    }
+  });
+
+  if (enumValues.size === 0) return [];
+
+  // Step 2: Extract metadata via regex if file text is available
+  // FeatureFlagsMetadata entries look like:
+  //   [FeatureFlags.KeyName]: { description: 'some desc', namespaces: ['ns1', 'ns2'] }
+  const metadataMap = new Map<string, { description?: string; namespaces?: string[] }>();
+
+  if (fileText) {
+    // Extract description per key
+    const descPattern = /\[FeatureFlags\.(\w+)\][^}]*?description:\s*['"]([^'"]+)['"]/gs;
+    for (const match of fileText.matchAll(descPattern)) {
+      const keyName = match[1];
+      const description = match[2];
+      if (!keyName || !description) continue;
+      const entry = metadataMap.get(keyName) ?? {};
+      entry.description = description;
+      metadataMap.set(keyName, entry);
+    }
+
+    // Extract namespaces per key (array of strings)
+    const nsPattern = /\[FeatureFlags\.(\w+)\][^}]*?namespaces:\s*\[([^\]]*)\]/gs;
+    for (const match of fileText.matchAll(nsPattern)) {
+      const keyName = match[1];
+      const nsContent = match[2];
+      if (!keyName || nsContent === undefined) continue;
+      const namespaces = [...nsContent.matchAll(/['"]([^'"]+)['"]/g)].map((m) => m[1] ?? "").filter(Boolean);
+      if (namespaces.length > 0) {
+        const entry = metadataMap.get(keyName) ?? {};
+        entry.namespaces = namespaces;
+        metadataMap.set(keyName, entry);
+      }
+    }
+  }
+
+  // Step 3: Build FeatureFlag entries
+  const flags: FeatureFlag[] = [];
+  for (const [keyName, stringValue] of enumValues) {
+    const meta = metadataMap.get(keyName);
+    const flag: FeatureFlag = {
+      name: stringValue,
+      isRegistry: true,
+      locations: [{ repo, module: filePath }],
+      sdk: "FeatureFlags",
+      ...(meta?.description !== undefined ? { description: meta.description } : {}),
+      ...(meta?.namespaces !== undefined ? { namespaces: meta.namespaces } : {}),
+    };
+    flags.push(flag);
+  }
 
   return flags;
 }

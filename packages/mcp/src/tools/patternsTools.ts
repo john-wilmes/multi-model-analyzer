@@ -17,9 +17,11 @@ export function registerPatternsTools(server: McpServer, stores: Stores): void {
       search: z.string().optional().describe("Substring to filter flag names by (case-insensitive)"),
       limit: z.number().optional().describe("Max results to return (default 50)"),
       offset: z.number().optional().describe("Number of results to skip for pagination (default 0)"),
+      registry_only: z.boolean().optional().describe("Only show flags from the canonical registry"),
+      unregistered: z.boolean().optional().describe("Only show flags not in the canonical registry"),
     },
-  }, async ({ repo, search, limit, offset }) => {
-    const result = await getFlagInventory(kvStore, { repo, search, limit, offset });
+  }, async ({ repo, search, limit, offset, registry_only, unregistered }) => {
+    const result = await getFlagInventory(kvStore, { repo, search, limit, offset, registryOnly: registry_only, unregistered });
     return jsonResult(result);
   });
 

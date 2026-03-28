@@ -30,8 +30,11 @@ import type {
 import { fingerprint, computeRepoAtdi, computeSystemAtdi, annotateDebt, summarizeDebt, computeBaseline } from "@mma/diagnostics";
 import { FAULT_RULES } from "@mma/model-fault";
 import { isOllamaAvailable, isLlmApiAvailable } from "@mma/summarization";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { computeAffectedScope } from "./affected-scope.js";
 import { PipelineTracer } from "../tracer.js";
+import { extractFlagRegistryFromText } from "@mma/heuristics";
 
 // Phase modules
 import { pLimit } from "./indexing/pLimit.js";
@@ -312,6 +315,62 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
 
   log(`  Phase 6b total: ${ctx.phase6bTotalMs}ms`);
   log(`  Phase 6c total: ${ctx.phase6cTotalMs}ms`);
+
+  // Post-loop: enrich all repos' flag inventories with the canonical registry
+  // (repos indexed before the registry repo missed the registry annotations)
+  {
+    // Fallback: if no registry was extracted during per-repo heuristics (e.g.,
+    // incremental mode skipped the repo containing the enum), scan all repos'
+    // file systems for the enum file using text-based extraction.
+    if (!await kvStore.get("flagRegistry") && !await kvStore.get("flagRegistry:checked")) {
+      await kvStore.set("flagRegistry:checked", "1");
+      for (const repo of repos) {
+        const repoPath = repo.localPath ?? join(mirrorDir, `${repo.name}.git`);
+        const candidates = ["src/luma/utils/feature-flags-enums.ts"];
+        for (const candidate of candidates) {
+          try {
+            const text = await readFile(join(repoPath, candidate), "utf-8");
+            const registryFlags = extractFlagRegistryFromText(text, candidate, repo.name);
+            if (registryFlags.length > 0) {
+              await kvStore.set("flagRegistry", JSON.stringify(registryFlags));
+              log(`  Registry fallback: ${registryFlags.length} flags from ${repo.name}/${candidate}`);
+              break;
+            }
+          } catch { /* file doesn't exist in this repo */ }
+        }
+        if (await kvStore.get("flagRegistry")) break;
+      }
+    }
+
+    const registryJson = await kvStore.get("flagRegistry");
+    if (registryJson) {
+      try {
+        const registryFlags = JSON.parse(registryJson) as import("@mma/core").FeatureFlag[];
+        const registryNames = new Set(registryFlags.map(f => f.name));
+        const registryMeta = new Map(registryFlags.map(f => [f.name, f]));
+        let enriched = 0;
+        for (const repo of repos) {
+          const raw = await kvStore.get(`flags:${repo.name}`);
+          if (!raw) continue;
+          const inv = JSON.parse(raw) as import("@mma/core").FlagInventory;
+          let changed = false;
+          const updatedFlags = inv.flags.map(flag => {
+            if (!flag.isRegistry && registryNames.has(flag.name)) {
+              changed = true;
+              const reg = registryMeta.get(flag.name)!;
+              return { ...flag, isRegistry: true, description: reg.description, namespaces: reg.namespaces };
+            }
+            return flag;
+          });
+          if (changed) {
+            await kvStore.set(`flags:${repo.name}`, JSON.stringify({ repo: repo.name, flags: updatedFlags }));
+            enriched++;
+          }
+        }
+        if (enriched > 0) log(`  Registry enrichment: ${enriched} repos annotated with ${registryNames.size} canonical flags`);
+      } catch { /* skip malformed registry */ }
+    }
+  }
 
   // Phase 7: Cross-repo correlation (only meaningful with 2+ repos)
   await runPhaseCorrelation(ctx, tracer);
