@@ -92,6 +92,12 @@ export function scanForFlags(
       mergeFlag(flagMap, flag);
     }
 
+    // Scan for rollout/featureFlags patterns (Luma-style flags stored in Redis or user.featureFlags)
+    const rolloutFlags = findRolloutFlags(tree.rootNode, filePath, repo);
+    for (const flag of rolloutFlags) {
+      mergeFlag(flagMap, flag);
+    }
+
     // Scan custom patterns
     if (options.customPatterns) {
       const customFlags = findCustomPatternFlags(
@@ -230,6 +236,80 @@ function findCustomPatternFlags(
             locations: [{ repo, module: filePath }],
           });
           break;
+        }
+      }
+    }
+  });
+
+  return flags;
+}
+
+/**
+ * Detect Luma-style rollout/featureFlags patterns:
+ * - isRolledOut(id, 'flag-name') / isUserRolledOut(id, id, 'flag-name')
+ * - addRollout(id, 'flag-name') / removeRollout(id, 'flag-name')
+ * - featureFlags.includes('flag-name')
+ * - getAllRollouts(id) — marks file as rollout-aware but no specific flag name
+ */
+const ROLLOUT_CALL_METHODS = [
+  "isRolledOut",
+  "isUserRolledOut",
+  "addRollout",
+  "removeRollout",
+];
+
+function findRolloutFlags(
+  node: TreeSitterNode,
+  filePath: string,
+  repo: string,
+): FeatureFlag[] {
+  const flags: FeatureFlag[] = [];
+
+  visitAll(node, (n) => {
+    if (n.type !== "call_expression") return;
+    const callee = n.namedChildren[0];
+    if (!callee) return;
+
+    const methodName =
+      callee.type === "identifier" ? callee.text : extractMethodName(callee);
+    if (!methodName) return;
+
+    // Pattern 1: isRolledOut(id, 'flag'), addRollout(id, 'flag'), etc.
+    if (ROLLOUT_CALL_METHODS.includes(methodName)) {
+      const args = n.namedChildren.find((c) => c.type === "arguments");
+      if (!args) return;
+      // Flag name is the last string argument
+      const stringArgs = args.namedChildren.filter(
+        (c) => c.type === "string" || c.type === "template_string",
+      );
+      const lastString = stringArgs[stringArgs.length - 1];
+      if (lastString) {
+        const flagName = (extractStringLiteral(lastString) ?? lastString.text).replace(/['"]/g, "");
+        flags.push({
+          name: flagName,
+          locations: [{ repo, module: filePath }],
+          sdk: methodName,
+        });
+      }
+    }
+
+    // Pattern 2: featureFlags.includes('flag') or .featureFlags?.includes('flag')
+    if (methodName === "includes" && callee.type === "member_expression") {
+      const obj = callee.namedChildren[0];
+      if (!obj) return;
+      const objText = obj.type === "member_expression"
+        ? (obj.namedChildren[obj.namedChildren.length - 1]?.text ?? "")
+        : obj.text;
+      if (objText === "featureFlags") {
+        const args = n.namedChildren.find((c) => c.type === "arguments");
+        const firstArg = args?.namedChildren[0];
+        if (firstArg && (firstArg.type === "string" || firstArg.type === "template_string")) {
+          const flagName = (extractStringLiteral(firstArg) ?? firstArg.text).replace(/['"]/g, "");
+          flags.push({
+            name: flagName,
+            locations: [{ repo, module: filePath }],
+            sdk: "featureFlags.includes",
+          });
         }
       }
     }

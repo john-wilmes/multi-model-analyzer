@@ -34,7 +34,7 @@ export async function handleCrossRepoGraph(
     const allEdges = repoFilter
       ? parsed.edges.filter((e) => e.sourceRepo === repoFilter || e.targetRepo === repoFilter)
       : parsed.edges;
-    const limit = Math.min(parseInt(query.single["limit"] ?? "200", 10) || 200, 2000);
+    const limit = Math.min(parseInt(query.single["limit"] ?? "5000", 10) || 5000, 10000);
     const offset = Math.max(parseInt(query.single["offset"] ?? "0", 10) || 0, 0);
     const edges = allEdges.slice(offset, offset + limit);
 
