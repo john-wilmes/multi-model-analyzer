@@ -258,6 +258,97 @@ const ROLLOUT_CALL_METHODS = [
   "removeRollout",
 ];
 
+/**
+ * Given a variable name, search the AST for a const/let/var declaration whose
+ * initializer is a string literal and return that literal value.
+ */
+function resolveIdentifierValue(
+  rootNode: TreeSitterNode,
+  name: string,
+): string | null {
+  let result: string | null = null;
+  visitAll(rootNode, (n) => {
+    if (result) return;
+    // variable_declaration or lexical_declaration: const/let/var x = '...'
+    if (
+      n.type === "variable_declaration" ||
+      n.type === "lexical_declaration"
+    ) {
+      for (const declarator of n.namedChildren) {
+        if (declarator.type !== "variable_declarator") continue;
+        const nameNode = declarator.namedChildren[0];
+        if (!nameNode || nameNode.text !== name) continue;
+        const initNode = declarator.namedChildren[1];
+        if (!initNode) continue;
+        if (initNode.type === "string" || initNode.type === "template_string") {
+          result = (extractStringLiteral(initNode) ?? initNode.text).replace(/['"]/g, "");
+        }
+      }
+    }
+  });
+  return result;
+}
+
+/**
+ * Given a property name from `this.PROP_NAME`, search the AST for a class
+ * property declaration whose initializer is a string literal and return it.
+ */
+function resolveMemberExpressionValue(
+  rootNode: TreeSitterNode,
+  propName: string,
+): string | null {
+  let result: string | null = null;
+  visitAll(rootNode, (n) => {
+    if (result) return;
+    // public_field_definition: PROP_NAME = '...'
+    // property_declaration (TypeScript): readonly PROP_NAME = '...'
+    if (
+      n.type === "public_field_definition" ||
+      n.type === "property_declaration"
+    ) {
+      const nameNode = n.namedChildren.find(
+        (c) =>
+          c.type === "property_identifier" ||
+          c.type === "identifier" ||
+          c.type === "private_property_identifier",
+      );
+      if (!nameNode || nameNode.text !== propName) return;
+      const valueNode = n.namedChildren[n.namedChildren.length - 1];
+      if (!valueNode) return;
+      if (valueNode.type === "string" || valueNode.type === "template_string") {
+        result = (extractStringLiteral(valueNode) ?? valueNode.text).replace(/['"]/g, "");
+      }
+    }
+  });
+  return result;
+}
+
+/**
+ * Try to resolve a flag name from an AST argument node. Returns the string
+ * value if the node is a string literal, or if it is an identifier / member
+ * expression that resolves to a string literal declaration in `rootNode`.
+ */
+function resolveArgToFlagName(
+  argNode: TreeSitterNode,
+  rootNode: TreeSitterNode,
+): string | null {
+  if (argNode.type === "string" || argNode.type === "template_string") {
+    return (extractStringLiteral(argNode) ?? argNode.text).replace(/['"]/g, "");
+  }
+  if (argNode.type === "identifier") {
+    return resolveIdentifierValue(rootNode, argNode.text);
+  }
+  // this.SOME_CONSTANT
+  if (argNode.type === "member_expression") {
+    const obj = argNode.namedChildren[0];
+    const prop = argNode.namedChildren[argNode.namedChildren.length - 1];
+    if (obj?.text === "this" && prop?.type === "property_identifier") {
+      return resolveMemberExpressionValue(rootNode, prop.text);
+    }
+  }
+  return null;
+}
+
 function findRolloutFlags(
   node: TreeSitterNode,
   filePath: string,
@@ -275,16 +366,19 @@ function findRolloutFlags(
     if (!methodName) return;
 
     // Pattern 1: isRolledOut(id, 'flag'), addRollout(id, 'flag'), etc.
+    // Flag name may be a string literal, variable, or this.CONSTANT.
+    // Collect all string args (direct or resolved), then use the last one found.
     if (ROLLOUT_CALL_METHODS.includes(methodName)) {
       const args = n.namedChildren.find((c) => c.type === "arguments");
       if (!args) return;
-      // Flag name is the last string argument
-      const stringArgs = args.namedChildren.filter(
-        (c) => c.type === "string" || c.type === "template_string",
-      );
-      const lastString = stringArgs[stringArgs.length - 1];
-      if (lastString) {
-        const flagName = (extractStringLiteral(lastString) ?? lastString.text).replace(/['"]/g, "");
+
+      const resolvedNames: string[] = [];
+      for (const arg of args.namedChildren) {
+        const resolved = resolveArgToFlagName(arg, node);
+        if (resolved) resolvedNames.push(resolved);
+      }
+      const flagName = resolvedNames[resolvedNames.length - 1];
+      if (flagName) {
         flags.push({
           name: flagName,
           locations: [{ repo, module: filePath }],

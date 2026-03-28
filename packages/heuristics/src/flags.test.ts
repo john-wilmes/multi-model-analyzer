@@ -127,4 +127,56 @@ describe("scanForFlags", () => {
     });
     expect(result.flags.some((f) => f.name === "experiment_checkout_v2")).toBe(true);
   });
+
+  it("detects rollout flags with direct string literal", () => {
+    const files = makeFiles({
+      "src/service.ts": `
+        this.isRolledOut(rootAccount, 'queue-manager');
+        addRollout(userId, 'beta-feature');
+      `,
+    });
+    const result = scanForFlags(files, "repo");
+    const names = result.flags.map((f) => f.name);
+    expect(names).toContain("queue-manager");
+    expect(names).toContain("beta-feature");
+  });
+
+  it("detects rollout flags via variable reference", () => {
+    const files = makeFiles({
+      "src/service.ts": `
+        const FEATURE_FLAG = 'my-flag';
+        isRolledOut(userId, FEATURE_FLAG);
+      `,
+    });
+    const result = scanForFlags(files, "repo");
+    const names = result.flags.map((f) => f.name);
+    expect(names).toContain("my-flag");
+  });
+
+  it("detects rollout flags via this.CLASS_CONSTANT", () => {
+    const files = makeFiles({
+      "src/manager.ts": `
+        class QueueManager {
+          private readonly QUEUE_MANAGER_ROLLOUT_KEY = 'queue-manager';
+          check(rootAccount: string) {
+            return this.isRolledOut(rootAccount, this.QUEUE_MANAGER_ROLLOUT_KEY);
+          }
+        }
+      `,
+    });
+    const result = scanForFlags(files, "repo");
+    const names = result.flags.map((f) => f.name);
+    expect(names).toContain("queue-manager");
+  });
+
+  it("detects rollout flags when flag name is 2nd of 3 args (isUserRolledOut)", () => {
+    const files = makeFiles({
+      "src/service.ts": `
+        isUserRolledOut(orgId, userId, 'multi-arg-flag');
+      `,
+    });
+    const result = scanForFlags(files, "repo");
+    const names = result.flags.map((f) => f.name);
+    expect(names).toContain("multi-arg-flag");
+  });
 });
