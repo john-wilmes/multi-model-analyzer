@@ -7,6 +7,9 @@ export type { PatternDetectionInput } from "./patterns.js";
 export { scanForFlags, extractFlagRegistry, extractFlagRegistryFromText } from "./flags.js";
 export type { FlagScannerOptions } from "./flags.js";
 
+export { scanForSettings } from "./settings.js";
+export type { SettingsScannerOptions } from "./settings.js";
+
 export { extractLogStatements } from "./logs.js";
 export type { DrainOptions } from "./logs.js";
 

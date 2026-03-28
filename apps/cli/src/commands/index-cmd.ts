@@ -23,6 +23,7 @@ import type {
   InferredService,
   DetectedPattern,
   FlagInventory,
+  ConfigInventory,
   LogTemplateIndex,
   MethodPurposeMap,
   RepoMetricsSummary,
@@ -155,6 +156,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
   const servicesByRepo = new Map<string, InferredService[]>();
   const patternsByRepo = new Map<string, DetectedPattern[]>();
   const flagsByRepo = new Map<string, FlagInventory>();
+  const settingsByRepo = new Map<string, ConfigInventory>();
   const logIndexByRepo = new Map<string, LogTemplateIndex>();
   const namingByRepo = new Map<string, MethodPurposeMap>();
   const completedRepos = new Set<string>();
@@ -242,6 +244,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     servicesByRepo,
     patternsByRepo,
     flagsByRepo,
+    settingsByRepo,
     logIndexByRepo,
     namingByRepo,
     treesByRepo,

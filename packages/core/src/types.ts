@@ -16,6 +16,12 @@ export interface RepoConfig {
   readonly flagRegistryEnumName?: string;
   readonly rolloutCallMethods?: readonly string[];
   readonly flagPropertyName?: string;
+  readonly settings?: {
+    readonly configObjectNames?: readonly string[];
+    readonly envVarPrefixes?: readonly string[];
+    readonly credentialPatterns?: readonly string[];
+    readonly validatorLibraries?: readonly string[];
+  };
 }
 
 export interface ChangeSet {
@@ -201,6 +207,27 @@ export interface FeatureFlag {
 export interface FlagInventory {
   readonly repo: string;
   readonly flags: readonly FeatureFlag[];
+}
+
+export type ConfigParameterKind = "setting" | "credential" | "flag";
+export type ConfigValueType = "string" | "number" | "boolean" | "enum" | "unknown";
+
+export interface ConfigParameter {
+  readonly name: string;
+  readonly locations: readonly LogicalLocation[];
+  readonly kind: ConfigParameterKind;
+  readonly valueType?: ConfigValueType;
+  readonly defaultValue?: unknown;
+  readonly enumValues?: readonly string[];
+  readonly rangeMin?: number;
+  readonly rangeMax?: number;
+  readonly source?: string;
+  readonly description?: string;
+}
+
+export interface ConfigInventory {
+  readonly parameters: readonly ConfigParameter[];
+  readonly repo: string;
 }
 
 export interface LogTemplate {

@@ -10,6 +10,7 @@ import type {
   InferredService,
   DetectedPattern,
   FlagInventory,
+  ConfigInventory,
   LogTemplateIndex,
   MethodPurposeMap,
 } from "@mma/core";
@@ -99,6 +100,9 @@ export interface PipelineContext {
 
   /** Populated by Phase 5 (heuristics). Deleted after per-repo completion. */
   readonly flagsByRepo: Map<string, FlagInventory>;
+
+  /** Populated by Phase 5 (heuristics). Deleted after per-repo completion. */
+  readonly settingsByRepo: Map<string, ConfigInventory>;
 
   /** Populated by Phase 5 (heuristics). Deleted after per-repo completion. */
   readonly logIndexByRepo: Map<string, LogTemplateIndex>;

@@ -18,6 +18,7 @@ import {
   inferServicesWithMeta,
   detectPatternsWithMeta,
   scanForFlags,
+  scanForSettings,
   extractFlagRegistry,
   extractFlagRegistryFromText,
   extractLogStatements,
@@ -328,6 +329,19 @@ export async function runPhaseHeuristics(
       ctx.flagsByRepo.set(repo.name, flagInventory);
       await kvStore.set(`flags:${repo.name}`, JSON.stringify(flagInventory));
       log(`    ${flagInventory.flags.length} feature flags found`);
+
+      // Settings scanner
+      const settingsInventory = scanForSettings(trees, repo.name, repo.settings ? {
+        configObjectNames: repo.settings.configObjectNames,
+        envVarPrefixes: repo.settings.envVarPrefixes,
+        credentialPatterns: repo.settings.credentialPatterns,
+        validatorLibraries: repo.settings.validatorLibraries,
+      } : undefined);
+      if (settingsInventory.parameters.length > 0) {
+        ctx.settingsByRepo.set(repo.name, settingsInventory);
+        await kvStore.set(`config-inventory:${repo.name}`, JSON.stringify(settingsInventory));
+        log(`    [${repo.name}] [settings]: ${settingsInventory.parameters.length} config parameters detected`);
+      }
 
       // 5d: Log statement extraction
       let logIndex = extractLogStatements(trees, repo.name);
