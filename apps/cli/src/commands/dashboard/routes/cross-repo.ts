@@ -190,9 +190,15 @@ export async function handleRepoFlags(
   const offset = Math.max(parseInt(query.single["offset"] ?? "0", 10) || 0, 0);
 
   try {
-    // Get the repo list
+    // Get the repo list — fall back to discovering from flags: keys
     const reposRaw = await kvStore.get("repos");
-    const repos: string[] = reposRaw ? (JSON.parse(reposRaw) as string[]) : [];
+    let repos: string[];
+    if (reposRaw) {
+      repos = JSON.parse(reposRaw) as string[];
+    } else {
+      const flagKeys = await kvStore.keys("flags:");
+      repos = flagKeys.map((k) => k.slice("flags:".length));
+    }
 
     // Collect flags from each repo
     const allFlags: RepoFlag[] = [];
@@ -203,7 +209,9 @@ export async function handleRepoFlags(
       if (!raw) continue;
       try {
         type StoredFlag = { name: string; locations?: Array<{ repo: string; module: string; line?: number }>; sdk?: string };
-        const parsed = JSON.parse(raw) as StoredFlag[];
+        const rawParsed = JSON.parse(raw);
+        // flags: KV stores FlagInventory { repo, flags: [...] } — extract the array
+        const parsed: StoredFlag[] = Array.isArray(rawParsed) ? rawParsed : (rawParsed?.flags ?? []);
         for (const flag of parsed) {
           if (!flag.name) continue;
           const locations = flag.locations ?? [{ repo: repoName, module: '' }];

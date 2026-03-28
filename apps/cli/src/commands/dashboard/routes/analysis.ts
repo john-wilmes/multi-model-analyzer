@@ -92,21 +92,35 @@ export async function handleHotspots(
   const limit = Math.min(parseInt(query.single["limit"] ?? "50", 10) || 50, 500);
   const offset = Math.max(parseInt(query.single["offset"] ?? "0", 10) || 0, 0);
   const keys = await kvStore.keys("hotspots:");
-  const result: Array<unknown> = [];
+  const raw: Array<Record<string, unknown>> = [];
   for (const key of keys) {
     const repo = key.slice("hotspots:".length);
     const json = await kvStore.get(key);
     if (json) {
       try {
-        const hotspots = JSON.parse(json) as Array<unknown>;
+        const hotspots = JSON.parse(json) as Array<Record<string, unknown>>;
         for (const h of hotspots) {
-          result.push({ ...(h as Record<string, unknown>), repo });
+          raw.push({ ...h, repo });
         }
       } catch { /* skip malformed */ }
     }
   }
-  // Sort by hotspotScore descending
-  (result as Array<Record<string, unknown>>).sort((a, b) => (b["hotspotScore"] as number) - (a["hotspotScore"] as number));
+  // Re-normalize scores globally across all repos so the cross-repo ranking
+  // is meaningful (per-repo scores are each independently normalized to 100).
+  let maxChurn = 0;
+  let maxSymbols = 0;
+  for (const h of raw) {
+    const c = h["churn"] as number ?? 0;
+    const s = h["symbolCount"] as number ?? 0;
+    if (c > maxChurn) maxChurn = c;
+    if (s > maxSymbols) maxSymbols = s;
+  }
+  const result = raw.map((h) => {
+    const churnScore = maxChurn > 0 ? ((h["churn"] as number ?? 0) / maxChurn) * 100 : 0;
+    const complexityScore = maxSymbols > 0 ? ((h["symbolCount"] as number ?? 0) / maxSymbols) * 100 : 0;
+    return { ...h, hotspotScore: Math.round((churnScore + complexityScore) / 2) };
+  });
+  result.sort((a, b) => (b.hotspotScore - a.hotspotScore));
   const page = result.slice(offset, offset + limit);
   return sendJson(res, { results: page, total: result.length, limit, offset }, 200, corsOrigin);
 }
