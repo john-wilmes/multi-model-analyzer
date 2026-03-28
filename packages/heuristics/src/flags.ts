@@ -16,6 +16,9 @@ export interface FlagScannerOptions {
   readonly customPatterns?: readonly RegExp[];
   readonly sdkImports?: readonly string[];
   readonly registryFlags?: readonly FeatureFlag[];
+  readonly rolloutCallMethods?: readonly string[];
+  readonly flagPropertyName?: string;
+  readonly registryEnumName?: string;
 }
 
 const DEFAULT_SDK_IMPORTS = [
@@ -94,7 +97,7 @@ export function scanForFlags(
     }
 
     // Scan for rollout/featureFlags patterns (Luma-style flags stored in Redis or user.featureFlags)
-    const rolloutFlags = findRolloutFlags(tree.rootNode, filePath, repo);
+    const rolloutFlags = findRolloutFlags(tree.rootNode, filePath, repo, options.rolloutCallMethods, options.flagPropertyName);
     for (const flag of rolloutFlags) {
       mergeFlag(flagMap, flag);
     }
@@ -371,6 +374,8 @@ function findRolloutFlags(
   node: TreeSitterNode,
   filePath: string,
   repo: string,
+  rolloutMethods?: readonly string[],
+  flagPropName?: string,
 ): FeatureFlag[] {
   const flags: FeatureFlag[] = [];
 
@@ -386,7 +391,7 @@ function findRolloutFlags(
     // Pattern 1: isRolledOut(id, 'flag'), addRollout(id, 'flag'), etc.
     // Flag name may be a string literal, variable, or this.CONSTANT.
     // Collect all string args (direct or resolved), then use the last one found.
-    if (ROLLOUT_CALL_METHODS.includes(methodName)) {
+    if ((rolloutMethods ?? ROLLOUT_CALL_METHODS).includes(methodName)) {
       const args = n.namedChildren.find((c) => c.type === "arguments");
       if (!args) return;
 
@@ -412,7 +417,7 @@ function findRolloutFlags(
       const objText = obj.type === "member_expression"
         ? (obj.namedChildren[obj.namedChildren.length - 1]?.text ?? "")
         : obj.text;
-      if (objText === "featureFlags") {
+      if (objText === (flagPropName ?? "featureFlags")) {
         const args = n.namedChildren.find((c) => c.type === "arguments");
         const firstArg = args?.namedChildren[0];
         if (firstArg && (firstArg.type === "string" || firstArg.type === "template_string")) {
@@ -449,10 +454,11 @@ export function extractFlagRegistry(
   files: ReadonlyMap<string, TreeSitterTree>,
   repo: string,
   fileTexts?: ReadonlyMap<string, string>,
+  enumName?: string,
 ): FeatureFlag[] {
   for (const [filePath, tree] of files) {
     const text = fileTexts?.get(filePath);
-    const result = extractFlagRegistryFromNode(tree.rootNode, filePath, repo, text);
+    const result = extractFlagRegistryFromNode(tree.rootNode, filePath, repo, text, enumName);
     if (result.length > 0) return result;
   }
   return [];
@@ -467,9 +473,13 @@ export function extractFlagRegistryFromText(
   text: string,
   filePath: string,
   repo: string,
+  enumName?: string,
 ): FeatureFlag[] {
+  const resolvedEnum = enumName ?? "FeatureFlags";
+  const escaped = resolvedEnum.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
   // Extract enum members: KeyName = 'string-value'
-  const enumMatch = text.match(/enum\s+FeatureFlags\s*\{([^}]+)\}/s);
+  const enumMatch = text.match(new RegExp("enum\\s+" + escaped + "\\s*\\{([^}]+)\\}", "s"));
   if (!enumMatch) return [];
 
   const enumBody = enumMatch[1]!;
@@ -482,7 +492,7 @@ export function extractFlagRegistryFromText(
 
   // Extract metadata (same regex as tree-sitter path)
   const metadataMap = new Map<string, { description?: string; namespaces?: string[] }>();
-  const descPattern = /\[FeatureFlags\.(\w+)\][^}]*?description:\s*['"]([^'"]+)['"]/gs;
+  const descPattern = new RegExp("\\[" + escaped + "\\.(\\w+)\\][^}]*?description:\\s*['\"]([^'\"]+)['\"]", "gs");
   for (const match of text.matchAll(descPattern)) {
     const keyName = match[1];
     const description = match[2];
@@ -491,7 +501,7 @@ export function extractFlagRegistryFromText(
     entry.description = description;
     metadataMap.set(keyName, entry);
   }
-  const nsPattern = /\[FeatureFlags\.(\w+)\][^}]*?namespaces:\s*\[([^\]]*)\]/gs;
+  const nsPattern = new RegExp("\\[" + escaped + "\\.(\\w+)\\][^}]*?namespaces:\\s*\\[([^\\]]*)\\]", "gs");
   for (const match of text.matchAll(nsPattern)) {
     const keyName = match[1];
     const nsContent = match[2];
@@ -511,7 +521,7 @@ export function extractFlagRegistryFromText(
       name: stringValue,
       isRegistry: true,
       locations: [{ repo, module: filePath }],
-      sdk: "FeatureFlags",
+      sdk: resolvedEnum,
       ...(meta?.description !== undefined ? { description: meta.description } : {}),
       ...(meta?.namespaces !== undefined ? { namespaces: meta.namespaces } : {}),
     });
@@ -524,8 +534,12 @@ function extractFlagRegistryFromNode(
   filePath: string,
   repo: string,
   fileText: string | undefined,
+  enumName?: string,
 ): FeatureFlag[] {
-  // Step 1: Find the FeatureFlags enum and build keyName -> stringValue map
+  const resolvedEnum = enumName ?? "FeatureFlags";
+  const escaped = resolvedEnum.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  // Step 1: Find the enum and build keyName -> stringValue map
   const enumValues = new Map<string, string>(); // keyName -> string value
 
   visitAll(root, (n) => {
@@ -533,7 +547,7 @@ function extractFlagRegistryFromNode(
     const nameNode = n.namedChildren.find(
       (c) => c.type === "identifier" || c.type === "type_identifier",
     );
-    if (!nameNode || nameNode.text !== "FeatureFlags") return;
+    if (!nameNode || nameNode.text !== resolvedEnum) return;
 
     const body = n.namedChildren.find((c) => c.type === "enum_body");
     if (!body) return;
@@ -566,7 +580,7 @@ function extractFlagRegistryFromNode(
 
   if (fileText) {
     // Extract description per key
-    const descPattern = /\[FeatureFlags\.(\w+)\][^}]*?description:\s*['"]([^'"]+)['"]/gs;
+    const descPattern = new RegExp("\\[" + escaped + "\\.(\\w+)\\][^}]*?description:\\s*['\"]([^'\"]+)['\"]", "gs");
     for (const match of fileText.matchAll(descPattern)) {
       const keyName = match[1];
       const description = match[2];
@@ -577,7 +591,7 @@ function extractFlagRegistryFromNode(
     }
 
     // Extract namespaces per key (array of strings)
-    const nsPattern = /\[FeatureFlags\.(\w+)\][^}]*?namespaces:\s*\[([^\]]*)\]/gs;
+    const nsPattern = new RegExp("\\[" + escaped + "\\.(\\w+)\\][^}]*?namespaces:\\s*\\[([^\\]]*)\\]", "gs");
     for (const match of fileText.matchAll(nsPattern)) {
       const keyName = match[1];
       const nsContent = match[2];
@@ -599,7 +613,7 @@ function extractFlagRegistryFromNode(
       name: stringValue,
       isRegistry: true,
       locations: [{ repo, module: filePath }],
-      sdk: "FeatureFlags",
+      sdk: resolvedEnum,
       ...(meta?.description !== undefined ? { description: meta.description } : {}),
       ...(meta?.namespaces !== undefined ? { namespaces: meta.namespaces } : {}),
     };

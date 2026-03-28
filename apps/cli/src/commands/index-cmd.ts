@@ -326,11 +326,11 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       await kvStore.set("flagRegistry:checked", "1");
       for (const repo of repos) {
         const repoPath = repo.localPath ?? join(mirrorDir, `${repo.name}.git`);
-        const candidates = ["src/luma/utils/feature-flags-enums.ts"];
+        const candidates = repo.flagRegistryFilePaths ?? ["src/luma/utils/feature-flags-enums.ts"];
         for (const candidate of candidates) {
           try {
             const text = await readFile(join(repoPath, candidate), "utf-8");
-            const registryFlags = extractFlagRegistryFromText(text, candidate, repo.name);
+            const registryFlags = extractFlagRegistryFromText(text, candidate, repo.name, repo.flagRegistryEnumName);
             if (registryFlags.length > 0) {
               await kvStore.set("flagRegistry", JSON.stringify(registryFlags));
               log(`  Registry fallback: ${registryFlags.length} flags from ${repo.name}/${candidate}`);

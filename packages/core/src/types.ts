@@ -12,6 +12,8 @@ export interface RepoConfig {
   readonly url: string;
   readonly branch?: string;
   readonly localPath?: string;
+  readonly flagRegistryFilePaths?: readonly string[];
+  readonly flagRegistryEnumName?: string;
 }
 
 export interface ChangeSet {

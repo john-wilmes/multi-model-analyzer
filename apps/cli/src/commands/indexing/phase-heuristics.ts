@@ -247,7 +247,10 @@ export async function runPhaseHeuristics(
     if (!await kvStore.get("flagRegistry")) {
       let registryFlags: import("@mma/core").FeatureFlag[] = [];
       if (trees && trees.size > 0) {
-        const enumFiles = [...trees.keys()].filter(f => f.includes("feature-flags") || f.includes("featureFlags"));
+        const enumFiles = [...trees.keys()].filter(f =>
+          repo.flagRegistryFilePaths
+            ? repo.flagRegistryFilePaths.some(p => f.endsWith(p) || f.includes(p))
+            : f.includes("feature-flags") || f.includes("featureFlags"));
         let fileTexts: Map<string, string> | undefined;
         if (enumFiles.length > 0) {
           fileTexts = new Map();
@@ -260,17 +263,19 @@ export async function runPhaseHeuristics(
             } catch { /* file may not exist on disk */ }
           }
         }
-        registryFlags = extractFlagRegistry(trees, repo.name, fileTexts);
+        registryFlags = extractFlagRegistry(trees, repo.name, fileTexts, repo.flagRegistryEnumName);
       } else {
         // Text-based fallback: use classified file list to find enum file and read from disk/git
         const enumCandidates = repoClassified.filter(f =>
-          f.path.includes("feature-flags") || f.path.includes("featureFlags"));
+          repo.flagRegistryFilePaths
+            ? repo.flagRegistryFilePaths.some(p => f.path.endsWith(p) || f.path.includes(p))
+            : f.path.includes("feature-flags") || f.path.includes("featureFlags"));
         for (const candidate of enumCandidates) {
           try {
             const text = isBare
               ? await getFileContent(repoPath, await resolveCommitForBare(repoPath, changeSets, repo.name), candidate.path)
               : await readFile(join(repoPath, candidate.path), "utf-8");
-            registryFlags = extractFlagRegistryFromText(text, candidate.path, repo.name);
+            registryFlags = extractFlagRegistryFromText(text, candidate.path, repo.name, repo.flagRegistryEnumName);
             if (registryFlags.length > 0) break;
           } catch { /* file read may fail */ }
         }
@@ -289,7 +294,7 @@ export async function runPhaseHeuristics(
         try { allRegistryFlags = JSON.parse(registryJson); } catch { /* skip */ }
       }
 
-      let flagInventory = scanForFlags(trees, repo.name, { registryFlags: allRegistryFlags });
+      let flagInventory = scanForFlags(trees, repo.name, { registryFlags: allRegistryFlags, registryEnumName: repo.flagRegistryEnumName });
 
       // Incremental mode: merge with cached flags for files not re-scanned
       if (!options.forceFullReindex) {
