@@ -37,7 +37,7 @@ Create a file called `quickstart.config.json` in any working directory:
     { "url": "https://github.com/supabase/ssr.git", "branch": "main" }
   ],
   "mirrorDir": "./mirrors",
-  "outputDb": "./mma-quickstart.db"
+  "dbPath": "./mma-quickstart.db"
 }
 ```
 
@@ -149,5 +149,4 @@ Once the container starts, create your config file and run `mma index` — no lo
 
 - **`docs/findings-guide.md`**: Full reference for all SARIF rule IDs, severity levels, trigger thresholds, and metrics (instability, abstractness, coupling zones).
 - **`docs/baseline-sharing.md`**: Detailed baseline workflows for teams, including incremental updates and CI integration.
-- **`CONTRIBUTING.md`**: How to add new heuristics, detectors, or storage backends.
 - **`mma dashboard`**: The fastest way to explore findings visually once your first index run completes.

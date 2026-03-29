@@ -93,7 +93,7 @@ npm install -g multi-model-analyzer
 cat > mma.config.json << 'EOF'
 {
   "mirrorDir": "./mirrors",
-  "outputDb": "./mma.db",
+  "dbPath": "./mma.db",
   "repos": [
     { "url": "https://github.com/supabase/supabase-js.git", "branch": "main" },
     { "url": "https://github.com/supabase/ssr.git", "branch": "main" }

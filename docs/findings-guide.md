@@ -13,6 +13,10 @@ Reference for all diagnostics produced by Multi-Model Analyzer. Each finding app
 | `config/format-violation` | error | Configuration | Parameter violates type/range constraint |
 | `config/unused-registry-flag` | note | Configuration | Registry flag declared but never consumed |
 | `config/unregistered-flag` | warning | Configuration | Flag exists in code but not in the registry |
+| `config/dead-setting` | warning | Configuration | Setting exists but is never read |
+| `config/missing-dependency` | warning | Configuration | Setting depends on another setting that is absent |
+| `config/conflicting-settings` | error | Configuration | Two settings have contradictory values |
+| `config/high-interaction-strength` | note | Configuration | Parameter pair has high interaction strength |
 | `fault/unhandled-error-path` | warning | Fault Tree | Catch block with no logging or re-throw |
 | `fault/silent-failure` | warning | Fault Tree | Error condition swallowed silently |
 | `fault/missing-error-boundary` | warning | Fault Tree | Async operation with no error handler |
@@ -139,6 +143,54 @@ These rules validate feature flag models built from code scanning. Constraint ch
 
 **When to ignore:** Flags that are intentionally managed outside the registry (e.g., third-party SDK flags or infrastructure toggles that follow a different governance process). Document the exception if suppressing.
 
+### `config/dead-setting`
+
+**Severity:** warning
+
+**What it means:** A non-flag parameter (setting or credential) exists in the model but can never be used. Like `config/dead-flag`, but for settings: the parameter is excluded by at least one constraint and no constraint requires it.
+
+**Trigger:** The parameter has `kind !== "flag"`, appears in at least one `excludes` constraint, and no `requires` constraint names it as a target. Mirrors `findDeadFlags` logic but operates on `model.parameters`.
+
+**Action:** Remove the dead setting or fix the constraints if the exclusion was unintentional. Dead settings add noise to the configuration model and may indicate stale configuration that was never cleaned up.
+
+**When to ignore:** Settings that are intentionally disabled as kill switches or reserved for future use. Check whether the exclusion constraint is correct before removing the setting.
+
+### `config/missing-dependency`
+
+**Severity:** warning
+
+**What it means:** A setting has a `requires` constraint pointing at another parameter, but that target parameter is not defined anywhere in the model (neither in flags nor parameters). The dependency cannot be satisfied.
+
+**Trigger:** A `requires` constraint has a `source` parameter that exists in the model but a `target` parameter that does not appear in `model.flags` or `model.parameters`. Emits the message: `"<requiredBy>" requires "<parameter>"[when <condition>] but no definition was found`.
+
+**Action:** Either add the missing parameter to the model, or remove the `requires` constraint if the dependency is no longer needed. This typically indicates a parameter was renamed or removed without updating its dependents.
+
+**When to ignore:** Rarely safe to ignore. If the dependency is on a parameter from an external configuration source not scanned by the analyzer, suppress with a comment explaining the external dependency.
+
+### `config/conflicting-settings`
+
+**Severity:** error
+
+**What it means:** Two settings have contradictory constraints — one parameter both requires and excludes another, making it impossible to satisfy both constraints simultaneously.
+
+**Trigger:** A parameter `A` has a `requires` constraint targeting `B`, and also an `excludes` constraint targeting `B` (directly or symmetrically). Emits: `"<A>" both requires and excludes "<B>" — contradictory constraints`.
+
+**Action:** Fix the constraint model. Either the `requires` or the `excludes` constraint is wrong. This is a modeling error that must be resolved — there is no valid configuration that can satisfy both.
+
+**When to ignore:** Never — contradictory constraints indicate a logic error in the feature model.
+
+### `config/high-interaction-strength`
+
+**Severity:** note
+
+**What it means:** A parameter participates in complex interactions with 3 or more other parameters. High interaction strength means the parameter's behavior depends on many others, requiring higher-order combinatorial testing to cover all interaction paths.
+
+**Trigger:** A parameter either (a) appears in a single constraint of arity ≥ 3, or (b) co-occurs with 3 or more distinct other parameters across all constraints. Emits: `Parameter "<name>" participates in 3+ way interactions — consider higher-order combinatorial testing`.
+
+**Action:** Add pairwise or higher-order combinatorial tests (e.g., using t-way testing tools) that cover the parameter's interactions. Consider whether the parameter can be decomposed into simpler, more independent units.
+
+**When to ignore:** Parameters that are central to the system architecture will naturally have many interactions. This finding is informational — it highlights which parameters need the most thorough test coverage.
+
 ---
 
 ## Fault Tree
@@ -163,13 +215,13 @@ These rules analyze control flow graphs to find gaps in error handling. The faul
 
 **Severity:** warning
 
-**What it means:** An error condition is detected (e.g., a null check, an error code comparison) but the failure path produces no observable side effect — no log, no throw, no return value change.
+**What it means:** A `catch` block exists but has no reachable successor nodes — it is completely empty. The caught error is silently discarded with no logging, re-throw, or forwarding.
 
-**Trigger:** Defined in `FAULT_RULES`. Detection is part of gap analysis expansion.
+**Trigger:** A CFG node of kind `catch` has zero reachable nodes (`reachable.length === 0`). Emits: `Empty catch block in <functionId> silently swallows errors`.
 
-**Action:** Ensure the failure path either logs the condition, propagates an error, or returns a distinguishable result.
+**Action:** Add at minimum a logging statement inside the catch block. Even `console.error(err)` is better than silence. If the error is truly expected and harmless, add a comment explaining why it is safe to suppress.
 
-**When to ignore:** Defensive checks that guard against theoretically impossible states may intentionally do nothing on the "impossible" path.
+**When to ignore:** Catch blocks that intentionally suppress known-harmless errors (e.g., `JSON.parse` of optional config that may be absent). Add a comment so the intent is clear to future readers.
 
 ### `fault/missing-error-boundary`
 
@@ -211,7 +263,7 @@ Structural rules analyze the import/export graph and apply Robert C. Martin's pa
 
 **Trigger:** The file has exported symbols (`symbol.exported === true`), is not in the entry points set (package.json `main`/`bin`), and no import edge targets this file.
 
-**Message format:** `Exported <kind> "<name>" in <path> is not imported by any other file`
+**Message format:** `N dead export(s) in <path>: <kind1> <name1>, <kind2> <name2>, ...` (one finding per file, listing all dead exports together)
 
 **Action:** Remove the `export` keyword if the symbol is only used locally, or remove the symbol entirely if it's unused. Dead exports increase API surface area and create maintenance burden.
 
@@ -488,7 +540,7 @@ Source: `packages/query/src/pagerank.ts`
 
 **What it means:** The file has a high PageRank score in the dependency graph, meaning many other files transitively depend on it. Changes to this file have a wide blast radius — a bug here affects a large portion of the codebase.
 
-**Trigger:** The file ranks in the **top 10** (default `topN: 10`) by PageRank score and exceeds the minimum score threshold (default `minScore: 0`).
+**Trigger:** The file ranks in the **top 10** (default `topN: 10`) by PageRank score and exceeds the minimum score threshold (default minScore: 10% of the top score, adapting to graph size).
 
 PageRank parameters: damping factor = 0.85, max iterations = 100, convergence tolerance = 1e-6. Dangling nodes (files with no outgoing imports) distribute rank evenly to all nodes.
 
