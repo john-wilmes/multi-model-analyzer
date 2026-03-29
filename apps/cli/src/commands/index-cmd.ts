@@ -312,6 +312,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     servicesByRepo.delete(repo.name);
     patternsByRepo.delete(repo.name);
     flagsByRepo.delete(repo.name);
+    settingsByRepo.delete(repo.name);
     logIndexByRepo.delete(repo.name);
     namingByRepo.delete(repo.name);
   })));

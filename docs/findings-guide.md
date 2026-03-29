@@ -11,8 +11,8 @@ Reference for all diagnostics produced by Multi-Model Analyzer. Each finding app
 | `config/missing-constraint` | warning | Configuration | Flag used without dependency validation |
 | `config/untested-interaction` | note | Configuration | Flag pair lacks test coverage |
 | `config/format-violation` | error | Configuration | Parameter violates type/range constraint |
-| `config/unused-registry-flag` | warning | Configuration | Registry flag declared but never consumed |
-| `config/unregistered-flag` | note | Configuration | Flag exists in code but not in the registry |
+| `config/unused-registry-flag` | note | Configuration | Registry flag declared but never consumed |
+| `config/unregistered-flag` | warning | Configuration | Flag exists in code but not in the registry |
 | `fault/unhandled-error-path` | warning | Fault Tree | Catch block with no logging or re-throw |
 | `fault/silent-failure` | warning | Fault Tree | Error condition swallowed silently |
 | `fault/missing-error-boundary` | warning | Fault Tree | Async operation with no error handler |
@@ -117,7 +117,7 @@ These rules validate feature flag models built from code scanning. Constraint ch
 
 ### `config/unused-registry-flag`
 
-**Severity:** warning
+**Severity:** note
 
 **What it means:** A flag that is marked as the authoritative registry definition (`isRegistry: true`) appears in only one location — the registry itself. This means the flag was declared in the registry but is never referenced in any consuming code.
 
@@ -129,7 +129,7 @@ These rules validate feature flag models built from code scanning. Constraint ch
 
 ### `config/unregistered-flag`
 
-**Severity:** note
+**Severity:** warning
 
 **What it means:** A feature flag appears in code but has no corresponding registry entry. The model contains at least one registry flag (`isRegistry: true`), indicating a registry is in use for this codebase, but this flag was not registered there.
 

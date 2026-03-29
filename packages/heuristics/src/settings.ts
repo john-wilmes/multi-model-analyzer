@@ -87,19 +87,16 @@ export function scanForSettings(
     }
 
     // Scan for environment variable accesses
-    const envParams = findEnvVarAccesses(tree.rootNode, filePath, repo, envVarPrefixes);
+    const envParams = findEnvVarAccesses(tree.rootNode, filePath, repo, envVarPrefixes, options.credentialPatterns);
     for (const param of envParams) {
       mergeParameter(paramMap, param);
     }
 
     // Scan for validation schema definitions
-    const imports = findImports(tree.rootNode);
-    const usesValidator = imports.some((imp) =>
-      validatorLibraries.some((lib) => imp === lib || imp.startsWith(lib + "/")),
-    );
+    const importedValidatorNames = getImportedValidatorNames(tree.rootNode, validatorLibraries);
 
-    if (usesValidator) {
-      const schemaParams = findValidationSchemaParams(tree.rootNode, filePath, repo);
+    if (importedValidatorNames.size > 0) {
+      const schemaParams = findValidationSchemaParams(tree.rootNode, filePath, repo, importedValidatorNames);
       for (const param of schemaParams) {
         mergeParameter(paramMap, param);
       }
@@ -207,21 +204,48 @@ function findEnvVarAccesses(
   filePath: string,
   repo: string,
   envVarPrefixes: readonly string[],
+  credentialPatterns?: readonly string[],
 ): ConfigParameter[] {
   const params: ConfigParameter[] = [];
 
+  // Build regex from custom credential patterns (glob-style *_KEY → suffix match)
+  const credentialRegexes: RegExp[] = credentialPatterns
+    ? credentialPatterns.map((p) => {
+        // Convert simple glob patterns like "*_KEY" to a regex
+        const escaped = p.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+        return new RegExp(`^${escaped}$`);
+      })
+    : [];
+
   visitAll(node, (n) => {
     if (n.type !== "member_expression") return;
-    if (!n.text.startsWith("process.env.")) return;
 
-    const envVar = n.text.replace("process.env.", "");
+    // Require the node to be exactly `process.env.VAR_NAME` — two chained member_expressions:
+    // outer: process.env  → inner: VAR_NAME
+    const obj = n.namedChildren[0];
+    const prop = n.namedChildren[n.namedChildren.length - 1];
+    if (!obj || !prop) return;
+
+    // obj must be `process.env` (a member_expression itself)
+    if (obj.type !== "member_expression") return;
+    const processNode = obj.namedChildren[0];
+    const envNode = obj.namedChildren[obj.namedChildren.length - 1];
+    if (!processNode || !envNode) return;
+    if (processNode.text !== "process" || envNode.text !== "env") return;
+
+    // prop must be a direct identifier (not another chain)
+    if (prop.type !== "property_identifier" && prop.type !== "identifier") return;
+
+    const envVar = prop.text;
 
     // Skip flag-like env vars — those are handled by the flags scanner
     if (FLAG_ENV_PATTERN.test(envVar)) return;
 
     // Determine kind
     let kind: "setting" | "credential";
-    if (CREDENTIAL_SUFFIX_PATTERN.test(envVar)) {
+    const isCredentialBySuffix = CREDENTIAL_SUFFIX_PATTERN.test(envVar);
+    const isCredentialByPattern = credentialRegexes.some((re) => re.test(envVar));
+    if (isCredentialBySuffix || isCredentialByPattern) {
       kind = "credential";
     } else {
       // Only emit as setting if it matches a known prefix — otherwise skip
@@ -242,15 +266,34 @@ function findEnvVarAccesses(
 }
 
 /**
+ * Walk a member_expression or call_expression chain to find the root identifier.
+ * For `z.object`, returns "z". For `Joi.object`, returns "Joi".
+ * Returns null when the base is not a simple identifier.
+ */
+function resolveCalleeBase(node: TreeSitterNode): string | null {
+  if (node.type === "identifier") return node.text;
+  if (node.type === "member_expression" || node.type === "call_expression") {
+    const first = node.namedChildren[0];
+    if (!first) return null;
+    return resolveCalleeBase(first);
+  }
+  return null;
+}
+
+/**
  * Detect zod/joi/yup schema object definitions and extract property names.
  * Handles patterns like:
  *   z.object({ timeout: z.number().min(0).max(30000), ... })
  *   Joi.object({ host: Joi.string(), port: Joi.number() })
+ *
+ * Only treats a `.object({...})` call as a schema root when the callee base
+ * resolves to a known imported validator identifier.
  */
 function findValidationSchemaParams(
   node: TreeSitterNode,
   filePath: string,
   repo: string,
+  importedValidatorNames: Set<string>,
 ): ConfigParameter[] {
   const params: ConfigParameter[] = [];
 
@@ -264,6 +307,10 @@ function findValidationSchemaParams(
     if (callee.type !== "member_expression") return;
     const methodNode = callee.namedChildren[callee.namedChildren.length - 1];
     if (!methodNode || methodNode.text !== "object") return;
+
+    // Verify the callee base is an imported validator identifier
+    const calleeBase = resolveCalleeBase(callee);
+    if (!calleeBase || !importedValidatorNames.has(calleeBase)) return;
 
     const args = n.namedChildren.find((c) => c.type === "arguments");
     if (!args) return;
@@ -425,8 +472,12 @@ function mergeParameter(
       valueType: existing.valueType && existing.valueType !== "unknown"
         ? existing.valueType
         : param.valueType,
-      // Keep existing default value if present
+      // Keep existing values if present; fall back to incoming
       defaultValue: existing.defaultValue !== undefined ? existing.defaultValue : param.defaultValue,
+      rangeMin: existing.rangeMin !== undefined ? existing.rangeMin : param.rangeMin,
+      rangeMax: existing.rangeMax !== undefined ? existing.rangeMax : param.rangeMax,
+      enumValues: existing.enumValues !== undefined ? existing.enumValues : param.enumValues,
+      source: existing.source !== undefined ? existing.source : param.source,
     });
   } else {
     map.set(param.name, param);
@@ -455,15 +506,60 @@ function extractLiteralValue(node: TreeSitterNode): LiteralExtraction | null {
   return null;
 }
 
-function findImports(node: TreeSitterNode): string[] {
-  const imports: string[] = [];
+/**
+ * Collect the local identifiers that are imported from any of the configured
+ * validator libraries. Returns a Set of local names so callee-checking is O(1).
+ *
+ * Example:
+ *   import { z } from "zod"                 → adds "z"
+ *   import Joi from "joi"                    → adds "Joi"
+ *   import * as yup from "yup"              → adds "yup"
+ *   import { object } from "yup"            → adds "object" (namespace import)
+ */
+function getImportedValidatorNames(
+  node: TreeSitterNode,
+  validatorLibraries: readonly string[],
+): Set<string> {
+  const names = new Set<string>();
+
   for (const child of node.namedChildren) {
-    if (child.type === "import_statement") {
-      const source = extractStringLiteral(child);
-      if (source) imports.push(source);
+    if (child.type !== "import_statement") continue;
+
+    // Check whether this import is from a validator library
+    const source = extractStringLiteral(child);
+    if (!source) continue;
+    const isValidatorLib = validatorLibraries.some(
+      (lib) => source === lib || source.startsWith(lib + "/"),
+    );
+    if (!isValidatorLib) continue;
+
+    // Collect local binding names from the import statement
+    for (const clause of child.namedChildren) {
+      if (clause.type === "import_clause") {
+        for (const binding of clause.namedChildren) {
+          // Default import: `import Joi from "joi"` → identifier node
+          if (binding.type === "identifier") {
+            names.add(binding.text);
+          }
+          // Namespace import: `import * as yup from "yup"` → namespace_import
+          if (binding.type === "namespace_import") {
+            const id = binding.namedChildren.find((c) => c.type === "identifier");
+            if (id) names.add(id.text);
+          }
+          // Named imports: `import { z } from "zod"` → named_imports
+          if (binding.type === "named_imports") {
+            for (const spec of binding.namedChildren) {
+              // import_specifier has the local alias as the last identifier
+              const localId = spec.namedChildren[spec.namedChildren.length - 1];
+              if (localId?.type === "identifier") names.add(localId.text);
+            }
+          }
+        }
+      }
     }
   }
-  return imports;
+
+  return names;
 }
 
 function visitAll(

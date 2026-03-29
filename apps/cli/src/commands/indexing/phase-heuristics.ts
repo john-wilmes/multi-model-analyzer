@@ -331,15 +331,55 @@ export async function runPhaseHeuristics(
       log(`    ${flagInventory.flags.length} feature flags found`);
 
       // Settings scanner
-      const settingsInventory = scanForSettings(trees, repo.name, repo.settings ? {
+      let settingsInventory = scanForSettings(trees, repo.name, repo.settings ? {
         configObjectNames: repo.settings.configObjectNames,
         envVarPrefixes: repo.settings.envVarPrefixes,
         credentialPatterns: repo.settings.credentialPatterns,
         validatorLibraries: repo.settings.validatorLibraries,
       } : undefined);
+
+      // Incremental mode: merge with cached parameters for files not re-scanned
+      if (!options.forceFullReindex) {
+        const cachedSettingsJson = await kvStore.get(`config-inventory:${repo.name}`);
+        if (cachedSettingsJson) {
+          try {
+            const cached = JSON.parse(cachedSettingsJson) as import("@mma/core").ConfigInventory;
+            const scannedFiles = new Set(trees.keys());
+            const mergedParamMap = new Map<string, import("@mma/core").ConfigParameter>();
+            // Keep cached parameters from files not re-scanned
+            for (const param of cached.parameters) {
+              const kept = param.locations.filter(loc => !scannedFiles.has(loc.module));
+              if (kept.length > 0) {
+                mergedParamMap.set(param.name, { ...param, locations: kept });
+              }
+            }
+            // Merge new parameters from scanned files
+            for (const param of settingsInventory.parameters) {
+              const existing = mergedParamMap.get(param.name);
+              if (existing) {
+                mergedParamMap.set(param.name, {
+                  ...existing,
+                  locations: [...existing.locations, ...param.locations],
+                  kind: existing.kind === "credential" || param.kind === "credential" ? "credential" : existing.kind,
+                  valueType: existing.valueType && existing.valueType !== "unknown" ? existing.valueType : param.valueType,
+                  defaultValue: existing.defaultValue !== undefined ? existing.defaultValue : param.defaultValue,
+                  rangeMin: existing.rangeMin !== undefined ? existing.rangeMin : param.rangeMin,
+                  rangeMax: existing.rangeMax !== undefined ? existing.rangeMax : param.rangeMax,
+                  enumValues: existing.enumValues !== undefined ? existing.enumValues : param.enumValues,
+                  source: existing.source !== undefined ? existing.source : param.source,
+                });
+              } else {
+                mergedParamMap.set(param.name, param);
+              }
+            }
+            settingsInventory = { repo: repo.name, parameters: [...mergedParamMap.values()] };
+          } catch { /* skip malformed cache */ }
+        }
+      }
+
+      ctx.settingsByRepo.set(repo.name, settingsInventory);
+      await kvStore.set(`config-inventory:${repo.name}`, JSON.stringify(settingsInventory));
       if (settingsInventory.parameters.length > 0) {
-        ctx.settingsByRepo.set(repo.name, settingsInventory);
-        await kvStore.set(`config-inventory:${repo.name}`, JSON.stringify(settingsInventory));
         log(`    [${repo.name}] [settings]: ${settingsInventory.parameters.length} config parameters detected`);
       }
 

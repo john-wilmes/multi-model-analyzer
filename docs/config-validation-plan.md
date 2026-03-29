@@ -16,7 +16,7 @@ MMA already has the building blocks:
 | Constraint extractor | `packages/models/config/src/constraints.ts` | Finds mutex (if-else chains) and range constraints between flags |
 | Feature model builder | `packages/models/config/src/feature-model.ts` | Infers requires/excludes/implies from co-location and dependency graphs |
 | SAT validator | `packages/models/config/src/z3.ts` | Heuristic dead-flag, always-on, untested-interaction checks |
-| SARIF diagnostics | `config/dead-flag`, `config/always-on-flag`, etc. | 5 config rules defined, 3 emitting findings |
+| SARIF diagnostics | `config/dead-flag`, `config/always-on-flag`, etc. | 7 config rules defined, 5 emitting findings |
 | Core types | `packages/core/src/types.ts` | `FeatureFlag`, `FeatureModel`, `FeatureConstraint`, `ConstraintKind` |
 
 Constraint kinds: `requires | excludes | implies | mutex | range`
@@ -89,7 +89,7 @@ New file: `packages/heuristics/src/settings.ts`
 - Reuses tree-sitter traversal patterns from `flags.ts`
 - Shares test-path exclusion logic
 
-Wire into indexing pipeline: `packages/ingestion/src/phase-heuristics.ts`
+Wire into indexing pipeline: `apps/cli/src/commands/indexing/phase-heuristics.ts`
 - Run alongside `scanForFlags()`
 - Store results in KV under `config-inventory:<repo>`
 
