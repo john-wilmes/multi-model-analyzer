@@ -28,7 +28,7 @@ Constraint kinds: `requires | excludes | implies | mutex | range`
 3. **Static analysis only.** No runtime data, no database queries. Everything derived from code in the repo.
 4. **Configurable patterns.** Each repo can declare its own setting access patterns, credential types, and constraint idioms via config.
 
-## Phase 1: Settings scanner
+## Phase 1: Settings scanner ✓ Complete
 
 **Goal:** Extract application settings from code the same way we extract feature flags.
 
@@ -101,7 +101,7 @@ Wire into indexing pipeline: `apps/cli/src/commands/indexing/phase-heuristics.ts
 | `config/unvalidated-setting` | warning | Setting read from env/config with no validation |
 | `config/hardcoded-credential` | error | Credential value appears as string literal |
 
-## Phase 2: Unified constraint extraction
+## Phase 2: Unified constraint extraction ✓ Complete
 
 **Goal:** Detect constraints *between* settings, flags, and credentials — not just between flags.
 
@@ -150,7 +150,7 @@ Extend `packages/models/config/src/feature-model.ts`:
 - `buildFeatureModel()` accepts `ConfigInventory` alongside `FlagInventory`
 - Constraint inference operates on unified parameter set
 
-## Phase 3: SAT-based validation
+## Phase 3: SAT-based validation ✓ Complete
 
 **Goal:** Use constraint solving to answer: "Given parameters X with values Y, what is required/forbidden/suspicious?"
 
@@ -190,7 +190,7 @@ Extend `packages/mcp/src/`:
 - `get_config_impact` — blast radius of changing a setting
 - Extend existing `get_flag_inventory` to include settings/credentials
 
-## Phase 4: Combinatorial interaction testing (CIT) support
+## Phase 4: Combinatorial interaction testing (CIT) support ✓ Complete
 
 **Goal:** Generate minimal test configurations that cover all pairwise (or t-way) parameter interactions.
 

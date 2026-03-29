@@ -72,7 +72,7 @@ All findings are SARIF v2.1.0 with logical locations only -- no source code leav
 
 - Cross-repo analysis across multiple TypeScript repositories, with symbol-level resolution (98% coverage on real-world monorepo ecosystems)
 - SARIF v2.1.0 output with built-in anonymization for safe sharing
-- MCP server with 26 tools for IDE/agent integration (`mma serve`) — stdio or HTTP transport
+- MCP server with 31 tools for IDE/agent integration (`mma serve`) — stdio or HTTP transport
 - Web dashboard with dependency graphs, blast radius, and service catalog views
 - 3-tier summarization (2 free local tiers + optional LLM tier via Ollama, Anthropic, or OpenAI)
 - Design pattern detection (adapter, facade, observer, factory, singleton, repository, middleware, decorator)
@@ -82,7 +82,7 @@ All findings are SARIF v2.1.0 with logical locations only -- no source code leav
 
 ### Dashboard
 
-The web dashboard provides 10 views — Overview, Findings, Cross-Repo (Graph, Feature Flags, Cascading Faults, Service Catalog), Temporal Coupling, Hotspots, Design Patterns, Blast Radius, Repo Detail, Module Detail, and Dependency Graph — served via 15 API endpoints. Launch it with `mma dashboard` (default port 3000).
+The web dashboard provides 10 views — Overview, Findings, Cross-Repo (Graph, Feature Flags, Cascading Faults, Service Catalog), Temporal Coupling, Hotspots, Design Patterns, Blast Radius, Repo Detail, Module Detail, and Dependency Graph — served via 25 API endpoints. Launch it with `mma dashboard` (default port 3000).
 
 ## Quick Start
 
@@ -251,7 +251,7 @@ mma index -c config.json --enrich --llm-provider anthropic
 mma index -c config.json --enrich --llm-provider openai --llm-api-key sk-...
 
 # Custom model:
-mma index -c config.json --enrich --llm-provider anthropic --llm-model claude-sonnet-4-5-20250514
+mma index -c config.json --enrich --llm-provider anthropic --llm-model claude-sonnet-4-6
 ```
 
 **Via config file (`mma.config.json`):**
@@ -331,7 +331,7 @@ See [docs/findings-guide.md](docs/findings-guide.md) for all SARIF rule IDs, sev
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
+Open an issue to report bugs or propose features, or submit a pull request for improvements.
 
 ## Getting Started Guide
 

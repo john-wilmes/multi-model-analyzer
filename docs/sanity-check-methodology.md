@@ -27,9 +27,9 @@ through tier-4 summarization + narrations. DB at
 **Metrics**: Accuracy rate (% of summaries that correctly describe the method).
 
 **Last result**: ~60% accurate. Main failure mode: multi-line function signatures
-truncated at tier-1 template level (`templates.ts:34` reads only one line),
+truncated at tier-1 template level (`packages/summarization/src/templates.ts:34` reads only one line),
 causing Haiku to receive incomplete context. Arrow function bodies leak into
-return type descriptions (`templates.ts:85`).
+return type descriptions (`packages/summarization/src/templates.ts:85`).
 
 ---
 
@@ -66,7 +66,7 @@ separate services (over-segmentation). Dependencies field always `undefined`
 
 **Metrics**: Top-5 precision, external package filtering correctness.
 
-**Last result**: Not yet re-run against Supabase corpus. Previous run (Novu corpus) was mostly accurate: `@/` path aliases unresolved in one repo caused ~4x PageRank underestimation for aliased files. External package filtering works correctly. `directcss:` loader syntax created one phantom edge (`symbol-id.ts:80` false positive on `extractRepo`).
+**Last result**: Not yet re-run against Supabase corpus. Previous run (Novu corpus) was mostly accurate: `@/` path aliases unresolved in one repo caused ~4x PageRank underestimation for aliased files. External package filtering works correctly. `directcss:` loader syntax created one phantom edge (now fixed via loader prefix stripping in `packages/structural/src/dependencies.ts`).
 
 ---
 
@@ -88,8 +88,8 @@ supabase-js imports `@supabase/shared-types` from shared-types).
 **Last result**: **CRITICAL BUG** found (original corpus). `packageRoots` stored relative paths
 (`packages/shared`) but `findRepoForPath` needed absolute paths
 (`/path/to/mirror/packages/shared`). Result: 0 cross-repo edges resolved out of
-~2,645 expected. Fix: `join(repo.localPath, dirname(pjFile.path))` at
-`index-cmd.ts:394`.
+~2,645 expected. Fix: `join(repoPath, dirname(pjFile.path))` at
+`apps/cli/src/commands/indexing/phase-classify.ts:106` (moved from index-cmd.ts during refactor).
 
 **Update (2026-03-20):** This bug has been fixed. Cross-repo edges now resolve correctly (349 cross-repo edges in Supabase corpus).
 
@@ -305,17 +305,17 @@ Last updated: 2026-03-20. See `mma validate` for automated sanity checks.
 
 | # | Severity | Bug | File | Status |
 |---|----------|-----|------|--------|
-| 1 | CRITICAL | packageRoots relative vs absolute path → 0 cross-repo edges | `index-cmd.ts:394` | Fixed (PR #52) |
-| 2 | HIGH | Multi-line signatures truncated (30% methods) | `templates.ts:34` | Open |
+| 1 | CRITICAL | packageRoots relative vs absolute path → 0 cross-repo edges | `phase-classify.ts:106` | Fixed (PR #52) |
+| 2 | HIGH | Multi-line signatures truncated (30% methods) | `packages/summarization/src/templates.ts:34` | Fixed (extractSignature reads up to 10 lines) |
 | 3 | HIGH | `@/` path aliases unresolved | ingestion/parsing | Open |
 | 4 | HIGH | Tier-4 dependencies always `undefined` | tier-4 enrichment | Open |
 | 5 | MEDIUM | 9 framework adapters as separate services | service heuristics | Open |
-| 6 | MEDIUM | `directcss:` loader creates phantom edge | `symbol-id.ts:80` | Open |
+| 6 | MEDIUM | `directcss:` loader creates phantom edge | `packages/structural/src/dependencies.ts` | Fixed (LOADER_PREFIXES strips directcss: and similar) |
 | 7 | MEDIUM | Catalog narrations claim "no services" | narration prompt | Open |
 | 8 | MEDIUM | Query routing misfires 4/6 types | query router | Open |
 | 9 | MEDIUM | Fault detector: console.error not recognized | fault-tree detector | Open |
 | 10 | MEDIUM | Fault detector: .catch() handlers misidentified | fault-tree detector | Open |
 | 11 | MEDIUM | p-queue misidentified as BullMQ | service-call heuristic | Open |
-| 12 | LOW | Arrow fn body leaks into return type | `templates.ts:85` | Open |
+| 12 | LOW | Arrow fn body leaks into return type | `packages/summarization/src/templates.ts:85` | Fixed (brace-depth tracking in isSignatureComplete) |
 | 13 | LOW | Narration fabricates pattern count | LLM hallucination | Open |
 | 14 | LOW | 400+ NestJS decorator patterns undetected | pattern detector | Open |
