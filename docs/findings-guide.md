@@ -177,7 +177,7 @@ These rules analyze control flow graphs to find gaps in error handling. The faul
 
 **What it means:** An async function uses `await` but has no `try/catch` wrapper, meaning unhandled rejections can escape the function boundary.
 
-**Trigger:** Fires when a function's control flow graph contains an `await` statement with no surrounding `try/catch` block. Implemented in `detectMissingErrorBoundaries()` (`apps/cli/src/commands/indexing/ast-utils.ts`). Note: the rule descriptor in `FAULT_RULES` carries `enabled: false` as a metadata stub, but that flag is not checked at runtime — the detection runs unconditionally.
+**Trigger:** Fires when a function's control flow graph contains an `await` statement with no surrounding `try/catch` block. Implemented in `detectMissingErrorBoundaries()` (`apps/cli/src/commands/indexing/ast-utils.ts`).
 
 **Action:** Wrap the `await` expression (or the entire async function body) in a `try/catch`. Unhandled promise rejections crash Node.js processes and create silent failures in browsers.
 
