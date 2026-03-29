@@ -137,9 +137,9 @@ mma baseline check   Check for new violations against baseline (exit 1 if found)
 mma delta            Show diff of findings between two runs
 mma catalog          Inspect the inferred service catalog
 mma dashboard        Launch the web dashboard UI (port 3000)
-mma compress         Compress/prune the SQLite DB to reduce disk usage
+mma compress         Gzip the SQLite DB to reduce disk usage
 mma audit            Parse npm audit JSON and check vulnerability reachability
-mma enrich           Standalone LLM enrichment (Tier 3 summaries via Ollama)
+mma enrich           Standalone LLM enrichment (Tier 3 summaries via Ollama, Anthropic, or OpenAI)
 mma explore          Interactive incremental indexing with guided repo discovery
 mma index-org        Scan a GitHub org and index all matching repos in batches
 ```
@@ -179,7 +179,7 @@ Each finding includes a concrete action:
 }
 ```
 
-Output formats: `--format table` (default), `json`, `markdown`.
+Output formats: `--format markdown` (default), `table`, `json`.
 
 ### Anonymized SARIF
 

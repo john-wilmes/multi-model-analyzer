@@ -59,7 +59,7 @@ export function registerCoreQueryTools(server: McpServer, stores: Stores): void 
 
   // 3. Who calls a symbol
   server.registerTool("get_callers", {
-    description: "Find all callers of a symbol. Best results with fully qualified names like 'src/auth.ts#AuthService.signIn' or 'file.ts#ClassName'. Short names like 'signIn' use BM25 fallback (less precise). Use 'search' first to find the exact symbol ID if unsure. Use search first to resolve a short name to an FQN. Follow with get_blast_radius on caller files to see change scope.",
+    description: "Find all callers of a symbol. Best results with fully qualified names like 'src/auth.ts#AuthService.signIn' or 'file.ts#ClassName'. Short names like 'signIn' use BM25 fallback (less precise). Use 'search' first to find the exact symbol ID if unsure. Follow with get_blast_radius on caller files to see change scope.",
     inputSchema: {
       symbol: z.string().describe("Symbol FQN (e.g. 'src/auth.ts#AuthService.signIn') or short name (BM25 fallback)"),
       repo: z.string().optional().describe("Filter to a specific repository name"),
@@ -74,7 +74,7 @@ export function registerCoreQueryTools(server: McpServer, stores: Stores): void 
 
   // 4. What does a symbol call
   server.registerTool("get_callees", {
-    description: "Find all symbols called by a given symbol. Best results with fully qualified names like 'src/auth.ts#AuthService.signIn'. Short names use BM25 fallback. Use 'search' first to find the exact symbol ID if unsure. Use search first to resolve an FQN. Follow with get_dependencies for the full transitive subgraph.",
+    description: "Find all symbols called by a given symbol. Best results with fully qualified names like 'src/auth.ts#AuthService.signIn'. Short names use BM25 fallback. Use 'search' first to find the exact symbol ID if unsure. Follow with get_dependencies for the full transitive subgraph.",
     inputSchema: {
       symbol: z.string().describe("Symbol FQN (e.g. 'src/auth.ts#AuthService.signIn') or short name (BM25 fallback)"),
       repo: z.string().optional().describe("Filter to a specific repository name"),

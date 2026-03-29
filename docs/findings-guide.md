@@ -434,7 +434,7 @@ Hotspot analysis identifies files that are both frequently modified and structur
 - **churnScore** = `(churn / maxChurn) × 100` (normalized independently, 0–100)
 - **complexityScore** = `(symbolCount / maxSymbolCount) × 100` (normalized independently, 0–100)
 - **Hotspot score** = `round((churnScore + complexityScore) / 2)` (average of the two dimensions, 0–100)
-- Files with zero symbols are excluded (config files, docs, etc.)
+- Files with zero symbols are excluded (config files, docs, etc.). Test and spec files are also unconditionally excluded.
 - Default warning threshold: **50**; note threshold: **25** (half of warning)
 
 **Message format:** `File has high churn (<churn> commits) and complexity (<symbolCount> symbols) — hotspot score <score>/100`
