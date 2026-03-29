@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { registerTools } from "./tools.js";
+import { registerTools, WELCOME_BLURB } from "./tools.js";
 import type { Stores } from "./tools.js";
 
 // Stub out network-dependent ingestion helpers so tools that call scanGitHubOrg
@@ -1902,5 +1902,98 @@ describe("get_symbol_importers", () => {
     const result = await invoker("get_symbol_importers", { symbol: "createClient" });
     const parsed = JSON.parse(result.content[0]!.text!) as { package: string | null };
     expect(parsed.package).toBeNull();
+  });
+});
+
+describe("discoverability", () => {
+  // Helper that seeds a search store and returns a server with registered tools
+  async function makeSearchServer() {
+    const stores = makeStores();
+    await stores.searchStore.index([
+      { id: "repo-a:src/auth.ts", content: "auth authentication login", metadata: { repo: "repo-a" } },
+    ]);
+    const server = createMockServer();
+    register(server, stores);
+    return { server, stores };
+  }
+
+  it("tool responses include _hints in JSON payload", async () => {
+    const { server } = await makeSearchServer();
+    const handler = server.tools.get("search")!.handler;
+    const result = await handler({ query: "auth" });
+    const parsed = JSON.parse(result.content[0]!.text) as { _hints?: unknown };
+    expect(Array.isArray(parsed._hints)).toBe(true);
+    expect((parsed._hints as string[]).length).toBeGreaterThan(0);
+    expect(typeof (parsed._hints as string[])[0]).toBe("string");
+  });
+
+  it("_hints are absent when no hints apply", async () => {
+    // get_diagnostics with no SARIF data returns an error object (no _hints path).
+    // Verify that the error response does NOT contain _hints.
+    const server = createMockServer();
+    register(server, makeStores());
+    const handler = server.tools.get("get_diagnostics")!.handler;
+    const result = await handler({});
+    const parsed = JSON.parse(result.content[0]!.text) as Record<string, unknown>;
+    // Error responses are plain { error: "..." } objects — _hints not injected
+    expect(parsed["_hints"]).toBeUndefined();
+  });
+
+  it("tool descriptions include cross-references to other tool names", () => {
+    const server = createMockServer();
+    register(server, makeStores());
+    const allToolNames = [...server.tools.keys()];
+
+    // These are the tools whose descriptions were explicitly enhanced with
+    // cross-references as part of the discoverability feature. Each must
+    // reference at least one other registered tool by name.
+    const enhancedTools = [
+      "query", "search", "get_callers", "get_callees", "get_dependencies",
+      "get_metrics", "get_diagnostics", "get_blast_radius", "get_architecture",
+      "get_cross_repo_graph", "get_service_correlation", "get_cross_repo_models",
+      "get_cross_repo_impact", "get_flag_inventory", "get_flag_impact",
+      "get_patterns", "get_config_inventory", "get_config_model",
+      "get_test_configurations", "get_interaction_strength",
+      "get_hotspots", "get_temporal_coupling", "get_symbol_importers",
+      "get_repo_candidates", "index_repo", "scan_org", "check_new_repos",
+      "get_vulnerability",
+    ];
+
+    for (const name of enhancedTools) {
+      const tool = server.tools.get(name);
+      if (!tool) continue; // skip if not registered in this build
+      const desc = tool.description;
+      const hasCrossRef = allToolNames.some((t) => t !== name && desc.includes(t));
+      expect(hasCrossRef, `Tool '${name}' description has no cross-reference to other tools`).toBe(true);
+    }
+  });
+
+  it("prompt mma-guide is registered", async () => {
+    const { registerPrompts } = await import("./prompts.js");
+
+    type PromptCallback = () => { messages: Array<{ role: string; content: { type: string; text: string } }> };
+    const prompts = new Map<string, PromptCallback>();
+    const promptServer = {
+      prompt: vi.fn((_name: string, _description: string, callback: PromptCallback) => {
+        prompts.set(_name, callback);
+      }),
+    };
+
+    registerPrompts(promptServer as unknown as Parameters<typeof registerPrompts>[0]);
+
+    expect(promptServer.prompt).toHaveBeenCalled();
+    expect(prompts.has("mma-guide")).toBe(true);
+
+    const callback = prompts.get("mma-guide")!;
+    const output = callback();
+    expect(output.messages).toHaveLength(1);
+    expect(output.messages[0]!.role).toBe("user");
+    expect(typeof output.messages[0]!.content.text).toBe("string");
+    expect(output.messages[0]!.content.text.length).toBeGreaterThan(0);
+  });
+
+  it("WELCOME_BLURB is exported and non-empty", () => {
+    expect(typeof WELCOME_BLURB).toBe("string");
+    expect(WELCOME_BLURB.length).toBeGreaterThan(0);
   });
 });

@@ -9,7 +9,7 @@ export function registerSymbolTools(server: McpServer, stores: Stores): void {
 
   // 24. Cross-repo symbol importers
   server.registerTool("get_symbol_importers", {
-    description: "Find which repositories import a specific symbol from a package. Requires cross-repo correlation data with symbol resolution.",
+    description: "Find which repositories import a specific symbol from a package. Requires cross-repo correlation data with symbol resolution. Use after get_cross_repo_graph confirms multiple repos are indexed.",
     inputSchema: {
       symbol: z.string().describe("Symbol name to search for (e.g. 'createClient', 'SupabaseClient')"),
       package: z.string().optional().describe("Package name to filter by (e.g. '@supabase/supabase-js')"),
@@ -94,11 +94,17 @@ export function registerSymbolTools(server: McpServer, stores: Stores): void {
       })),
     }));
 
+    const symbolHints: string[] = [];
+    if (importers.length > 0) {
+      symbolHints.push("Call get_callers on specific importers to trace deeper usage.");
+    } else {
+      symbolHints.push("No importers found — ensure 2+ repos are indexed with cross-repo correlation.");
+    }
     return jsonResult({
       symbol,
       package: pkg ?? null,
       importerCount: importers.length,
       importers,
-    });
+    }, undefined, symbolHints);
   });
 }

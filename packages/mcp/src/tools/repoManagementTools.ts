@@ -9,7 +9,7 @@ export function registerRepoManagementTools(server: McpServer, stores: Stores): 
 
   // 15. Scan GitHub org for repo candidates
   server.registerTool("scan_org", {
-    description: "Scan a GitHub organization to discover repositories. Results are cached in KV and repos are registered as indexing candidates.",
+    description: "Scan a GitHub organization to discover repositories. Results are cached in KV and repos are registered as indexing candidates. Run once per org, then call get_repo_candidates to review before indexing.",
     inputSchema: {
       org: z.string().describe("GitHub organization name"),
       excludeForks: z.boolean().optional().describe("Exclude forked repos (default: true)"),
@@ -50,12 +50,12 @@ export function registerRepoManagementTools(server: McpServer, stores: Stores): 
         stars: r.starCount,
         updatedAt: r.updatedAt,
       })),
-    });
+    }, undefined, result.repos.length > 0 ? ["Call get_repo_candidates to review discovered repos before indexing."] : undefined);
   });
 
   // 16. Get repos in a given state (candidate, indexed, ignored, indexing)
   server.registerTool("get_repo_candidates", {
-    description: "Get repos that are candidates for indexing, with their connection info and discovery source.",
+    description: "Get repos that are candidates for indexing, with their connection info and discovery source. Review candidates here before calling index_repo. Use status:'indexed' to confirm availability.",
     inputSchema: {
       status: z.enum(["candidate", "indexed", "ignored", "indexing"]).optional().describe("Filter by status (default: candidate)"),
     },
@@ -67,6 +67,11 @@ export function registerRepoManagementTools(server: McpServer, stores: Stores): 
     const repos = await stateManager.getByStatus(filterStatus as Parameters<typeof stateManager.getByStatus>[0]);
     const summary = await stateManager.summary();
 
+    const candidateHints = repos.length > 0
+      ? filterStatus === "indexed"
+        ? ["Call get_architecture for a cross-repo overview of indexed repos."]
+        : ["Call index_repo to analyze a candidate."]
+      : undefined;
     return jsonResult({
       status: filterStatus,
       count: repos.length,
@@ -80,12 +85,12 @@ export function registerRepoManagementTools(server: McpServer, stores: Stores): 
         discoveredAt: r.discoveredAt,
         indexedAt: r.indexedAt,
       })),
-    });
+    }, undefined, candidateHints);
   });
 
   // 17. Index a single repository (clone + full pipeline)
   server.registerTool("index_repo", {
-    description: "Index a single repository. Clones (if needed), runs the full analysis pipeline, and updates cross-repo correlations.",
+    description: "Index a single repository. Clones (if needed), runs the full analysis pipeline, and updates cross-repo correlations. After indexing, call get_architecture and get_indexing_state to confirm cross-repo data.",
     inputSchema: {
       name: z.string().describe("Repository name (must be a registered candidate or provide url)"),
       url: z.string().optional().describe("Clone URL (uses stored URL if repo is already a candidate)"),
@@ -122,6 +127,10 @@ export function registerRepoManagementTools(server: McpServer, stores: Stores): 
       const localPath = join(resolvedMirrorDir, `${name}.git`);
 
       // Run full pipeline if indexRepo callback is wired up by the CLI
+      const indexSuccessHints = [
+        "Call get_architecture to see cross-repo structure.",
+        "Call get_diagnostics to review findings for the newly indexed repo.",
+      ];
       if (indexRepo) {
         const result = await indexRepo({ name, localPath, bare: true });
         await stateManager.markIndexed(name);
@@ -131,7 +140,7 @@ export function registerRepoManagementTools(server: McpServer, stores: Stores): 
           hadChanges: result.hadChanges,
           totalFiles: result.totalFiles,
           totalSarifResults: result.totalSarifResults,
-        });
+        }, undefined, indexSuccessHints);
       }
 
       // Fallback: clone only (MCP server started without an indexRepo callback)
@@ -140,7 +149,7 @@ export function registerRepoManagementTools(server: McpServer, stores: Stores): 
         status: "cloned",
         name,
         message: `Repository "${name}" cloned but full analysis requires the MCP server to be started with indexRepo support. Run "mma index" via CLI for complete analysis.`,
-      });
+      }, undefined, indexSuccessHints);
     } catch (err) {
       // Reset state back to "candidate" so the repo can be retried
       try {
@@ -179,7 +188,7 @@ export function registerRepoManagementTools(server: McpServer, stores: Stores): 
 
   // 19. Full indexing state snapshot
   server.registerTool("get_indexing_state", {
-    description: "Get the full indexing state machine snapshot: all repos with their status, discovery source, and connection counts.",
+    description: "Get the full indexing state machine snapshot: all repos with their status, discovery source, and connection counts. If a repo shows indexing status indefinitely, it may have failed.",
     inputSchema: {},
   }, async () => {
     const { RepoStateManager } = await import("@mma/correlation");
@@ -199,12 +208,12 @@ export function registerRepoManagementTools(server: McpServer, stores: Stores): 
         indexedAt: r.indexedAt,
         ignoredAt: r.ignoredAt,
       })),
-    });
+    }, undefined, ["Call get_repo_candidates with status:'candidate' to see repos awaiting indexing."]);
   });
 
   // 20. Diff org scan against known state to find new repos
   server.registerTool("check_new_repos", {
-    description: "Re-scan a GitHub org and diff against known state to find newly added repos.",
+    description: "Re-scan a GitHub org and diff against known state to find newly added repos. Lightweight alternative to re-running scan_org.",
     inputSchema: {
       org: z.string().describe("GitHub organization name"),
     },

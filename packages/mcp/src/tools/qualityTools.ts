@@ -8,7 +8,7 @@ export function registerQualityTools(server: McpServer, stores: Stores): void {
 
   // 21. Hotspot analysis (high-churn × high-complexity files)
   server.registerTool("get_hotspots", {
-    description: "Get hotspot files ranked by churn × complexity score. Hotspots are the riskiest files to change — high change frequency combined with high complexity. Useful for prioritizing refactoring and code review.",
+    description: "Get hotspot files ranked by churn × complexity score. Hotspots are the riskiest files to change — high change frequency combined with high complexity. Useful for prioritizing refactoring and code review. Follow with get_blast_radius on top files to understand change risk, and get_diagnostics for existing issues.",
     inputSchema: {
       repo: z.string().optional().describe("Filter to a specific repository name"),
       limit: z.number().optional().describe("Max results to return (default 20)"),
@@ -59,12 +59,18 @@ export function registerQualityTools(server: McpServer, stores: Stores): void {
       return { ...h, hotspotScore: Math.round((churnScore + complexityScore) / 2) };
     });
     normalized.sort((a, b) => (b.hotspotScore) - (a.hotspotScore));
-    return jsonResult(paginated(normalized, skip, maxResults));
+    const paginatedResult = paginated(normalized, skip, maxResults);
+    const hotspotHints: string[] = [];
+    if (paginatedResult.results.length > 0) {
+      hotspotHints.push("Call get_blast_radius on the top-scored files to assess change risk.");
+      hotspotHints.push("Call get_diagnostics filtered by repo for existing issues in hotspot files.");
+    }
+    return jsonResult(paginatedResult, undefined, hotspotHints.length > 0 ? hotspotHints : undefined);
   });
 
   // 22. Temporal coupling (files that change together without declared dependency)
   server.registerTool("get_temporal_coupling", {
-    description: "Get temporally coupled file pairs — files that frequently change together in commits but may have no declared import dependency. Reveals hidden logical coupling and architectural drift.",
+    description: "Get temporally coupled file pairs — files that frequently change together in commits but may have no declared import dependency. Reveals hidden logical coupling and architectural drift. Pairs without a declared import edge represent hidden coupling — validate with get_dependencies.",
     inputSchema: {
       repo: z.string().optional().describe("Filter to a specific repository name"),
       minCoChanges: z.number().optional().describe("Minimum co-change count to include (default 2)"),
@@ -89,11 +95,16 @@ export function registerQualityTools(server: McpServer, stores: Stores): void {
         const data = JSON.parse(json) as { pairs: Array<Record<string, unknown>>; commitsAnalyzed?: number; commitsSkipped?: number };
         const filtered = (data.pairs ?? []).filter((p) => (p["coChangeCount"] as number) >= minCount);
         filtered.sort((a, b) => (b["coChangeCount"] as number) - (a["coChangeCount"] as number));
+        const tcPaged = paginated(filtered, skip, maxResults);
+        const tcHints: string[] = [];
+        if (tcPaged.results.length > 0) {
+          tcHints.push("Validate hidden coupling by calling get_dependencies on paired files.");
+        }
         return jsonResult({
-          ...paginated(filtered, skip, maxResults),
+          ...tcPaged,
           commitsAnalyzed: data.commitsAnalyzed ?? 0,
           commitsSkipped: data.commitsSkipped ?? 0,
-        });
+        }, undefined, tcHints.length > 0 ? tcHints : undefined);
       } catch {
         return jsonResult({ pairs: [], total: 0, error: "Could not parse temporal coupling data" });
       }
@@ -118,6 +129,11 @@ export function registerQualityTools(server: McpServer, stores: Stores): void {
     }
 
     allPairs.sort((a, b) => (b["coChangeCount"] as number) - (a["coChangeCount"] as number));
-    return jsonResult(paginated(allPairs, skip, maxResults));
+    const allTcPaged = paginated(allPairs, skip, maxResults);
+    const allTcHints: string[] = [];
+    if (allTcPaged.results.length > 0) {
+      allTcHints.push("Validate hidden coupling by calling get_dependencies on paired files.");
+    }
+    return jsonResult(allTcPaged, undefined, allTcHints.length > 0 ? allTcHints : undefined);
   });
 }

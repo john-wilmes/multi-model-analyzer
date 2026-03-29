@@ -58,10 +58,18 @@ function makeInvoker(stores: ReturnType<typeof makeStores>) {
   };
 }
 
-// Parse the JSON text content from a tool response
+// Parse the JSON text content from a tool response.
+// Finds the last text item that looks like JSON (starts with { or [), so it
+// works even if a welcome blurb is prepended as a non-JSON text item.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function parse(result: ToolResult): any {
-  return JSON.parse(result.content.find(c => c.type === "text")!.text!);
+  const textItems = result.content.filter(
+    (c): c is { type: "text"; text: string } => c.type === "text" && typeof (c as { text?: string }).text === "string",
+  );
+  const jsonItem = [...textItems].reverse().find(c => /^\s*[\[{]/.test(c.text));
+  const item = jsonItem ?? textItems[0];
+  if (!item) throw new Error("No text content in tool result");
+  return JSON.parse(item.text) as Record<string, unknown>;
 }
 
 describe("agent scenarios", () => {

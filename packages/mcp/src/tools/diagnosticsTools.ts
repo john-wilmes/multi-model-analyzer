@@ -11,7 +11,7 @@ export function registerDiagnosticsTools(server: McpServer, stores: Stores): voi
 
   // 7. SARIF diagnostics
   server.registerTool("get_diagnostics", {
-    description: "Retrieve SARIF diagnostic findings from the analysis index. Filter by repository, severity level, or keyword search.",
+    description: "Retrieve SARIF diagnostic findings from the analysis index. Filter by repository, severity level, or keyword search. Filter with level:'error' first, then get_blast_radius on affected files. For all findings, read mma://repo/{name}/findings.",
     inputSchema: {
       query: z.string().optional().describe("Keywords to filter diagnostics by (matches ruleId and message text)"),
       repo: z.string().optional().describe("Filter to a specific repository name"),
@@ -64,12 +64,16 @@ export function registerDiagnosticsTools(server: McpServer, stores: Stores): voi
     const links = repo
       ? [{ uri: `mma://repo/${repo}/findings`, name: `${repo} findings`, description: "Full findings for this repository" }]
       : undefined;
-    return jsonResult(page, links);
+    const diagHints: string[] = ["Call get_blast_radius on files in top findings to assess change scope."];
+    if (page.hasMore) {
+      diagHints.unshift(`Showing ${page.returned} of ${page.total} results. Use offset:${(offset ?? 0) + page.returned} to fetch the next page.`);
+    }
+    return jsonResult(page, links, page.results.length > 0 ? diagHints : undefined);
   });
 
   // 9. Blast radius analysis
   server.registerTool("get_blast_radius", {
-    description: "Compute the blast radius of changing one or more files: what other files would be affected via import and call dependencies.",
+    description: "Compute the blast radius of changing one or more files: what other files would be affected via import and call dependencies. Set crossRepo:true when the repo has downstream consumers — check get_cross_repo_graph first.",
     inputSchema: {
       files: z.array(z.string()).describe("File paths to analyze the blast radius for"),
       repo: z.string().optional().describe("Filter to a specific repository name"),
@@ -125,12 +129,19 @@ export function registerDiagnosticsTools(server: McpServer, stores: Stores): voi
     if (crossRepoWarning) {
       sorted["crossRepoWarning"] = crossRepoWarning;
     }
-    return jsonResult(sorted);
+    const blastHints: string[] = [];
+    if ((result.totalAffected ?? 0) > 10) {
+      blastHints.push("High blast radius. Call get_diagnostics on changed files to check for existing issues.");
+    }
+    if (!crossRepo) {
+      blastHints.push("Set crossRepo:true to check downstream repo impact.");
+    }
+    return jsonResult(sorted, undefined, blastHints.length > 0 ? blastHints : undefined);
   });
 
   // Vulnerability reachability findings
   server.registerTool("get_vulnerability", {
-    description: "List vulnerability reachability findings from the latest analysis. Shows which vulnerable dependencies are actually imported in the codebase.",
+    description: "List vulnerability reachability findings from the latest analysis. Shows which vulnerable dependencies are actually imported in the codebase. Follow with get_blast_radius on vulnerable package import sites to see reachability scope.",
     inputSchema: {
       repo: z.string().optional().describe("Filter to a specific repository name"),
       severity: z.enum(["low", "moderate", "high", "critical"]).optional().describe("Filter by minimum severity level"),
@@ -175,6 +186,9 @@ export function registerDiagnosticsTools(server: McpServer, stores: Stores): voi
 
     // Paginate
     const paginatedResults = filtered.slice(skip, skip + maxResults);
-    return jsonResult({ findings: paginatedResults, total: filtered.length, offset: skip, limit: maxResults });
+    const vulnHints = paginatedResults.length > 0
+      ? ["Call get_blast_radius on files importing vulnerable packages to see reachability."]
+      : undefined;
+    return jsonResult({ findings: paginatedResults, total: filtered.length, offset: skip, limit: maxResults }, undefined, vulnHints);
   });
 }

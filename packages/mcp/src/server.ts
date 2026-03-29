@@ -5,6 +5,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { GraphStore, SearchStore, KVStore } from "@mma/storage";
 import { registerTools } from "./tools.js";
 import { registerResources } from "./resources.js";
+import { registerPrompts } from "./prompts.js"; // source: prompts.ts
 import { runWakeUpCheck } from "./wake-up.js";
 
 export interface IndexRepoResult {
@@ -26,14 +27,15 @@ export interface ServerOptions {
   readonly indexRepo?: (repoConfig: { name: string; localPath: string; bare: boolean }) => Promise<IndexRepoResult>;
 }
 
-function createMcpServer(opts: ServerOptions): McpServer {
+function createMcpServer(opts: ServerOptions, { enableWelcome = false } = {}): McpServer {
   const server = new McpServer({
     name: "mma",
     version: "0.1.0",
   });
 
-  registerTools(server, opts);
+  registerTools(server, opts, { welcomeOnFirstCall: enableWelcome });
   registerResources(server, opts.kvStore);
+  registerPrompts(server);
 
   return server;
 }
@@ -54,7 +56,7 @@ function fireWakeUpCheck(kvStore: ServerOptions["kvStore"]): void {
 }
 
 async function startStdioServer(opts: ServerOptions): Promise<void> {
-  const server = createMcpServer(opts);
+  const server = createMcpServer(opts, { enableWelcome: true });
   const transport = new StdioServerTransport();
   await server.connect(transport);
   fireWakeUpCheck(opts.kvStore);

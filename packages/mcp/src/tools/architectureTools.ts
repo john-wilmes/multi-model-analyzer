@@ -11,7 +11,7 @@ export function registerArchitectureTools(server: McpServer, stores: Stores): vo
 
   // 6. Cross-repo architecture overview
   server.registerTool("get_architecture", {
-    description: "Get a cross-repo architecture overview: repo roles, cross-repo dependencies, and service communication topology (queues, HTTP, WebSocket).",
+    description: "Get a cross-repo architecture overview: repo roles, cross-repo dependencies, and service communication topology (queues, HTTP, WebSocket). Start here for system overview. For untruncated edges call get_cross_repo_graph; for service coupling call get_service_correlation.",
     inputSchema: {
       repo: z.string().optional().describe("Filter to a specific repository name"),
     },
@@ -44,12 +44,17 @@ export function registerArchitectureTools(server: McpServer, stores: Stores): vo
     } else {
       truncated["serviceTopology"] = result.serviceTopology;
     }
-    return jsonResult(truncated);
+    const hints: string[] = [];
+    if (truncated["crossRepoEdgesTruncated"]) {
+      hints.push("Edge list truncated. Call get_cross_repo_graph for the full list.");
+    }
+    hints.push("Call get_service_correlation for linchpin analysis.");
+    return jsonResult(truncated, undefined, hints);
   });
 
   // 10. Cross-repo dependency graph
   server.registerTool("get_cross_repo_graph", {
-    description: "Get the cross-repo dependency graph showing which repos depend on which via resolved import/depends-on edges",
+    description: "Get the cross-repo dependency graph showing which repos depend on which via resolved import/depends-on edges. Use after get_architecture for the full edge list. Set includePaths:true for dependency path computation.",
     inputSchema: {
       repo: z.string().optional().describe("Filter to edges involving this repo"),
       includePaths: z.boolean().optional().describe("Include dependency paths between repos"),
@@ -136,12 +141,16 @@ export function registerArchitectureTools(server: McpServer, stores: Stores): vo
       }
     }
 
-    return jsonResult(result);
+    const crossRepoHints: string[] = [];
+    if (filteredEdges.length > 0) {
+      crossRepoHints.push("Call get_blast_radius with crossRepo:true to trace impact through these dependencies.");
+    }
+    return jsonResult(result, undefined, crossRepoHints.length > 0 ? crossRepoHints : undefined);
   });
 
   // 11. Cross-repo service correlation
   server.registerTool("get_service_correlation", {
-    description: "Get cross-repo service correlation: linchpin services/packages with high cross-repo coupling and orphaned services",
+    description: "Get cross-repo service correlation: linchpin services/packages with high cross-repo coupling and orphaned services. After finding linchpins, call get_cross_repo_graph by repo, then get_dependencies for internal structure.",
     inputSchema: {
       endpoint: z.string().optional().describe("Filter by endpoint or package name substring (case-insensitive)"),
       kind: z.enum(["linchpins", "packages", "orphaned", "all"]).optional().describe("Which subset to return: linchpins (HTTP endpoints), packages (shared packages), orphaned, or all (default: all)"),
@@ -194,12 +203,19 @@ export function registerArchitectureTools(server: McpServer, stores: Stores): vo
       }
     }
 
-    return jsonResult(result);
+    const correlationHints: string[] = [];
+    const linchpinResults = result["linchpins"] as { results?: unknown[] } | undefined;
+    const pkgLinchpinResults = result["packageLinchpins"] as { results?: unknown[] } | undefined;
+    const hasLinchpins = (linchpinResults?.results?.length ?? 0) > 0 || (pkgLinchpinResults?.results?.length ?? 0) > 0;
+    if (hasLinchpins) {
+      correlationHints.push("Call get_dependencies on linchpin endpoints to understand internal structure.");
+    }
+    return jsonResult(result, undefined, correlationHints.length > 0 ? correlationHints : undefined);
   });
 
   // 12a. Cross-repo model results (features, faults, catalog)
   server.registerTool("get_cross_repo_models", {
-    description: "Get cross-repo model analysis results: shared feature flags, cascading fault links, and system service catalog. Requires 2+ repos indexed.",
+    description: "Get cross-repo model analysis results: shared feature flags, cascading fault links, and system service catalog. Requires 2+ repos indexed. Use kind:'faults' before get_vulnerability for cascading fault risk across services.",
     inputSchema: {
       kind: z.enum(["features", "faults", "catalog", "all"]).default("all").describe("Which model result to return"),
       repo: z.string().optional().describe("Filter results involving this repo"),
@@ -252,12 +268,17 @@ export function registerArchitectureTools(server: McpServer, stores: Stores): vo
       return jsonResult({ error: "No cross-repo model data. Run 'mma index' with 2+ repos first." });
     }
 
-    return jsonResult(result);
+    const modelsHints: string[] = [];
+    const faultResults = result["faults"] as { results?: unknown[] } | undefined;
+    if ((faultResults?.results?.length ?? 0) > 0) {
+      modelsHints.push("Call get_vulnerability filtered by repo to see reachable CVEs.");
+    }
+    return jsonResult(result, undefined, modelsHints.length > 0 ? modelsHints : undefined);
   });
 
   // 12b. Cross-repo impact analysis
   server.registerTool("get_cross_repo_impact", {
-    description: "Compute cross-repo impact of file changes: which files in the same repo and other repos are transitively affected",
+    description: "Compute cross-repo impact of file changes: which files in the same repo and other repos are transitively affected. Use instead of get_blast_radius when cross-repo scope is needed.",
     inputSchema: {
       files: z.array(z.string()).describe("File paths that are changing"),
       repo: z.string().describe("Repository the changed files belong to"),
@@ -275,12 +296,17 @@ export function registerArchitectureTools(server: McpServer, stores: Stores): vo
     };
     const graph = deserializeGraph(parsed);
     const impact = await computeCrossRepoImpact(files, repo, graphStore, graph);
-    return jsonResult({
+    const impactData = {
       changedFiles: impact.changedFiles,
       changedRepo: impact.changedRepo,
       affectedWithinRepo: impact.affectedWithinRepo,
       affectedAcrossRepos: Object.fromEntries(impact.affectedAcrossRepos),
       reposReached: impact.reposReached,
-    });
+    };
+    const impactHints: string[] = [];
+    if (impact.reposReached > 0) {
+      impactHints.push("Call get_diagnostics on affected repos to check for compounding issues.");
+    }
+    return jsonResult(impactData, undefined, impactHints.length > 0 ? impactHints : undefined);
   });
 }
