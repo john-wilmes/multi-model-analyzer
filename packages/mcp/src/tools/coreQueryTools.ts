@@ -108,7 +108,7 @@ export function registerCoreQueryTools(server: McpServer, stores: Stores): void 
 
   // 8. Module instability metrics
   server.registerTool("get_metrics", {
-    description: "Get module instability metrics (coupling, abstractness, distance from main sequence) for indexed repositories. High instability (I > 0.7) with many dependents = pain-zone module — follow with get_blast_radius.",
+    description: "Get module instability metrics (coupling, abstractness, distance from main sequence) for indexed repositories. Low instability (I < 0.3) with low abstractness (A < 0.3) = pain-zone module (concrete, hard to change) — follow with get_blast_radius.",
     inputSchema: {
       repo: z.string().optional().describe("Filter to a specific repository name"),
       module: z.string().optional().describe("Filter to a specific module (file path)"),

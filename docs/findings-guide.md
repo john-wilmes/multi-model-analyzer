@@ -175,13 +175,13 @@ These rules analyze control flow graphs to find gaps in error handling. The faul
 
 **Severity:** warning
 
-**What it means:** An async operation (Promise, async/await) has no `.catch()` handler, no try/catch wrapper, and no error boundary component (in React contexts).
+**What it means:** An async function uses `await` but has no `try/catch` wrapper, meaning unhandled rejections can escape the function boundary.
 
-**Trigger:** Defined in `FAULT_RULES` with `enabled: false` — detection is not yet implemented. This rule is declared but does not currently fire; no findings are emitted for it.
+**Trigger:** Fires when a function's control flow graph contains an `await` statement with no surrounding `try/catch` block. Implemented in `detectMissingErrorBoundaries()` (`apps/cli/src/commands/indexing/ast-utils.ts`). Note: the rule descriptor in `FAULT_RULES` carries `enabled: false` as a metadata stub, but that flag is not checked at runtime — the detection runs unconditionally.
 
-**Action:** When implemented, add error handling around the async operation. Unhandled promise rejections crash Node.js processes and create silent failures in browsers.
+**Action:** Wrap the `await` expression (or the entire async function body) in a `try/catch`. Unhandled promise rejections crash Node.js processes and create silent failures in browsers.
 
-**When to ignore:** Not applicable — the rule is currently disabled.
+**When to ignore:** Top-level entry points (CLI scripts, test runners) that intentionally let errors propagate to an outer process handler may not need an explicit boundary.
 
 ### `fault/cascading-failure-risk`
 
