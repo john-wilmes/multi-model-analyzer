@@ -11,10 +11,12 @@ vi.mock("@mma/ingestion", () => ({
 const mockAddCandidate = vi.fn();
 const mockGet = vi.fn();
 vi.mock("@mma/correlation", () => ({
-  RepoStateManager: vi.fn().mockImplementation(() => ({
-    addCandidate: mockAddCandidate,
-    get: mockGet,
-  })),
+  RepoStateManager: vi.fn().mockImplementation(function() {
+    return {
+      addCandidate: mockAddCandidate,
+      get: mockGet,
+    };
+  }),
 }));
 
 describe("wake-up check", () => {

@@ -84,7 +84,8 @@ describe("queryCommand", () => {
   let kvStore: InMemoryKVStore;
   let graphStore: InMemoryGraphStore;
   let searchStore: InMemorySearchStore;
-  let consoleSpy: ReturnType<typeof vi.spyOn>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let consoleSpy: { mock: { calls: any[][] } };
 
   beforeEach(() => {
     vi.clearAllMocks();

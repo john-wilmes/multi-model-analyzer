@@ -206,6 +206,7 @@ describe("enrichCommand", () => {
 
     // Stub tier3 to return upgraded summaries for whatever slice is passed
     tier3Mock.mockImplementation(
+      // eslint-disable-next-line @typescript-eslint/no-misused-promises
       async (candidates: Array<{ entityId: string }>) =>
         candidates.map((c) => ({
           entityId: c.entityId,
