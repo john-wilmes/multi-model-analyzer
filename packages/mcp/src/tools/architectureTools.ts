@@ -278,7 +278,7 @@ export function registerArchitectureTools(server: McpServer, stores: Stores): vo
 
   // 12b. Cross-repo impact analysis
   server.registerTool("get_cross_repo_impact", {
-    description: "Compute cross-repo impact of file changes: which files in the same repo and other repos are transitively affected. Use instead of get_blast_radius when cross-repo scope is needed.",
+    description: "Compute cross-repo impact of file changes: which files in the same repo and other repos are transitively affected. Dedicated cross-repo impact analysis. Alternative to get_blast_radius with crossRepo flag for multi-repo change sets.",
     inputSchema: {
       files: z.array(z.string()).describe("File paths that are changing"),
       repo: z.string().describe("Repository the changed files belong to"),

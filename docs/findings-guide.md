@@ -153,7 +153,7 @@ These rules analyze control flow graphs to find gaps in error handling. The faul
 
 **What it means:** A `catch` block in the control flow graph has no logging statement and no re-throw. The error is silently swallowed — if something goes wrong at runtime, there will be no trace in logs and no propagation to callers.
 
-**Trigger:** A CFG node of kind `catch` has no successor nodes matching the logging pattern (`/\b(log(ger)?|error|warn(ing)?|console)\s*[.(]/i`) and no successor of kind `throw`.
+**Trigger:** A CFG node of kind `catch` has no successor nodes matching the logging pattern (`/\b(console|log(ger)?)\s*\.\s*(log|error|warn|info|debug)\s*\(|\b(log|warn|error)\s*\(/`) and no successor of kind `throw`, and no error-forwarding pattern (`.catch(`, `reject(`, `next(err)`).
 
 **Action:** Add logging inside the catch block (at minimum) or re-throw the error if the caller should handle it. Even a `console.error` is better than silence.
 
@@ -431,8 +431,9 @@ Hotspot analysis identifies files that are both frequently modified and structur
 **Trigger:** The hotspot score must meet the threshold:
 - **Churn** = number of distinct commits that touched the file (from `git log`)
 - **Complexity proxy** = number of parsed symbols in the file
-- **Raw score** = `churn × symbolCount`
-- **Normalized score** = `(rawScore / maxRawScore) × 100`, rounded to an integer (0–100 scale, relative to the highest-scoring file in the repo)
+- **churnScore** = `(churn / maxChurn) × 100` (normalized independently, 0–100)
+- **complexityScore** = `(symbolCount / maxSymbolCount) × 100` (normalized independently, 0–100)
+- **Hotspot score** = `round((churnScore + complexityScore) / 2)` (average of the two dimensions, 0–100)
 - Files with zero symbols are excluded (config files, docs, etc.)
 - Default warning threshold: **50**; note threshold: **25** (half of warning)
 
@@ -505,7 +506,7 @@ PageRank parameters: damping factor = 0.85, max iterations = 100, convergence to
 
 ## Cross-Repo
 
-Source: `packages/correlation/src/cross-repo-models.ts`
+Source: `packages/correlation/src/sarif-rules.ts`
 
 Cross-repo rules detect risks that emerge from dependencies between repositories. These findings require multi-repo indexing (2+ repos in `mma.config.json`).
 

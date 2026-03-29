@@ -316,6 +316,6 @@ Last updated: 2026-03-20. See `mma validate` for automated sanity checks.
 | 9 | MEDIUM | Fault detector: console.error not recognized | fault-tree detector | Open |
 | 10 | MEDIUM | Fault detector: .catch() handlers misidentified | fault-tree detector | Open |
 | 11 | MEDIUM | p-queue misidentified as BullMQ | service-call heuristic | Open |
-| 12 | LOW | Arrow fn body leaks into return type | `packages/summarization/src/templates.ts:85` | Fixed (brace-depth tracking in isSignatureComplete) |
+| 12 | LOW | Arrow fn body leaks into return type | `packages/summarization/src/templates.ts` (`extractReturnType`) | Fixed (brace-depth tracking in isSignatureComplete) |
 | 13 | LOW | Narration fabricates pattern count | LLM hallucination | Open |
 | 14 | LOW | 400+ NestJS decorator patterns undetected | pattern detector | Open |
