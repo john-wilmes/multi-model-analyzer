@@ -64,6 +64,7 @@
     "type-check": "tsc --build --noEmit",
     "lint": "eslint packages/ apps/",
     "test": "node --import ./suppress-ipc-close.mjs node_modules/.bin/vitest run && cd apps/dashboard && npx vitest run",
+    "test:precommit": "node --import ./suppress-ipc-close.mjs node_modules/.bin/vitest run --exclude 'packages/storage-kuzu/**' && cd apps/dashboard && npx vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
     "validate:models": "vitest run --config validation/vitest.validation.ts",

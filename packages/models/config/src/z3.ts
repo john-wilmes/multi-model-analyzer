@@ -26,6 +26,7 @@ export interface Z3ValidationResult {
   readonly deadSettings: readonly string[];
   readonly missingDependencies: readonly MissingDependencyFinding[];
   readonly conflictingSettings: readonly ConflictingSettingsFinding[];
+  readonly highInteractionParameters: readonly string[];
 }
 
 export interface MissingDependencyFinding {
@@ -110,6 +111,13 @@ export const CONFIG_RULES: readonly SarifReportingDescriptor[] = [
     },
     defaultConfiguration: { level: "error", enabled: true },
   },
+  {
+    id: "config/high-interaction-strength",
+    shortDescription: {
+      text: "Parameter participates in 3+ way interactions requiring higher-order testing",
+    },
+    defaultConfiguration: { level: "note", enabled: true },
+  },
 ];
 
 export async function validateFeatureModel(
@@ -129,6 +137,7 @@ export async function validateFeatureModel(
   const deadSettings = findDeadSettings(model);
   const missingDependencies = findMissingDependencies(model);
   const conflictingSettings = findConflictingSettings(model);
+  const highInteractionParameters = findHighInteractionStrength(model);
 
   const results: SarifResult[] = [];
 
@@ -168,7 +177,7 @@ export async function validateFeatureModel(
       createSarifResult(
         "config/untested-interaction",
         "note",
-        `Flag interaction [${combo.join(", ")}] has no test coverage`,
+        `Parameter interaction [${combo.join(", ")}] has no test coverage`,
         {
           locations: [{
             logicalLocations: [createLogicalLocation(repo, fqn)],
@@ -257,6 +266,21 @@ export async function validateFeatureModel(
     );
   }
 
+  for (const param of highInteractionParameters) {
+    results.push(
+      createSarifResult(
+        "config/high-interaction-strength",
+        "note",
+        `Parameter "${param}" participates in 3+ way interactions — consider higher-order combinatorial testing`,
+        {
+          locations: [{
+            logicalLocations: [createLogicalLocation(repo, param)],
+          }],
+        },
+      ),
+    );
+  }
+
   return {
     results,
     validation: {
@@ -269,6 +293,7 @@ export async function validateFeatureModel(
       deadSettings,
       missingDependencies,
       conflictingSettings,
+      highInteractionParameters,
     },
   };
 }
@@ -353,7 +378,8 @@ function findImpossibleCombinations(model: FeatureModel): string[][] {
 }
 
 /**
- * Returns inferred flag pairs that have no explicit test coverage.
+ * Returns inferred parameter pairs (flag-flag, setting-setting, or flag-setting)
+ * that have no explicit test coverage.
  *
  * NOTE: This function performs static inference only. It identifies constraint
  * pairs derived from code analysis (source === "inferred") and labels them as
@@ -392,6 +418,46 @@ function findUnregisteredFlags(model: FeatureModel): string[] {
   return model.flags
     .filter((f) => f.isRegistry !== true)
     .map((f) => f.name);
+}
+
+/**
+ * Parameters that participate in 3+ way interactions.
+ *
+ * A parameter has high interaction strength when it co-occurs in constraints
+ * with 3 or more distinct other parameters. This indicates complex
+ * interdependencies requiring higher-order combinatorial testing.
+ */
+function findHighInteractionStrength(model: FeatureModel): string[] {
+  // A parameter has high interaction strength when either:
+  // (a) it appears in a single constraint of arity >= 3, or
+  // (b) it co-occurs with 3 or more distinct other parameters across all constraints.
+  const maxArity = new Map<string, number>();
+  const adjacency = new Map<string, Set<string>>();
+
+  for (const constraint of model.constraints) {
+    const arity = constraint.flags.length;
+    for (const name of constraint.flags) {
+      const current = maxArity.get(name) ?? 0;
+      if (arity > current) maxArity.set(name, arity);
+      if (!adjacency.has(name)) adjacency.set(name, new Set());
+      for (const other of constraint.flags) {
+        if (other !== name) adjacency.get(name)!.add(other);
+      }
+    }
+  }
+
+  const highArity = new Set(
+    [...maxArity.entries()]
+      .filter(([, arity]) => arity >= 3)
+      .map(([name]) => name),
+  );
+  const highNeighbors = new Set(
+    [...adjacency.entries()]
+      .filter(([, neighbors]) => neighbors.size >= 3)
+      .map(([name]) => name),
+  );
+
+  return [...new Set([...highArity, ...highNeighbors])];
 }
 
 // ---------------------------------------------------------------------------

@@ -40,6 +40,7 @@ describe("CONFIG_RULES", () => {
     expect(ids).toContain("config/dead-setting");
     expect(ids).toContain("config/missing-dependency");
     expect(ids).toContain("config/conflicting-settings");
+    expect(ids).toContain("config/high-interaction-strength");
   });
 });
 
@@ -181,6 +182,47 @@ describe("validateFeatureModel", () => {
     const alwaysOnResult = results.find((r) => r.ruleId === "config/always-on-flag");
     expect(alwaysOnResult).toBeDefined();
     expect(alwaysOnResult!.level).toBe("note");
+  });
+
+  it("detects high-interaction-strength parameter appearing in 3+ constraints", async () => {
+    // "hub" co-occurs with A, B, and C in separate requires constraints
+    const model = makeModel(
+      [makeFlag("hub"), makeFlag("A"), makeFlag("B"), makeFlag("C")],
+      [
+        makeConstraint("requires", ["hub", "A"]),
+        makeConstraint("requires", ["hub", "B"]),
+        makeConstraint("requires", ["hub", "C"]),
+      ],
+    );
+
+    const { results, validation } = await validateFeatureModel(model, "repo");
+
+    expect(validation.highInteractionParameters).toContain("hub");
+    const citResult = results.find((r) => r.ruleId === "config/high-interaction-strength");
+    expect(citResult).toBeDefined();
+  });
+
+  it("untested-interaction SARIF message says 'Parameter interaction'", async () => {
+    // Inferred constraint between a flag and a setting
+    const model = makeModel(
+      [makeFlag("flagX")],
+      [makeConstraint("requires", ["flagX", "settingY"], "inferred")],
+      [makeParam("settingY")],
+    );
+
+    const { results } = await validateFeatureModel(model, "repo");
+
+    const untestedResult = results.find((r) => r.ruleId === "config/untested-interaction");
+    expect(untestedResult).toBeDefined();
+    expect(untestedResult!.message.text).toContain("Parameter interaction");
+  });
+
+  it("highInteractionParameters is empty when there are no constraints", async () => {
+    const model = makeModel([makeFlag("a"), makeFlag("b"), makeFlag("c")], []);
+
+    const { validation } = await validateFeatureModel(model, "repo");
+
+    expect(validation.highInteractionParameters).toHaveLength(0);
   });
 });
 

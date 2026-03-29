@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getFlagInventory, computeFlagImpact, getConfigInventory, getConfigModel } from "@mma/query";
-import { validateConfiguration } from "@mma/model-config";
+import { validateConfiguration, generateCoveringArray, computeInteractionStrength } from "@mma/model-config";
 import type { CrossRepoGraph } from "@mma/correlation";
 import { computeCrossRepoImpact } from "@mma/correlation";
 import { z } from "zod";
@@ -213,5 +213,41 @@ export function registerPatternsTools(server: McpServer, stores: Stores): void {
       issueCount: result.issues.length,
       issues: result.issues,
     });
+  });
+
+  // Generate minimal test configurations (covering array)
+  server.registerTool("get_test_configurations", {
+    description: "Generate a minimal set of test configurations covering all pairwise (or t-way) parameter interactions for a repository's config space.",
+    inputSchema: {
+      repo: z.string().describe("Repository name to generate test configs for"),
+      strength: z.number().optional().describe("Interaction strength (2=pairwise, up to 6). Default: 2"),
+      constraintAware: z.boolean().optional().describe("Skip configurations that violate model constraints (default true)"),
+    },
+  }, async ({ repo, strength, constraintAware }) => {
+    const model = await getConfigModel(kvStore, repo);
+    if (!model) {
+      return jsonResult({ error: `No config model found for "${repo}". Run 'mma index' first.` });
+    }
+    const result = generateCoveringArray(model, {
+      strength,
+      constraintAware: constraintAware ?? true,
+    });
+    return jsonResult({ repo, ...result });
+  });
+
+  // Interaction strength for a specific parameter
+  server.registerTool("get_interaction_strength", {
+    description: "Analyze how many other parameters interact with a given configuration parameter based on inferred constraints.",
+    inputSchema: {
+      repo: z.string().describe("Repository name"),
+      parameter: z.string().describe("Parameter name to analyze"),
+    },
+  }, async ({ repo, parameter }) => {
+    const model = await getConfigModel(kvStore, repo);
+    if (!model) {
+      return jsonResult({ error: `No config model found for "${repo}". Run 'mma index' first.` });
+    }
+    const result = computeInteractionStrength(model, parameter);
+    return jsonResult({ repo, ...result });
   });
 }

@@ -101,6 +101,7 @@ describe("registerTools", () => {
       "get_hotspots", "get_temporal_coupling", "get_patterns",
       "get_symbol_importers",
       "get_config_inventory", "get_config_model", "validate_config",
+      "get_test_configurations", "get_interaction_strength",
     ];
 
     for (const tool of expectedTools) {
@@ -249,7 +250,7 @@ describe("resources", () => {
     const server = createResourceMockServer();
     const kvStore = new InMemoryKVStore();
     registerResources(server as unknown as Parameters<typeof registerResources>[0], kvStore);
-    expect(server.resource).toHaveBeenCalledTimes(4);
+    expect(server.resource).toHaveBeenCalledTimes(5);
   });
 });
 
@@ -637,6 +638,7 @@ const ALL_TOOL_NAMES = [
   "get_hotspots", "get_temporal_coupling", "get_patterns",
   "get_symbol_importers",
   "get_config_inventory", "get_config_model", "validate_config",
+  "get_test_configurations", "get_interaction_strength",
 ] as const;
 
 /** Minimal valid args for every tool so we can invoke them without crashes. */
@@ -670,6 +672,8 @@ const MINIMAL_ARGS: Record<string, Record<string, unknown>> = {
   get_config_inventory:   {},
   get_config_model:       { repo: "test-repo" },
   validate_config:        { repo: "test-repo", config: { flagA: true } },
+  get_test_configurations: { repo: "test-repo" },
+  get_interaction_strength: { repo: "test-repo", parameter: "flagA" },
 };
 
 function makeSarifStoresWithRepoMetadata(count: number) {
@@ -701,7 +705,7 @@ function makeInvoker(server: ReturnType<typeof createMockServer>) {
 // ---------------------------------------------------------------------------
 
 describe("MCP tool sanity checks", () => {
-  it("all 29 tools return valid JSON content with text entry", async () => {
+  it("all 31 tools return valid JSON content with text entry", async () => {
     const server = createMockServer();
     register(server, makeStores());
     const invoker = makeInvoker(server);
@@ -1156,10 +1160,10 @@ describe("MCP tool sanity checks", () => {
 // ---------------------------------------------------------------------------
 
 describe("MCP meta-sanity checks", () => {
-  it("exactly 29 tools are registered", () => {
+  it("exactly 31 tools are registered", () => {
     const server = createMockServer();
     register(server, makeStores());
-    expect(server.tools.size).toBe(29);
+    expect(server.tools.size).toBe(31);
   });
 
   it("all registered tools have non-empty descriptions", () => {
@@ -1246,7 +1250,7 @@ describe("MCP meta-sanity checks", () => {
     };
     const kvStore = new InMemoryKVStore();
     registerResources(resourceServer as unknown as Parameters<typeof registerResources>[0], kvStore);
-    expect(resourceServer.resource).toHaveBeenCalledTimes(4);
+    expect(resourceServer.resource).toHaveBeenCalledTimes(5);
   });
 
   it("pagination-capable tools respect limit=0 gracefully", async () => {

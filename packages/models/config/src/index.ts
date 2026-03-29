@@ -10,3 +10,9 @@ export type {
   MissingDependencyFinding,
   ConflictingSettingsFinding,
 } from "./z3.js";
+export { generateCoveringArray, computeInteractionStrength } from "./covering-array.js";
+export type {
+  CoveringArrayOptions,
+  CoveringArrayResult,
+  InteractionStrengthResult,
+} from "./covering-array.js";

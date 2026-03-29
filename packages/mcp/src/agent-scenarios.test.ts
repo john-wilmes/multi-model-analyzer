@@ -594,4 +594,124 @@ describe("agent scenarios", () => {
       expect(legacyOrphan).toBeDefined();
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Scenario 7: "Validate configuration and generate test plan"
+  // Chain: get_config_inventory → get_config_model → validate_config →
+  //        get_test_configurations → get_interaction_strength
+  // ---------------------------------------------------------------------------
+  describe("scenario 7: validate configuration and generate test plan", () => {
+    it("inventories params, checks constraints, validates configs, then generates CIT plan", async () => {
+      const stores = makeStores();
+      const invoke = makeInvoker(stores);
+
+      // Seed config inventory
+      await stores.kvStore.set("config-inventory:platform-svc", JSON.stringify({
+        parameters: [
+          { name: "DATABASE_URL", locations: [{ repo: "platform-svc", module: "src/config.ts" }], kind: "credential", valueType: "string" },
+          { name: "CACHE_TTL", locations: [{ repo: "platform-svc", module: "src/config.ts" }], kind: "setting", valueType: "number", rangeMin: 0, rangeMax: 3600, defaultValue: 300 },
+          { name: "AUTH_PROVIDER", locations: [{ repo: "platform-svc", module: "src/auth.ts" }], kind: "setting", valueType: "enum", enumValues: ["oauth", "saml", "ldap"] },
+          { name: "ENABLE_MFA", locations: [{ repo: "platform-svc", module: "src/auth.ts" }], kind: "flag", valueType: "boolean" },
+          { name: "LOG_LEVEL", locations: [{ repo: "platform-svc", module: "src/logger.ts" }], kind: "setting", valueType: "enum", enumValues: ["debug", "info", "warn", "error"] },
+        ],
+        repo: "platform-svc",
+      }));
+
+      // Seed flag inventory (flags also appear in config inventory as kind: "flag")
+      await stores.kvStore.set("flag-inventory:platform-svc", JSON.stringify({
+        flags: [
+          { name: "ENABLE_MFA", locations: [{ repo: "platform-svc", module: "src/auth.ts", fullyQualifiedName: "src/auth.ts:ENABLE_MFA" }] },
+          { name: "ENABLE_CACHE", locations: [{ repo: "platform-svc", module: "src/cache.ts", fullyQualifiedName: "src/cache.ts:ENABLE_CACHE" }] },
+        ],
+        repo: "platform-svc",
+      }));
+
+      // Seed config model with constraints
+      await stores.kvStore.set("config-model:platform-svc", JSON.stringify({
+        flags: [
+          { name: "ENABLE_MFA", locations: [{ repo: "platform-svc", module: "src/auth.ts" }] },
+          { name: "ENABLE_CACHE", locations: [{ repo: "platform-svc", module: "src/cache.ts" }] },
+        ],
+        constraints: [
+          { kind: "requires", flags: ["AUTH_PROVIDER", "DATABASE_URL"], description: "AUTH_PROVIDER requires DATABASE_URL", source: "inferred" },
+          { kind: "requires", flags: ["ENABLE_MFA", "AUTH_PROVIDER"], description: "ENABLE_MFA requires AUTH_PROVIDER", source: "inferred" },
+          { kind: "enum", flags: ["AUTH_PROVIDER"], description: "AUTH_PROVIDER must be oauth|saml|ldap", source: "schema", allowedValues: ["oauth", "saml", "ldap"] },
+          { kind: "enum", flags: ["LOG_LEVEL"], description: "LOG_LEVEL must be debug|info|warn|error", source: "schema", allowedValues: ["debug", "info", "warn", "error"] },
+          { kind: "requires", flags: ["ENABLE_CACHE", "CACHE_TTL"], description: "ENABLE_CACHE requires CACHE_TTL", source: "inferred" },
+        ],
+        parameters: [
+          { name: "DATABASE_URL", locations: [{ repo: "platform-svc", module: "src/config.ts" }], kind: "credential", valueType: "string" },
+          { name: "CACHE_TTL", locations: [{ repo: "platform-svc", module: "src/config.ts" }], kind: "setting", valueType: "number", rangeMin: 0, rangeMax: 3600, defaultValue: 300 },
+          { name: "AUTH_PROVIDER", locations: [{ repo: "platform-svc", module: "src/auth.ts" }], kind: "setting", valueType: "enum", enumValues: ["oauth", "saml", "ldap"] },
+          { name: "ENABLE_MFA", locations: [{ repo: "platform-svc", module: "src/auth.ts" }], kind: "flag", valueType: "boolean" },
+          { name: "LOG_LEVEL", locations: [{ repo: "platform-svc", module: "src/logger.ts" }], kind: "setting", valueType: "enum", enumValues: ["debug", "info", "warn", "error"] },
+        ],
+      }));
+
+      // Step 1: get config inventory for platform-svc
+      const inventoryResult = parse(await invoke("get_config_inventory", { repo: "platform-svc" }));
+      expect(inventoryResult.total).toBeGreaterThanOrEqual(5);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const params = inventoryResult.parameters as any[];
+      const authProvider = params.find((p: { name: string }) => p.name === "AUTH_PROVIDER");
+      const databaseUrl = params.find((p: { name: string }) => p.name === "DATABASE_URL");
+      expect(authProvider).toBeDefined();
+      expect(databaseUrl).toBeDefined();
+
+      // Step 2: get config model — verify constraints are present
+      const modelResult = parse(await invoke("get_config_model", { repo: "platform-svc" }));
+      expect(modelResult.constraintCount).toBeGreaterThanOrEqual(5);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const constraints = modelResult.constraints as any[];
+      const kinds = constraints.map((c: { kind: string }) => c.kind);
+      expect(kinds).toContain("requires");
+      expect(kinds).toContain("enum");
+
+      // Step 3a: validate a valid config — AUTH_PROVIDER + DATABASE_URL set, satisfying all requires constraints
+      const validResult = parse(await invoke("validate_config", {
+        repo: "platform-svc",
+        config: { AUTH_PROVIDER: "oauth", DATABASE_URL: "postgres://localhost/db", ENABLE_MFA: true },
+      }));
+      expect(validResult.valid).toBe(true);
+      expect(validResult.issueCount).toBe(0);
+
+      // Step 3b: validate an invalid config — ENABLE_MFA without AUTH_PROVIDER
+      const invalidResult = parse(await invoke("validate_config", {
+        repo: "platform-svc",
+        config: { ENABLE_MFA: true },
+      }));
+      expect(invalidResult.valid).toBe(false);
+      expect(invalidResult.issueCount).toBeGreaterThanOrEqual(1);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const issues = invalidResult.issues as any[];
+      const missingAuth = issues.find((i: { message: string }) =>
+        i.message.toLowerCase().includes("auth_provider"),
+      );
+      expect(missingAuth).toBeDefined();
+
+      // Step 4: generate pairwise test configurations
+      // constraintAware: false because single-value params (e.g. DATABASE_URL with no enum)
+      // are excluded from the covering array, which would cause requires-checks to reject
+      // every row. Disabling lets IPOG generate the full pairwise set.
+      const citResult = parse(await invoke("get_test_configurations", {
+        repo: "platform-svc",
+        strength: 2,
+        constraintAware: false,
+      }));
+      expect(citResult.configurations).toBeDefined();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const configurations = citResult.configurations as any[];
+      expect(configurations.length).toBeGreaterThanOrEqual(1);
+      expect(citResult.coverageStats).toBeDefined();
+      expect((citResult.coverageStats as { coveragePercent: number }).coveragePercent).toBeGreaterThan(0);
+
+      // Step 5: check interaction strength for AUTH_PROVIDER
+      // AUTH_PROVIDER connects to DATABASE_URL and ENABLE_MFA via requires constraints
+      const strengthResult = parse(await invoke("get_interaction_strength", {
+        repo: "platform-svc",
+        parameter: "AUTH_PROVIDER",
+      }));
+      expect(strengthResult.interactionCount).toBeGreaterThanOrEqual(2);
+    });
+  });
 });
