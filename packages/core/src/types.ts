@@ -298,13 +298,16 @@ export type FaultNodeKind =
 export interface FeatureModel {
   readonly flags: readonly FeatureFlag[];
   readonly constraints: readonly FeatureConstraint[];
+  readonly parameters?: readonly ConfigParameter[];
 }
 
 export interface FeatureConstraint {
   readonly kind: ConstraintKind;
   readonly flags: readonly string[];
   readonly description: string;
-  readonly source: "inferred" | "human";
+  readonly source: "inferred" | "human" | "schema";
+  readonly condition?: Record<string, unknown>;
+  readonly allowedValues?: readonly unknown[];
 }
 
 export type ConstraintKind =
@@ -312,7 +315,9 @@ export type ConstraintKind =
   | "excludes"
   | "implies"
   | "mutex"
-  | "range";
+  | "range"
+  | "conditional"
+  | "enum";
 
 export interface ServiceCatalogEntry {
   readonly name: string;

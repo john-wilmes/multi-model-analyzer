@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { getFlagInventory, computeFlagImpact } from "@mma/query";
+import { getFlagInventory, computeFlagImpact, getConfigInventory, getConfigModel } from "@mma/query";
+import { validateConfiguration } from "@mma/model-config";
 import type { CrossRepoGraph } from "@mma/correlation";
 import { computeCrossRepoImpact } from "@mma/correlation";
 import { z } from "zod";
@@ -136,5 +137,81 @@ export function registerPatternsTools(server: McpServer, stores: Stores): void {
     }
 
     return jsonResult({ repos: result });
+  });
+
+  // Config inventory: settings, credentials, and flags unified view
+  server.registerTool("get_config_inventory", {
+    description: "List configuration parameters (settings, credentials, flags) detected across indexed repositories. Filter by repo, kind, or substring search.",
+    inputSchema: {
+      repo: z.string().optional().describe("Filter to a specific repository name"),
+      search: z.string().optional().describe("Substring to filter parameter names by (case-insensitive)"),
+      kind: z.enum(["setting", "credential", "flag"]).optional().describe("Filter by parameter kind"),
+      limit: z.number().optional().describe("Max results to return (default 50)"),
+      offset: z.number().optional().describe("Number of results to skip for pagination (default 0)"),
+    },
+  }, async ({ repo, search, kind, limit, offset }) => {
+    const result = await getConfigInventory(kvStore, { repo, search, kind, limit, offset });
+    if (result.total === 0) {
+      return jsonResult({
+        ...result,
+        note: "No config parameters found. Run 'mma index' with settings scanner options configured in the repo config.",
+      });
+    }
+    return jsonResult(result);
+  });
+
+  // Config model: constraint graph for a repository
+  server.registerTool("get_config_model", {
+    description: "Get the constraint model for a repository — shows inferred relationships between flags, settings, and credentials (requires, mutex, enum, conditional constraints).",
+    inputSchema: {
+      repo: z.string().describe("Repository name to get the config model for"),
+    },
+  }, async ({ repo }) => {
+    const model = await getConfigModel(kvStore, repo);
+    if (!model) {
+      return jsonResult({
+        error: `No config model found for "${repo}". Run 'mma index' first. The config model is built when both flag inventory and config inventory are present.`,
+      });
+    }
+
+    // Summarize the model for readability
+    const constraintsByKind: Record<string, number> = {};
+    for (const c of model.constraints) {
+      constraintsByKind[c.kind] = (constraintsByKind[c.kind] ?? 0) + 1;
+    }
+
+    return jsonResult({
+      repo,
+      flagCount: model.flags.length,
+      parameterCount: model.parameters?.length ?? 0,
+      constraintCount: model.constraints.length,
+      constraintsByKind,
+      constraints: model.constraints,
+      parameters: model.parameters,
+    });
+  });
+
+  // Validate a partial configuration against constraints
+  server.registerTool("validate_config", {
+    description: "Check a partial configuration against the constraint model for a repository. Returns validation issues (missing dependencies, conflicts, invalid values).",
+    inputSchema: {
+      repo: z.string().describe("Repository name to validate against"),
+      config: z.record(z.unknown()).describe("Partial configuration to validate — keys are parameter names, values are their settings"),
+    },
+  }, async ({ repo, config }) => {
+    const model = await getConfigModel(kvStore, repo);
+    if (!model) {
+      return jsonResult({
+        error: `No config model found for "${repo}". Run 'mma index' first.`,
+      });
+    }
+
+    const result = validateConfiguration(model, config);
+    return jsonResult({
+      repo,
+      valid: result.valid,
+      issueCount: result.issues.length,
+      issues: result.issues,
+    });
   });
 }

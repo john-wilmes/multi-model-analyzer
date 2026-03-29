@@ -6,7 +6,7 @@
  */
 
 import type { GraphStore, KVStore } from "@mma/storage";
-import type { FlagInventory, FeatureFlag } from "@mma/core";
+import type { FlagInventory, FeatureFlag, ConfigInventory, FeatureModel } from "@mma/core";
 
 /** Yield to the event loop to prevent blocking on large graph traversals. */
 const yieldToEventLoop = (): Promise<void> =>
@@ -243,4 +243,105 @@ function emptyResult(flagName: string, repo: string, maxDepth: number): FlagImpa
     totalAffected: 0,
     maxDepth,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Config inventory and model queries
+// ---------------------------------------------------------------------------
+
+export interface ConfigInventoryResult {
+  readonly total: number;
+  readonly returned: number;
+  readonly offset: number;
+  readonly hasMore: boolean;
+  readonly parameters: ConfigInventoryEntry[];
+}
+
+export interface ConfigInventoryEntry {
+  readonly repo: string;
+  readonly name: string;
+  readonly kind: "setting" | "credential" | "flag";
+  readonly locationCount: number;
+  readonly modules: string[];
+  readonly valueType?: string;
+  readonly defaultValue?: unknown;
+  readonly source?: string;
+}
+
+/**
+ * Retrieve the persisted config inventory across repos.
+ */
+export async function getConfigInventory(
+  kvStore: KVStore,
+  options?: {
+    repo?: string;
+    search?: string;
+    kind?: "setting" | "credential" | "flag";
+    limit?: number;
+    offset?: number;
+  },
+): Promise<ConfigInventoryResult> {
+  const limit = options?.limit ?? 50;
+  const offset = options?.offset ?? 0;
+  const search = options?.search?.toLowerCase();
+
+  const keys = await kvStore.keys("config-inventory:");
+  const allEntries: ConfigInventoryEntry[] = [];
+
+  for (const key of keys) {
+    const repoName = key.slice("config-inventory:".length);
+    if (options?.repo && repoName !== options.repo) continue;
+
+    const raw = await kvStore.get(key);
+    if (!raw) continue;
+
+    let inventory: ConfigInventory;
+    try {
+      inventory = JSON.parse(raw) as ConfigInventory;
+    } catch {
+      continue;
+    }
+
+    for (const param of inventory.parameters) {
+      if (search && !param.name.toLowerCase().includes(search)) continue;
+      if (options?.kind && param.kind !== options.kind) continue;
+
+      allEntries.push({
+        repo: repoName,
+        name: param.name,
+        kind: param.kind,
+        locationCount: param.locations.length,
+        modules: [...new Set(param.locations.map((l) => l.module))],
+        valueType: param.valueType,
+        defaultValue: param.defaultValue,
+        source: param.source,
+      });
+    }
+  }
+
+  const page = allEntries.slice(offset, offset + limit);
+  return {
+    total: allEntries.length,
+    returned: page.length,
+    offset,
+    hasMore: offset + limit < allEntries.length,
+    parameters: page,
+  };
+}
+
+/**
+ * Retrieve the persisted feature/config model for a repository.
+ * The model includes constraints inferred from both flags and settings.
+ */
+export async function getConfigModel(
+  kvStore: KVStore,
+  repo: string,
+): Promise<FeatureModel | null> {
+  const raw = await kvStore.get(`config-model:${repo}`);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as FeatureModel;
+  } catch {
+    return null;
+  }
 }

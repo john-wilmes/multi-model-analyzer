@@ -17,21 +17,30 @@ export async function runPhaseModels(
   const { log, kvStore, graphStore } = ctx;
   const trees = ctx.treesByRepo.get(repo.name);
   const flagInventory = ctx.flagsByRepo.get(repo.name);
+  const configInventory = ctx.settingsByRepo.get(repo.name);
   const logIndex = ctx.logIndexByRepo.get(repo.name);
   const depGraph = ctx.depGraphByRepo.get(repo.name);
 
   const phase6aStart = performance.now();
 
-  // Config model
-  if (!flagInventory || !depGraph || flagInventory.flags.length === 0) {
-    log(`  [${repo.name}] [config]: skipped (${!flagInventory ? "no flag inventory" : !depGraph ? "no dep graph" : "0 flags found"})`);
+  // Config model — runs when flags OR settings are available
+  const hasFlags = flagInventory && flagInventory.flags.length > 0;
+  const hasSettings = configInventory && configInventory.parameters.length > 0;
+  if (!depGraph || (!hasFlags && !hasSettings)) {
+    log(`  [${repo.name}] [config]: skipped (${!depGraph ? "no dep graph" : "no flags or settings found"})`);
   }
-  if (flagInventory && depGraph && flagInventory.flags.length > 0) {
+  if (depGraph && (hasFlags || hasSettings)) {
     try {
-      let featureModel = buildFeatureModel(flagInventory, depGraph);
+      // Build unified feature model from flags + settings
+      const effectiveInventory = flagInventory ?? { repo: repo.name, flags: [] };
+      let featureModel = buildFeatureModel(effectiveInventory, depGraph, configInventory);
 
       if (trees && trees.size > 0) {
-        const codeConstraints = extractConstraintsFromCode(trees, featureModel.flags);
+        const codeConstraints = extractConstraintsFromCode(
+          trees,
+          featureModel.flags,
+          configInventory?.parameters,
+        );
         if (codeConstraints.length > 0) {
           featureModel = {
             flags: featureModel.flags,
@@ -39,6 +48,7 @@ export async function runPhaseModels(
               ...featureModel.constraints,
               ...codeConstraints.map((c) => c.constraint),
             ],
+            ...(featureModel.parameters ? { parameters: featureModel.parameters } : {}),
           };
         }
       }
@@ -46,7 +56,11 @@ export async function runPhaseModels(
       const { results: configResults, validation } = await validateFeatureModel(featureModel, repo.name);
       await kvStore.set(`sarif:config:${repo.name}`, JSON.stringify(configResults));
 
-      log(`  [${repo.name}] [config]: ${featureModel.flags.length} flags, ${featureModel.constraints.length} constraints, ${configResults.length} findings`);
+      // Persist the config model so MCP tools can retrieve it
+      await kvStore.set(`config-model:${repo.name}`, JSON.stringify(featureModel));
+
+      const paramCount = featureModel.parameters?.length ?? 0;
+      log(`  [${repo.name}] [config]: ${featureModel.flags.length} flags, ${paramCount} params, ${featureModel.constraints.length} constraints, ${configResults.length} findings`);
       log(`    dead=${validation.deadFlags.length} always-on=${validation.alwaysOnFlags.length} untested=${validation.inferredUntestedPairs.length} unused-registry=${validation.unusedRegistryFlags.length} unregistered=${validation.unregisteredFlags.length}`);
     } catch (error) {
       console.error(`  Failed to build feature model for ${repo.name}:`, error);
