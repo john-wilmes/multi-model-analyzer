@@ -8,8 +8,7 @@ import { pipeline } from "node:stream/promises";
 
 export async function compressCommand(dbPath: string): Promise<void> {
   if (!existsSync(dbPath)) {
-    console.error(`Database not found: ${dbPath}`);
-    process.exit(1);
+    throw new Error(`Database not found: ${dbPath}`);
   }
 
   const gzPath = `${dbPath}.gz`;

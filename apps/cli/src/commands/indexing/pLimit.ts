@@ -12,7 +12,7 @@ export function pLimit(concurrency: number) {
     new Promise<T>((resolve, reject) => {
       const run = () => {
         active++;
-        fn().then(resolve, reject).finally(() => {
+        Promise.resolve().then(fn).then(resolve, reject).finally(() => {
           active--;
           if (queue.length > 0) queue.shift()!();
         });

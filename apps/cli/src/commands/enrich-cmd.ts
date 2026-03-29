@@ -70,9 +70,10 @@ export async function enrichCommand(options: EnrichOptions): Promise<EnrichResul
   const useCloudLlm = cloudProvider !== undefined;
 
   if (useCloudLlm) {
-    const apiKey = options.llmApiKey ?? process.env.ANTHROPIC_API_KEY ?? "";
+    const envKey = cloudProvider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
+    const apiKey = options.llmApiKey ?? process.env[envKey] ?? "";
     if (!apiKey) {
-      throw new Error(`No API key for ${cloudProvider}. Set --llm-api-key or ANTHROPIC_API_KEY env var.`);
+      throw new Error(`No API key for ${cloudProvider}. Set --llm-api-key or ${envKey} env var.`);
     }
     const available = await isLlmApiAvailable({ provider: cloudProvider, apiKey, timeout: 5_000 });
     if (!available) {
@@ -184,7 +185,8 @@ export async function enrichCommand(options: EnrichOptions): Promise<EnrichResul
         let tier3Results;
         if (useCloudLlm) {
           log(`[enrich]   Tier 3 (${cloudProvider}): upgrading ${capped.length} low-confidence summaries`);
-          const apiKey = options.llmApiKey ?? process.env.ANTHROPIC_API_KEY ?? "";
+          const envKey = cloudProvider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
+          const apiKey = options.llmApiKey ?? process.env[envKey] ?? "";
           const DEFAULT_MODELS: Record<LlmProvider, string> = {
             anthropic: "claude-haiku-4-5-20251001",
             openai: "gpt-4o-mini",
