@@ -1,5 +1,6 @@
 export type {
   // Repository & Ingestion
+  ConfigScopeRule,
   RepoConfig,
   ChangeSet,
   FileKind,

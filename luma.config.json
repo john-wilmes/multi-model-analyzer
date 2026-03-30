@@ -9,52 +9,348 @@
       "name": "integrator-service-clients",
       "url": "https://github.com/lumahealthhq/integrator-service-clients.git",
       "settings": {
-        "configDefinitionNames": ["configuration"],
-        "configObjectNames": ["credentials", "creds", "config"]
+        "configDefinitionNames": [
+          "configuration"
+        ],
+        "configObjectNames": [
+          "credentials",
+          "creds",
+          "config"
+        ],
+        "configScopes": [
+          {
+            "name": "integrator-config",
+            "definitionNames": [
+              "configuration"
+            ],
+            "objectNames": [
+              "credentials",
+              "creds",
+              "options",
+              "opts",
+              "config",
+              "cfg"
+            ]
+          },
+          {
+            "name": "integrator-setting",
+            "accessPatterns": [
+              "settings.integrator.*"
+            ]
+          },
+          {
+            "name": "account-setting",
+            "accessPatterns": [
+              "settings.reminder.*",
+              "settings.cancellation.*",
+              "settings.feedback.*",
+              "settings.scheduler.*",
+              "settings.referral.*",
+              "settings.followup.*",
+              "settings.session.*",
+              "settings.billing.*",
+              "settings.rollouts.*"
+            ]
+          }
+        ]
       }
     },
     {
       "name": "integrator-service",
       "url": "https://github.com/lumahealthhq/integrator-service.git",
       "settings": {
-        "configObjectNames": ["credentials", "settings", "config"]
+        "configObjectNames": [
+          "credentials",
+          "settings",
+          "config"
+        ],
+        "configScopes": [
+          {
+            "name": "integrator-config",
+            "objectNames": [
+              "credentials"
+            ]
+          },
+          {
+            "name": "integrator-setting",
+            "accessPatterns": [
+              "settings.integrator.*"
+            ]
+          },
+          {
+            "name": "account-setting",
+            "accessPatterns": [
+              "settings.reminder.*",
+              "settings.cancellation.*",
+              "settings.feedback.*",
+              "settings.scheduler.*",
+              "settings.referral.*",
+              "settings.followup.*",
+              "settings.session.*",
+              "settings.billing.*",
+              "settings.rollouts.*"
+            ]
+          }
+        ]
       }
     },
     {
       "name": "integrator-api-client",
-      "url": "https://github.com/lumahealthhq/integrator-api-client.git"
+      "url": "https://github.com/lumahealthhq/integrator-api-client.git",
+      "settings": {
+        "configScopes": [
+          {
+            "name": "integrator-config",
+            "objectNames": [
+              "credentials"
+            ]
+          },
+          {
+            "name": "integrator-setting",
+            "accessPatterns": [
+              "settings.integrator.*"
+            ]
+          },
+          {
+            "name": "account-setting",
+            "accessPatterns": [
+              "settings.reminder.*",
+              "settings.cancellation.*",
+              "settings.feedback.*",
+              "settings.scheduler.*",
+              "settings.referral.*",
+              "settings.followup.*",
+              "settings.session.*",
+              "settings.billing.*",
+              "settings.rollouts.*"
+            ]
+          }
+        ]
+      }
     },
     {
       "name": "model-repository",
-      "url": "https://github.com/lumahealthhq/model-repository.git"
+      "url": "https://github.com/lumahealthhq/model-repository.git",
+      "settings": {
+        "configScopes": [
+          {
+            "name": "integrator-setting",
+            "accessPatterns": [
+              "settings.integrator.*"
+            ]
+          },
+          {
+            "name": "account-setting",
+            "accessPatterns": [
+              "settings.reminder.*",
+              "settings.cancellation.*",
+              "settings.feedback.*",
+              "settings.scheduler.*",
+              "settings.referral.*",
+              "settings.followup.*",
+              "settings.session.*",
+              "settings.billing.*",
+              "settings.rollouts.*"
+            ]
+          }
+        ]
+      }
     },
     {
       "name": "luma-utils",
-      "url": "https://github.com/lumahealthhq/luma-utils.git"
+      "url": "https://github.com/lumahealthhq/luma-utils.git",
+      "settings": {
+        "configScopes": [
+          {
+            "name": "integrator-setting",
+            "accessPatterns": [
+              "settings.integrator.*"
+            ]
+          },
+          {
+            "name": "account-setting",
+            "accessPatterns": [
+              "settings.reminder.*",
+              "settings.cancellation.*",
+              "settings.feedback.*",
+              "settings.scheduler.*",
+              "settings.referral.*",
+              "settings.followup.*",
+              "settings.session.*",
+              "settings.billing.*",
+              "settings.rollouts.*"
+            ]
+          }
+        ]
+      }
     },
     {
       "name": "rest-service",
-      "url": "https://github.com/lumahealthhq/rest-service.git"
+      "url": "https://github.com/lumahealthhq/rest-service.git",
+      "settings": {
+        "configScopes": [
+          {
+            "name": "integrator-setting",
+            "accessPatterns": [
+              "settings.integrator.*"
+            ]
+          },
+          {
+            "name": "account-setting",
+            "accessPatterns": [
+              "settings.reminder.*",
+              "settings.cancellation.*",
+              "settings.feedback.*",
+              "settings.scheduler.*",
+              "settings.referral.*",
+              "settings.followup.*",
+              "settings.session.*",
+              "settings.billing.*",
+              "settings.rollouts.*"
+            ]
+          }
+        ]
+      }
     },
     {
       "name": "classic-service",
-      "url": "https://github.com/lumahealthhq/classic-service.git"
+      "url": "https://github.com/lumahealthhq/classic-service.git",
+      "settings": {
+        "configScopes": [
+          {
+            "name": "integrator-setting",
+            "accessPatterns": [
+              "settings.integrator.*"
+            ]
+          },
+          {
+            "name": "account-setting",
+            "accessPatterns": [
+              "settings.reminder.*",
+              "settings.cancellation.*",
+              "settings.feedback.*",
+              "settings.scheduler.*",
+              "settings.referral.*",
+              "settings.followup.*",
+              "settings.session.*",
+              "settings.billing.*",
+              "settings.rollouts.*"
+            ]
+          }
+        ]
+      }
     },
     {
       "name": "patient-form-service",
-      "url": "https://github.com/lumahealthhq/patient-form-service.git"
+      "url": "https://github.com/lumahealthhq/patient-form-service.git",
+      "settings": {
+        "configScopes": [
+          {
+            "name": "integrator-setting",
+            "accessPatterns": [
+              "settings.integrator.*"
+            ]
+          },
+          {
+            "name": "account-setting",
+            "accessPatterns": [
+              "settings.reminder.*",
+              "settings.cancellation.*",
+              "settings.feedback.*",
+              "settings.scheduler.*",
+              "settings.referral.*",
+              "settings.followup.*",
+              "settings.session.*",
+              "settings.billing.*",
+              "settings.rollouts.*"
+            ]
+          }
+        ]
+      }
     },
     {
       "name": "message-service",
-      "url": "https://github.com/lumahealthhq/message-service.git"
+      "url": "https://github.com/lumahealthhq/message-service.git",
+      "settings": {
+        "configScopes": [
+          {
+            "name": "integrator-setting",
+            "accessPatterns": [
+              "settings.integrator.*"
+            ]
+          },
+          {
+            "name": "account-setting",
+            "accessPatterns": [
+              "settings.reminder.*",
+              "settings.cancellation.*",
+              "settings.feedback.*",
+              "settings.scheduler.*",
+              "settings.referral.*",
+              "settings.followup.*",
+              "settings.session.*",
+              "settings.billing.*",
+              "settings.rollouts.*"
+            ]
+          }
+        ]
+      }
     },
     {
       "name": "webhook-service",
-      "url": "https://github.com/lumahealthhq/webhook-service.git"
+      "url": "https://github.com/lumahealthhq/webhook-service.git",
+      "settings": {
+        "configScopes": [
+          {
+            "name": "integrator-setting",
+            "accessPatterns": [
+              "settings.integrator.*"
+            ]
+          },
+          {
+            "name": "account-setting",
+            "accessPatterns": [
+              "settings.reminder.*",
+              "settings.cancellation.*",
+              "settings.feedback.*",
+              "settings.scheduler.*",
+              "settings.referral.*",
+              "settings.followup.*",
+              "settings.session.*",
+              "settings.billing.*",
+              "settings.rollouts.*"
+            ]
+          }
+        ]
+      }
     },
     {
       "name": "workflow-service",
-      "url": "https://github.com/lumahealthhq/workflow-service.git"
+      "url": "https://github.com/lumahealthhq/workflow-service.git",
+      "settings": {
+        "configScopes": [
+          {
+            "name": "integrator-setting",
+            "accessPatterns": [
+              "settings.integrator.*"
+            ]
+          },
+          {
+            "name": "account-setting",
+            "accessPatterns": [
+              "settings.reminder.*",
+              "settings.cancellation.*",
+              "settings.feedback.*",
+              "settings.scheduler.*",
+              "settings.referral.*",
+              "settings.followup.*",
+              "settings.session.*",
+              "settings.billing.*",
+              "settings.rollouts.*"
+            ]
+          }
+        ]
+      }
     }
   ]
 }

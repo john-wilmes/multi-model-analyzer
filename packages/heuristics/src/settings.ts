@@ -11,7 +11,7 @@
  * @see settings.test.ts for unit tests
  */
 
-import type { ConfigParameter, ConfigInventory, ConfigValueType } from "@mma/core";
+import type { ConfigParameter, ConfigInventory, ConfigValueType, ConfigScopeRule } from "@mma/core";
 import type { TreeSitterNode, TreeSitterTree } from "@mma/parsing";
 
 export interface SettingsScannerOptions {
@@ -21,6 +21,7 @@ export interface SettingsScannerOptions {
   readonly validatorLibraries?: readonly string[];
   readonly excludePaths?: readonly RegExp[];
   readonly configDefinitionNames?: readonly string[];
+  readonly configScopes?: readonly ConfigScopeRule[];
 }
 
 const DEFAULT_CONFIG_OBJECT_NAMES = ["config", "settings", "options", "opts", "cfg"];
@@ -41,7 +42,103 @@ const DEFAULT_VALIDATOR_LIBRARIES = ["zod", "joi", "yup", "ajv"];
 
 const DEFAULT_CONFIG_DEFINITION_NAMES = ["configuration"];
 
+/**
+ * Property names that are never config parameters — JS built-in methods,
+ * common prototype properties, and HTTP request option keys that appear
+ * on generic `options` objects.
+ */
+const BUILTIN_PROPERTY_EXCLUSIONS = new Set([
+  // Array/Iterable
+  "length", "map", "filter", "find", "includes", "forEach", "reduce",
+  "some", "every", "push", "pop", "shift", "unshift", "slice", "splice",
+  "concat", "join", "sort", "reverse", "indexOf", "flat", "flatMap",
+  "entries", "keys", "values", "at", "fill",
+  // String
+  "toLowerCase", "toUpperCase", "trim", "trimStart", "trimEnd",
+  "split", "replace", "replaceAll", "startsWith", "endsWith",
+  "match", "search", "substring", "charAt", "charCodeAt",
+  "padStart", "padEnd", "repeat", "normalize",
+  // Object
+  "toString", "valueOf", "hasOwnProperty", "constructor",
+  "toJSON", "toLocaleString",
+  // Promise/async
+  "then", "catch", "finally",
+  // Function
+  "call", "apply", "bind",
+  // Module
+  "default",
+  // HTTP request options (common on `options` objects)
+  "headers", "method", "body", "url", "params", "data",
+  // Framework/infra
+  "get", "set", "delete", "connect", "close", "destroy",
+  "emit", "on", "once", "off", "removeListener",
+  "client", "server", "request", "response",
+]);
+
+/**
+ * Property names that look like method calls rather than config parameters.
+ * Matches getXxx, setXxx, isXxx, hasXxx patterns (camelCase with uppercase after prefix).
+ */
+const METHOD_NAME_PATTERN = /^(get|set|is|has|create|update|delete|remove|fetch|find|add|on|handle|emit)[A-Z]/;
+
 const CREDENTIAL_PROP_PATTERN = /password|secret|key|token|credential|apiKey|auth/i;
+
+/**
+ * Resolve the scope for a config parameter based on configScopes rules.
+ * Returns the scope name or undefined if no rule matches.
+ *
+ * Scopes are evaluated in array order (first match wins). Within each scope,
+ * checks proceed: definitionNames → accessPatterns → objectNames.
+ */
+function resolveScope(
+  scopes: readonly ConfigScopeRule[] | undefined,
+  context: {
+    objectName?: string;
+    propertyName?: string;
+    definitionName?: string;
+  },
+): string | undefined {
+  if (!scopes || scopes.length === 0) return undefined;
+
+  for (const scope of scopes) {
+    // Match by definitionNames (highest priority — mongoose-style definitions)
+    if (context.definitionName && scope.definitionNames?.includes(context.definitionName)) {
+      return scope.name;
+    }
+
+    // Match by accessPatterns (e.g., "settings.integrator.*")
+    if (context.objectName && context.propertyName && scope.accessPatterns) {
+      const fullPath = `${context.objectName}.${context.propertyName}`;
+      for (const pattern of scope.accessPatterns) {
+        if (matchAccessPattern(pattern, fullPath)) {
+          return scope.name;
+        }
+      }
+    }
+
+    // Match by objectNames (lowest priority — broad match on config object name).
+    // For chained access like credentials.insurance.foo, match root "credentials".
+    if (context.objectName && scope.objectNames) {
+      const root = context.objectName.split(".")[0]!;
+      if (scope.objectNames.includes(context.objectName) || scope.objectNames.includes(root)) {
+        return scope.name;
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Match an access pattern like "settings.integrator.*" against a full path
+ * like "settings.integrator.syncWindow". Supports trailing wildcard only.
+ */
+function matchAccessPattern(pattern: string, fullPath: string): boolean {
+  if (pattern.endsWith(".*")) {
+    const prefix = pattern.slice(0, -1); // "settings.integrator."
+    return fullPath.startsWith(prefix);
+  }
+  return fullPath === pattern;
+}
 
 function constructorToValueType(text: string): ConfigValueType | undefined {
   if (text === "String") return "string";
@@ -86,6 +183,7 @@ export function scanForSettings(
   const envVarPrefixes = options.envVarPrefixes ?? DEFAULT_ENV_VAR_PREFIXES;
   const validatorLibraries = options.validatorLibraries ?? DEFAULT_VALIDATOR_LIBRARIES;
   const configDefinitionNames = options.configDefinitionNames ?? DEFAULT_CONFIG_DEFINITION_NAMES;
+  const configScopes = options.configScopes;
 
   for (const [filePath, tree] of files) {
     if (isTestPath(filePath, options.excludePaths)) continue;
@@ -96,6 +194,7 @@ export function scanForSettings(
       filePath,
       repo,
       configObjectNames,
+      configScopes,
     );
     for (const param of configParams) {
       mergeParameter(paramMap, param);
@@ -123,6 +222,7 @@ export function scanForSettings(
       filePath,
       repo,
       configDefinitionNames,
+      configScopes,
     );
     for (const param of mongooseParams) {
       mergeParameter(paramMap, param);
@@ -142,22 +242,58 @@ function findConfigPropertyAccesses(
   filePath: string,
   repo: string,
   configObjectNames: readonly string[],
+  configScopes?: readonly ConfigScopeRule[],
 ): ConfigParameter[] {
   const params: ConfigParameter[] = [];
 
   visitAll(node, (n) => {
     if (n.type !== "member_expression") return;
 
-    const obj = n.namedChildren[0];
     const prop = n.namedChildren[n.namedChildren.length - 1];
-    if (!obj || !prop) return;
+    if (!prop || prop.type !== "property_identifier") return;
 
-    // Only look for direct identifier access (config.foo), not chained (config.foo.bar)
-    if (obj.type !== "identifier") return;
-    if (!configObjectNames.includes(obj.text)) return;
-    if (prop.type !== "property_identifier") return;
+    const obj = n.namedChildren[0];
+    if (!obj) return;
 
+    // Resolve the object chain to get the root identifier and full access path.
+    // Direct access: config.foo → root="config", chain=["config"]
+    // Chained access: settings.integrator.syncWindow → root="settings", chain=["settings","integrator"]
+    let rootName: string | undefined;
+    const chain: string[] = [];
+    let cur = obj;
+    while (cur.type === "member_expression") {
+      const innerProp = cur.namedChildren[cur.namedChildren.length - 1];
+      if (innerProp?.type === "property_identifier") chain.unshift(innerProp.text);
+      const next = cur.namedChildren[0];
+      if (!next) break;
+      cur = next;
+    }
+    if (cur.type === "identifier") {
+      rootName = cur.text;
+      chain.unshift(rootName);
+    }
+    if (!rootName) return;
+
+    // The config object name is what we match against configObjectNames.
+    // For direct access (config.foo), it's the root identifier.
+    // For chained access (settings.integrator.foo), it's the full chain (settings.integrator).
+    const objPath = chain.join(".");
+    const matchesDirect = configObjectNames.includes(rootName);
+    const matchesChain = chain.length > 1 && configObjectNames.includes(objPath);
+
+    // Also check if any accessPattern in configScopes matches this chain + property
     const settingName = prop.text;
+    const fullPath = `${objPath}.${settingName}`;
+    const matchesAccessPattern = configScopes?.some((s) =>
+      s.accessPatterns?.some((p) => matchAccessPattern(p, fullPath)),
+    );
+
+    if (!matchesDirect && !matchesChain && !matchesAccessPattern) return;
+
+    // Skip JS built-in methods/properties that are never config parameters
+    if (BUILTIN_PROPERTY_EXCLUSIONS.has(settingName)) return;
+    // Skip method-like names (getXxx, setXxx, isXxx, etc.)
+    if (METHOD_NAME_PATTERN.test(settingName)) return;
 
     // Look for default value in parent ?? or || expressions
     let defaultValue: unknown = undefined;
@@ -182,12 +318,14 @@ function findConfigPropertyAccesses(
       }
     }
 
+    const scope = resolveScope(configScopes, { objectName: objPath, propertyName: settingName });
     params.push({
       name: settingName,
       locations: [{ repo, module: filePath }],
       kind: "setting",
       ...(valueType !== undefined ? { valueType } : {}),
       ...(defaultValue !== undefined ? { defaultValue } : {}),
+      ...(scope !== undefined ? { scope } : {}),
     });
   });
 
@@ -506,6 +644,7 @@ function mergeParameter(
       source: existing.source !== undefined ? existing.source : param.source,
       required: existing.required !== undefined ? existing.required : param.required,
       description: existing.description !== undefined ? existing.description : param.description,
+      scope: existing.scope !== undefined ? existing.scope : param.scope,
     });
   } else {
     map.set(param.name, param);
@@ -528,11 +667,13 @@ function findMongooseStyleDefinitions(
   filePath: string,
   repo: string,
   configDefinitionNames: readonly string[],
+  configScopes?: readonly ConfigScopeRule[],
 ): ConfigParameter[] {
   const params: ConfigParameter[] = [];
 
   visitAll(node, (n) => {
     let objectNode: TreeSitterNode | null = null;
+    let matchedDefinitionName: string | undefined = undefined;
 
     // Shape A: assignment_expression — Foo.configuration = { ... }
     if (n.type === "assignment_expression") {
@@ -542,6 +683,7 @@ function findMongooseStyleDefinitions(
       if (left.type !== "member_expression") return;
       const prop = left.namedChildren[left.namedChildren.length - 1];
       if (!prop || !configDefinitionNames.includes(prop.text)) return;
+      matchedDefinitionName = prop.text;
       objectNode = right.type === "object" ? right : null;
     }
 
@@ -549,6 +691,7 @@ function findMongooseStyleDefinitions(
     if (n.type === "variable_declarator") {
       const nameNode = n.namedChildren[0];
       if (!nameNode || !configDefinitionNames.includes(nameNode.text)) return;
+      matchedDefinitionName = nameNode.text;
       const valueNode = n.namedChildren[n.namedChildren.length - 1];
       if (!valueNode || valueNode === nameNode) return;
       // Handle satisfies_expression (TS 4.9+) — descend into first child
@@ -611,6 +754,8 @@ function findMongooseStyleDefinitions(
         ? "credential"
         : "setting";
 
+      const scope = resolveScope(configScopes, { definitionName: matchedDefinitionName });
+
       params.push({
         name: propName,
         locations: [{ repo, module: filePath }],
@@ -619,6 +764,7 @@ function findMongooseStyleDefinitions(
         ...(defaultValue !== undefined ? { defaultValue } : {}),
         ...(description !== undefined ? { description } : {}),
         ...(required !== undefined ? { required } : {}),
+        ...(scope !== undefined ? { scope } : {}),
       });
     }
   });

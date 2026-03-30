@@ -7,6 +7,13 @@
 
 // -- Repository & Ingestion --
 
+export interface ConfigScopeRule {
+  readonly name: string;
+  readonly objectNames?: readonly string[];
+  readonly accessPatterns?: readonly string[];
+  readonly definitionNames?: readonly string[];
+}
+
 export interface RepoConfig {
   readonly name: string;
   readonly url: string;
@@ -22,6 +29,7 @@ export interface RepoConfig {
     readonly credentialPatterns?: readonly string[];
     readonly validatorLibraries?: readonly string[];
     readonly configDefinitionNames?: readonly string[];
+    readonly configScopes?: readonly ConfigScopeRule[];
   };
 }
 
@@ -230,6 +238,7 @@ export interface ConfigParameter {
   readonly source?: string;
   readonly description?: string;
   readonly required?: boolean;
+  readonly scope?: string;
 }
 
 export interface ConfigInventory {

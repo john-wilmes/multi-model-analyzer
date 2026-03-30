@@ -266,6 +266,7 @@ export interface ConfigInventoryEntry {
   readonly valueType?: string;
   readonly defaultValue?: unknown;
   readonly source?: string;
+  readonly scope?: string;
 }
 
 /**
@@ -277,6 +278,7 @@ export async function getConfigInventory(
     repo?: string;
     search?: string;
     kind?: "setting" | "credential" | "flag";
+    scope?: string;
     limit?: number;
     offset?: number;
   },
@@ -305,6 +307,7 @@ export async function getConfigInventory(
     for (const param of inventory.parameters) {
       if (search && !param.name.toLowerCase().includes(search)) continue;
       if (options?.kind && param.kind !== options.kind) continue;
+      if (options?.scope && param.scope !== options.scope) continue;
 
       allEntries.push({
         repo: repoName,
@@ -315,6 +318,7 @@ export async function getConfigInventory(
         valueType: param.valueType,
         defaultValue: param.defaultValue,
         source: param.source,
+        scope: param.scope,
       });
     }
   }

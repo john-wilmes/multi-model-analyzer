@@ -473,4 +473,220 @@ describe("scanForSettings", () => {
       expect(result.parameters.find(p => p.name === "metadata")?.valueType).toBe("unknown");
     });
   });
+
+  describe("configScopes", () => {
+    it("objectNames scope matching assigns scope to params from named object", () => {
+      const files = makeFiles({
+        "src/app.ts": `
+          const url = credentials.dbURL;
+        `,
+      });
+      const result = scanForSettings(files, "repo", {
+        configObjectNames: ["credentials"],
+        configScopes: [{ name: "integrator-config", objectNames: ["credentials"] }],
+      });
+      const param = result.parameters.find((p) => p.name === "dbURL");
+      expect(param).toBeDefined();
+      expect(param!.scope).toBe("integrator-config");
+    });
+
+    it("accessPatterns scope matching assigns scope for chained access paths", () => {
+      const files = makeFiles({
+        "src/app.ts": `
+          const window = settings.integrator.syncWindow;
+          const enabled = settings.reminder.enabled;
+        `,
+      });
+      const result = scanForSettings(files, "repo", {
+        configScopes: [
+          { name: "integrator-setting", accessPatterns: ["settings.integrator.*"] },
+          { name: "account-setting", accessPatterns: ["settings.reminder.*"] },
+        ],
+      });
+      const intParam = result.parameters.find((p) => p.name === "syncWindow");
+      expect(intParam).toBeDefined();
+      expect(intParam!.scope).toBe("integrator-setting");
+
+      const acctParam = result.parameters.find((p) => p.name === "enabled");
+      expect(acctParam).toBeDefined();
+      expect(acctParam!.scope).toBe("account-setting");
+    });
+
+    it("definitionNames scope matching assigns scope from mongoose-style definition", () => {
+      const files = makeFiles({
+        "src/client.js": `
+          Foo.configuration = { myProp: { type: Boolean, default: false } };
+        `,
+      });
+      const result = scanForSettings(files, "repo", {
+        configDefinitionNames: ["configuration"],
+        configScopes: [{ name: "integrator-config", definitionNames: ["configuration"] }],
+      });
+      const param = result.parameters.find((p) => p.name === "myProp");
+      expect(param).toBeDefined();
+      expect(param!.scope).toBe("integrator-config");
+    });
+
+    it("scope and kind are orthogonal — password from definition gets credential kind and scope", () => {
+      const files = makeFiles({
+        "src/client.js": `
+          Foo.configuration = { password: String };
+        `,
+      });
+      const result = scanForSettings(files, "repo", {
+        configDefinitionNames: ["configuration"],
+        configScopes: [{ name: "integrator-config", definitionNames: ["configuration"] }],
+      });
+      const param = result.parameters.find((p) => p.name === "password");
+      expect(param).toBeDefined();
+      expect(param!.kind).toBe("credential");
+      expect(param!.scope).toBe("integrator-config");
+    });
+
+    it("no scope when no rules match", () => {
+      const files = makeFiles({
+        "src/app.ts": `
+          const t = config.timeout;
+        `,
+      });
+      const result = scanForSettings(files, "repo", {
+        configScopes: [{ name: "other-scope", objectNames: ["otherObj"] }],
+      });
+      const param = result.parameters.find((p) => p.name === "timeout");
+      expect(param).toBeDefined();
+      expect(param!.scope).toBeUndefined();
+    });
+
+    it("multiple scopes — first match wins when both objectNames rules could match", () => {
+      const files = makeFiles({
+        "src/app.ts": `
+          const x = credentials.apiHost;
+        `,
+      });
+      const result = scanForSettings(files, "repo", {
+        configObjectNames: ["credentials"],
+        configScopes: [
+          { name: "first-scope", objectNames: ["credentials"] },
+          { name: "second-scope", objectNames: ["credentials"] },
+        ],
+      });
+      const param = result.parameters.find((p) => p.name === "apiHost");
+      expect(param).toBeDefined();
+      expect(param!.scope).toBe("first-scope");
+    });
+
+    it("merge preserves scope — first non-undefined scope wins across files", () => {
+      const files = makeFiles({
+        "src/definition.ts": `
+          Client.configuration = { retryCount: Number };
+        `,
+        "src/usage.ts": `
+          const x = config.retryCount;
+        `,
+      });
+      const result = scanForSettings(files, "repo", {
+        configDefinitionNames: ["configuration"],
+        configScopes: [{ name: "integrator-config", definitionNames: ["configuration"] }],
+      });
+      const params = result.parameters.filter((p) => p.name === "retryCount");
+      expect(params).toHaveLength(1);
+      expect(params[0]!.locations).toHaveLength(2);
+      expect(params[0]!.scope).toBe("integrator-config");
+    });
+  });
+
+  describe("built-in property exclusions", () => {
+    it("excludes JS built-in methods on config objects", () => {
+      const files = makeFiles({
+        "src/app.ts": `
+          const items = options.map(x => x.id);
+          const hasIt = options.includes("foo");
+          const len = options.length;
+          const lower = config.toLowerCase();
+          const parts = settings.split(",");
+          const str = opts.toString();
+        `,
+      });
+      const result = scanForSettings(files, "repo");
+      const names = result.parameters.map((p) => p.name);
+      expect(names).not.toContain("map");
+      expect(names).not.toContain("includes");
+      expect(names).not.toContain("length");
+      expect(names).not.toContain("toLowerCase");
+      expect(names).not.toContain("split");
+      expect(names).not.toContain("toString");
+    });
+
+    it("excludes HTTP request option properties", () => {
+      const files = makeFiles({
+        "src/client.ts": `
+          const h = options.headers;
+          const m = options.method;
+          const d = options.data;
+          const p = options.params;
+        `,
+      });
+      const result = scanForSettings(files, "repo");
+      const names = result.parameters.map((p) => p.name);
+      expect(names).not.toContain("headers");
+      expect(names).not.toContain("method");
+      expect(names).not.toContain("data");
+      expect(names).not.toContain("params");
+    });
+
+    it("excludes method-like names (getXxx, setXxx, etc.)", () => {
+      const files = makeFiles({
+        "src/service.ts": `
+          const p = options.getPatient;
+          const c = config.getWhitespacesFromCache;
+          const s = settings.setLogLevel;
+          const h = opts.handleRequest;
+        `,
+      });
+      const result = scanForSettings(files, "repo");
+      const names = result.parameters.map((p) => p.name);
+      expect(names).not.toContain("getPatient");
+      expect(names).not.toContain("getWhitespacesFromCache");
+      expect(names).not.toContain("setLogLevel");
+      expect(names).not.toContain("handleRequest");
+    });
+
+    it("scope objectNames matches root of chained access", () => {
+      const files = makeFiles({
+        "src/app.ts": `
+          const m = credentials.insurance.relationshipMapping;
+          const w = options.whitespace.enabled;
+        `,
+      });
+      const result = scanForSettings(files, "repo", {
+        configObjectNames: ["credentials", "options"],
+        configScopes: [
+          { name: "integrator-config", objectNames: ["credentials", "options"] },
+        ],
+      });
+      const names = result.parameters.map((p) => p.name);
+      expect(names).toContain("relationshipMapping");
+      expect(names).toContain("enabled");
+      for (const p of result.parameters) {
+        expect(p.scope).toBe("integrator-config");
+      }
+    });
+
+    it("does NOT exclude legitimate config names", () => {
+      const files = makeFiles({
+        "src/app.ts": `
+          const t = config.timeout;
+          const r = options.maxRetries;
+          const s = settings.syncWindow;
+          const w = options.whitespaces;
+        `,
+      });
+      const result = scanForSettings(files, "repo");
+      const names = result.parameters.map((p) => p.name);
+      expect(names).toContain("timeout");
+      expect(names).toContain("maxRetries");
+      expect(names).toContain("syncWindow");
+      expect(names).toContain("whitespaces");
+    });
+  });
 });
