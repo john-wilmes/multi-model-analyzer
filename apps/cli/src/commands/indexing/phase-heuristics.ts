@@ -336,6 +336,7 @@ export async function runPhaseHeuristics(
         envVarPrefixes: repo.settings.envVarPrefixes,
         credentialPatterns: repo.settings.credentialPatterns,
         validatorLibraries: repo.settings.validatorLibraries,
+        configDefinitionNames: repo.settings.configDefinitionNames,
       } : undefined);
 
       // Incremental mode: merge with cached parameters for files not re-scanned

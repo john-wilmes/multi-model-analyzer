@@ -315,4 +315,162 @@ describe("scanForSettings", () => {
     expect(param!.locations).toHaveLength(1);
     expect(param!.locations[0]!.module).toBe("src/app.ts");
   });
+
+  describe("mongoose-style config definitions", () => {
+    it("detects JS assignment form with bare type identifiers", () => {
+      const files = makeFiles({
+        "src/client.js": `
+          AthenaHealth.configuration = {
+            username: String,
+            skipSync: Boolean,
+            maxRetries: Number,
+          };
+        `,
+      });
+      const result = scanForSettings(files, "repo");
+      expect(result.parameters).toHaveLength(3);
+      expect(result.parameters.find(p => p.name === "username")).toMatchObject({
+        valueType: "string", kind: "setting",
+      });
+      expect(result.parameters.find(p => p.name === "skipSync")).toMatchObject({
+        valueType: "boolean",
+      });
+      expect(result.parameters.find(p => p.name === "maxRetries")).toMatchObject({
+        valueType: "number",
+      });
+    });
+
+    it("extracts nested object metadata (type, default, description, required)", () => {
+      const files = makeFiles({
+        "src/client.js": `
+          MyClient.configuration = {
+            practiceId: { type: String, required: true },
+            importWhitespace: { type: Boolean, default: false, description: 'Enable whitespace import' },
+            maxConnections: { type: Number, default: 10, required: false },
+          };
+        `,
+      });
+      const result = scanForSettings(files, "repo");
+      expect(result.parameters).toHaveLength(3);
+
+      const practiceId = result.parameters.find(p => p.name === "practiceId");
+      expect(practiceId).toMatchObject({
+        valueType: "string", required: true,
+      });
+
+      const importWs = result.parameters.find(p => p.name === "importWhitespace");
+      expect(importWs).toMatchObject({
+        valueType: "boolean", defaultValue: false, description: "Enable whitespace import",
+      });
+
+      const maxConn = result.parameters.find(p => p.name === "maxConnections");
+      expect(maxConn).toMatchObject({
+        valueType: "number", defaultValue: 10, required: false,
+      });
+    });
+
+    it("detects variable declaration form", () => {
+      const files = makeFiles({
+        "src/config.ts": `
+          export const configuration = {
+            practiceId: { type: String, required: true },
+            showFrozenSlots: { type: Boolean, default: true },
+          };
+        `,
+      });
+      const result = scanForSettings(files, "repo");
+      expect(result.parameters).toHaveLength(2);
+      expect(result.parameters.find(p => p.name === "practiceId")).toBeDefined();
+      expect(result.parameters.find(p => p.name === "showFrozenSlots")).toMatchObject({
+        defaultValue: true,
+      });
+    });
+
+    it("classifies credential properties by name", () => {
+      const files = makeFiles({
+        "src/client.js": `
+          Client.configuration = {
+            password: String,
+            apiKey: String,
+            secretToken: { type: String, required: true },
+            normalSetting: Boolean,
+          };
+        `,
+      });
+      const result = scanForSettings(files, "repo");
+      expect(result.parameters.find(p => p.name === "password")?.kind).toBe("credential");
+      expect(result.parameters.find(p => p.name === "apiKey")?.kind).toBe("credential");
+      expect(result.parameters.find(p => p.name === "secretToken")?.kind).toBe("credential");
+      expect(result.parameters.find(p => p.name === "normalSetting")?.kind).toBe("setting");
+    });
+
+    it("respects custom configDefinitionNames option", () => {
+      const files = makeFiles({
+        "src/client.js": `
+          Client.myConfig = { host: String };
+          Client.configuration = { port: Number };
+        `,
+      });
+      const result = scanForSettings(files, "repo", {
+        configDefinitionNames: ["myConfig"],
+      });
+      expect(result.parameters.find(p => p.name === "host")).toBeDefined();
+      expect(result.parameters.find(p => p.name === "port")).toBeUndefined();
+    });
+
+    it("does not match arbitrary variable names against default", () => {
+      const files = makeFiles({
+        "src/app.ts": `
+          const otherName = { username: String };
+        `,
+      });
+      const result = scanForSettings(files, "repo");
+      expect(result.parameters.find(p => p.name === "username")).toBeUndefined();
+    });
+
+    it("excludes test files", () => {
+      const files = makeFiles({
+        "src/client.test.ts": `
+          Client.configuration = { host: String };
+        `,
+      });
+      const result = scanForSettings(files, "repo");
+      expect(result.parameters).toHaveLength(0);
+    });
+
+    it("merges definition with runtime access", () => {
+      const files = makeFiles({
+        "src/config.ts": `
+          Client.configuration = {
+            practiceId: { type: String, required: true },
+          };
+        `,
+        "src/service.ts": `
+          const x = credentials.practiceId;
+        `,
+      });
+      const result = scanForSettings(files, "repo", {
+        configObjectNames: ["credentials"],
+      });
+      // Should be merged into one parameter with two locations
+      const params = result.parameters.filter(p => p.name === "practiceId");
+      expect(params).toHaveLength(1);
+      expect(params[0]!.locations).toHaveLength(2);
+      expect(params[0]!.valueType).toBe("string"); // from the definition
+    });
+
+    it("handles Array and Object types as unknown", () => {
+      const files = makeFiles({
+        "src/client.js": `
+          Client.configuration = {
+            tags: Array,
+            metadata: { type: Object, default: {} },
+          };
+        `,
+      });
+      const result = scanForSettings(files, "repo");
+      expect(result.parameters.find(p => p.name === "tags")?.valueType).toBe("unknown");
+      expect(result.parameters.find(p => p.name === "metadata")?.valueType).toBe("unknown");
+    });
+  });
 });

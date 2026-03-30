@@ -20,6 +20,7 @@ export interface SettingsScannerOptions {
   readonly credentialPatterns?: readonly string[];
   readonly validatorLibraries?: readonly string[];
   readonly excludePaths?: readonly RegExp[];
+  readonly configDefinitionNames?: readonly string[];
 }
 
 const DEFAULT_CONFIG_OBJECT_NAMES = ["config", "settings", "options", "opts", "cfg"];
@@ -37,6 +38,19 @@ const CREDENTIAL_SUFFIX_PATTERN = /(_KEY|_SECRET|_TOKEN|_PASSWORD|_CREDENTIAL)$/
 const FLAG_ENV_PATTERN = /^(FEATURE_|FF_|FLAG_|ENABLE_|DISABLE_|IS_\w+_ENABLED)/;
 
 const DEFAULT_VALIDATOR_LIBRARIES = ["zod", "joi", "yup", "ajv"];
+
+const DEFAULT_CONFIG_DEFINITION_NAMES = ["configuration"];
+
+const CREDENTIAL_PROP_PATTERN = /password|secret|key|token|credential|apiKey|auth/i;
+
+function constructorToValueType(text: string): ConfigValueType | undefined {
+  if (text === "String") return "string";
+  if (text === "Number") return "number";
+  if (text === "Boolean") return "boolean";
+  if (text === "Array") return "unknown";
+  if (text === "Object") return "unknown";
+  return undefined;
+}
 
 /**
  * Path patterns that indicate test/setup files — settings found in these
@@ -71,6 +85,7 @@ export function scanForSettings(
   const configObjectNames = options.configObjectNames ?? DEFAULT_CONFIG_OBJECT_NAMES;
   const envVarPrefixes = options.envVarPrefixes ?? DEFAULT_ENV_VAR_PREFIXES;
   const validatorLibraries = options.validatorLibraries ?? DEFAULT_VALIDATOR_LIBRARIES;
+  const configDefinitionNames = options.configDefinitionNames ?? DEFAULT_CONFIG_DEFINITION_NAMES;
 
   for (const [filePath, tree] of files) {
     if (isTestPath(filePath, options.excludePaths)) continue;
@@ -100,6 +115,17 @@ export function scanForSettings(
       for (const param of schemaParams) {
         mergeParameter(paramMap, param);
       }
+    }
+
+    // Scan for mongoose-style static config definitions
+    const mongooseParams = findMongooseStyleDefinitions(
+      tree.rootNode,
+      filePath,
+      repo,
+      configDefinitionNames,
+    );
+    for (const param of mongooseParams) {
+      mergeParameter(paramMap, param);
     }
   }
 
@@ -478,10 +504,126 @@ function mergeParameter(
       rangeMax: existing.rangeMax !== undefined ? existing.rangeMax : param.rangeMax,
       enumValues: existing.enumValues !== undefined ? existing.enumValues : param.enumValues,
       source: existing.source !== undefined ? existing.source : param.source,
+      required: existing.required !== undefined ? existing.required : param.required,
+      description: existing.description !== undefined ? existing.description : param.description,
     });
   } else {
     map.set(param.name, param);
   }
+}
+
+/**
+ * Detect mongoose-style static configuration object definitions.
+ * Handles two patterns:
+ *
+ * Assignment: `Foo.configuration = { username: String, ... }`
+ * Variable:   `export const configuration = { ... } satisfies IntegrationConfig<...>`
+ *
+ * Each property in the object is extracted as a ConfigParameter.
+ * Properties with bare constructor values (String, Boolean, Number) get their type inferred.
+ * Properties with nested objects ({ type: Boolean, default: false, ... }) get full metadata.
+ */
+function findMongooseStyleDefinitions(
+  node: TreeSitterNode,
+  filePath: string,
+  repo: string,
+  configDefinitionNames: readonly string[],
+): ConfigParameter[] {
+  const params: ConfigParameter[] = [];
+
+  visitAll(node, (n) => {
+    let objectNode: TreeSitterNode | null = null;
+
+    // Shape A: assignment_expression — Foo.configuration = { ... }
+    if (n.type === "assignment_expression") {
+      const left = n.namedChildren[0];
+      const right = n.namedChildren[1];
+      if (!left || !right) return;
+      if (left.type !== "member_expression") return;
+      const prop = left.namedChildren[left.namedChildren.length - 1];
+      if (!prop || !configDefinitionNames.includes(prop.text)) return;
+      objectNode = right.type === "object" ? right : null;
+    }
+
+    // Shape B: variable_declarator — const configuration = { ... } [satisfies ...]
+    if (n.type === "variable_declarator") {
+      const nameNode = n.namedChildren[0];
+      if (!nameNode || !configDefinitionNames.includes(nameNode.text)) return;
+      const valueNode = n.namedChildren[n.namedChildren.length - 1];
+      if (!valueNode || valueNode === nameNode) return;
+      // Handle satisfies_expression (TS 4.9+) — descend into first child
+      if (valueNode.type === "satisfies_expression") {
+        const inner = valueNode.namedChildren[0];
+        objectNode = inner?.type === "object" ? inner : null;
+      } else if (valueNode.type === "object") {
+        objectNode = valueNode;
+      }
+    }
+
+    if (!objectNode) return;
+
+    for (const prop of objectNode.namedChildren) {
+      if (prop.type !== "pair") continue;
+      const keyNode = prop.namedChildren[0];
+      const valueNode = prop.namedChildren[1];
+      if (!keyNode || !valueNode) continue;
+
+      const propName = keyNode.text.replace(/['"]/g, "");
+
+      let valueType: ConfigValueType = "unknown";
+      let defaultValue: unknown = undefined;
+      let description: string | undefined = undefined;
+      let required: boolean | undefined = undefined;
+
+      if (valueNode.type === "identifier") {
+        // Bare constructor: `username: String`
+        valueType = constructorToValueType(valueNode.text) ?? "unknown";
+      } else if (valueNode.type === "object") {
+        // Nested object: `{ type: Boolean, default: false, description: '...' }`
+        for (const inner of valueNode.namedChildren) {
+          if (inner.type !== "pair") continue;
+          const innerKey = inner.namedChildren[0];
+          const innerVal = inner.namedChildren[1];
+          if (!innerKey || !innerVal) continue;
+          const k = innerKey.text.replace(/['"]/g, "");
+
+          if (k === "type" && innerVal.type === "identifier") {
+            valueType = constructorToValueType(innerVal.text) ?? "unknown";
+          } else if (k === "default") {
+            const extracted = extractLiteralValue(innerVal);
+            if (extracted !== null) {
+              defaultValue = extracted.value;
+              if (valueType === "unknown") valueType = extracted.type;
+            }
+          } else if (k === "description") {
+            const extracted = extractLiteralValue(innerVal);
+            if (extracted !== null && typeof extracted.value === "string") {
+              description = extracted.value;
+            }
+          } else if (k === "required") {
+            required = innerVal.text === "true";
+          }
+        }
+      }
+
+      // Determine kind — credential if property name matches credential pattern
+      const kind: "setting" | "credential" = CREDENTIAL_PROP_PATTERN.test(propName)
+        ? "credential"
+        : "setting";
+
+      params.push({
+        name: propName,
+        locations: [{ repo, module: filePath }],
+        kind,
+        valueType,
+        ...(defaultValue !== undefined ? { defaultValue } : {}),
+        ...(description !== undefined ? { description } : {}),
+        ...(required !== undefined ? { required } : {}),
+      });
+    }
+  });
+
+  return params;
 }
 
 interface LiteralExtraction {

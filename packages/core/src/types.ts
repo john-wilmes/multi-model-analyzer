@@ -21,6 +21,7 @@ export interface RepoConfig {
     readonly envVarPrefixes?: readonly string[];
     readonly credentialPatterns?: readonly string[];
     readonly validatorLibraries?: readonly string[];
+    readonly configDefinitionNames?: readonly string[];
   };
 }
 
@@ -228,6 +229,7 @@ export interface ConfigParameter {
   readonly rangeMax?: number;
   readonly source?: string;
   readonly description?: string;
+  readonly required?: boolean;
 }
 
 export interface ConfigInventory {

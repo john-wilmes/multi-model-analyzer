@@ -7,11 +7,18 @@
   "repos": [
     {
       "name": "integrator-service-clients",
-      "url": "https://github.com/lumahealthhq/integrator-service-clients.git"
+      "url": "https://github.com/lumahealthhq/integrator-service-clients.git",
+      "settings": {
+        "configDefinitionNames": ["configuration"],
+        "configObjectNames": ["credentials", "creds", "config"]
+      }
     },
     {
       "name": "integrator-service",
-      "url": "https://github.com/lumahealthhq/integrator-service.git"
+      "url": "https://github.com/lumahealthhq/integrator-service.git",
+      "settings": {
+        "configObjectNames": ["credentials", "settings", "config"]
+      }
     },
     {
       "name": "integrator-api-client",
