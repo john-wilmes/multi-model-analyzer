@@ -101,6 +101,8 @@ Opens a local web UI at `http://localhost:3000`. The dashboard has several views
 - **Hotspots**: Files with high churn and complexity.
 - **Patterns**: Detected design patterns and structural conventions.
 
+Drill-down views (navigated from the views above): Repo Detail, Module Detail, Dependency Graph, and Blast Radius.
+
 ## Sharing a Baseline
 
 Indexing large repos can take several minutes. Baselines let you share pre-built analysis databases with teammates.
