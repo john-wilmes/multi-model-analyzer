@@ -11,6 +11,7 @@ import {
   checkBlastRadius,
   validateCommand,
   resetCaches,
+  checkSanityConfigValidation,
 } from "./validate-cmd.js";
 
 vi.mock("@mma/ingestion", async () => {
@@ -639,5 +640,122 @@ describe("validateCommand output formats", () => {
     } finally {
       console.log = origLog;
     }
+  });
+});
+
+// ─── checkSanityConfigValidation ────────────────────────────
+
+describe("checkSanityConfigValidation", () => {
+  const validParam = {
+    name: "db.host",
+    kind: "setting",
+    locations: [{ repo: "repo1", module: "src/config.ts" }],
+  };
+
+  const validInventory = {
+    repo: "repo1",
+    parameters: [validParam],
+  };
+
+  const validConstraint = {
+    kind: "implies",
+    flags: ["db.host", "db.port"],
+    description: "co-located settings",
+    source: "inferred",
+  };
+
+  const validModel = {
+    flags: [],
+    constraints: [validConstraint],
+    parameters: [validParam],
+  };
+
+  const validFinding = {
+    ruleId: "config/dead-flag",
+    level: "warning",
+    message: { text: "Flag FEATURE_X can never be enabled" },
+  };
+
+  it("skips when no config-inventory keys", async () => {
+    const kv = new InMemoryKVStore();
+    const graph = new InMemoryGraphStore();
+    const reporter = new ValidationReporter();
+
+    await checkSanityConfigValidation(kv, graph, reporter);
+
+    expect(reporter.counts.skip).toBeGreaterThanOrEqual(1);
+    expect(reporter.counts.fail).toBe(0);
+    expect(reporter.counts.pass).toBe(0);
+  });
+
+  it("passes with valid config inventory, model, and SARIF findings", async () => {
+    const kv = new InMemoryKVStore();
+    const graph = new InMemoryGraphStore();
+    const reporter = new ValidationReporter();
+
+    await kv.set("config-inventory:repo1", JSON.stringify(validInventory));
+    await kv.set("config-model:repo1", JSON.stringify(validModel));
+    await kv.set("sarif:config:repo1", JSON.stringify([validFinding]));
+    await graph.addEdges([
+      { source: "src/a.ts", target: "src/b.ts", kind: "imports", metadata: { repo: "repo1" } },
+    ]);
+
+    await checkSanityConfigValidation(kv, graph, reporter);
+
+    expect(reporter.counts.fail).toBe(0);
+    expect(reporter.counts.pass).toBeGreaterThanOrEqual(4); // inventory, model, sarif, cross-consistency
+  });
+
+  it("fails when a parameter is missing name", async () => {
+    const kv = new InMemoryKVStore();
+    const graph = new InMemoryGraphStore();
+    const reporter = new ValidationReporter();
+
+    const badInventory = {
+      repo: "repo1",
+      parameters: [{ kind: "setting", locations: [{ repo: "repo1", module: "src/config.ts" }] }],
+    };
+    await kv.set("config-inventory:repo1", JSON.stringify(badInventory));
+    await kv.set("config-model:repo1", JSON.stringify(validModel));
+
+    await checkSanityConfigValidation(kv, graph, reporter);
+
+    const failLabels = reporter.failures.map((f) => f.label);
+    expect(failLabels.some((l) => l.includes("config inventory"))).toBe(true);
+  });
+
+  it("fails when a constraint has an invalid kind", async () => {
+    const kv = new InMemoryKVStore();
+    const graph = new InMemoryGraphStore();
+    const reporter = new ValidationReporter();
+
+    const badModel = {
+      flags: [],
+      constraints: [{ kind: "bogus", flags: ["db.host"], description: "bad", source: "inferred" }],
+    };
+    await kv.set("config-inventory:repo1", JSON.stringify(validInventory));
+    await kv.set("config-model:repo1", JSON.stringify(badModel));
+
+    await checkSanityConfigValidation(kv, graph, reporter);
+
+    const failLabels = reporter.failures.map((f) => f.label);
+    expect(failLabels.some((l) => l.includes("config model"))).toBe(true);
+  });
+
+  it("fails cross-consistency when inventory has params but no config-model", async () => {
+    const kv = new InMemoryKVStore();
+    const graph = new InMemoryGraphStore();
+    const reporter = new ValidationReporter();
+
+    await kv.set("config-inventory:repo1", JSON.stringify(validInventory));
+    // no config-model:repo1 — but repo has import edges (dep graph exists)
+    await graph.addEdges([
+      { source: "src/a.ts", target: "src/b.ts", kind: "imports", metadata: { repo: "repo1" } },
+    ]);
+
+    await checkSanityConfigValidation(kv, graph, reporter);
+
+    const failLabels = reporter.failures.map((f) => f.label);
+    expect(failLabels.some((l) => l.includes("cross-consistency"))).toBe(true);
   });
 });

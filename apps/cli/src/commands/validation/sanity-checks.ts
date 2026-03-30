@@ -985,3 +985,185 @@ export async function checkSanityDashboard(
     }
   }
 }
+
+// ─── Config validation sanity checks ────────────────────────
+
+const VALID_PARAM_KINDS = new Set(["setting", "credential", "flag"]);
+const VALID_CONSTRAINT_KINDS = new Set([
+  "requires", "excludes", "implies", "mutex", "range", "conditional", "enum",
+]);
+const VALID_CONSTRAINT_SOURCES = new Set(["inferred", "human", "schema"]);
+
+interface RawParam {
+  name?: unknown;
+  kind?: unknown;
+  locations?: unknown;
+}
+
+interface RawConstraint {
+  kind?: unknown;
+  flags?: unknown;
+  description?: unknown;
+  source?: unknown;
+}
+
+export async function checkSanityConfigValidation(
+  kvStore: KVStore,
+  graphStore: GraphStore,
+  reporter: ValidationReporter,
+): Promise<void> {
+  const category = "sanity/config-validation";
+
+  // ── 1. Config inventory structure ────────────────────────
+  const inventoryKeys = await kvStore.keys("config-inventory:");
+  if (inventoryKeys.length === 0) {
+    reporter.skip(category, "*", "config inventory", "no config-inventory:* keys");
+    return;
+  }
+
+  let inventoryInvalid = 0;
+  let inventoryTotal = 0;
+  for (const key of inventoryKeys) {
+    const raw = await kvStore.get(key);
+    if (!raw) continue;
+    inventoryTotal++;
+    let parsed: unknown;
+    try { parsed = JSON.parse(raw); } catch { inventoryInvalid++; continue; }
+    const obj = parsed as Record<string, unknown>;
+    if (typeof obj.repo !== "string" || !Array.isArray(obj.parameters)) {
+      inventoryInvalid++;
+      continue;
+    }
+    const params = obj.parameters as RawParam[];
+    const badParam = params.some(
+      (p) =>
+        typeof p.name !== "string" ||
+        p.name.length === 0 ||
+        !VALID_PARAM_KINDS.has(p.kind as string) ||
+        !Array.isArray(p.locations) ||
+        (p.locations as unknown[]).length === 0,
+    );
+    if (badParam) inventoryInvalid++;
+  }
+
+  if (inventoryInvalid === 0) {
+    reporter.pass(category, "*", `config inventory structure valid (${inventoryTotal} entries)`);
+  } else {
+    reporter.fail(
+      category, "*", "config inventory structure valid",
+      `${inventoryInvalid} of ${inventoryTotal} config-inventory entries are invalid`,
+    );
+  }
+
+  // ── 2. Config model structure ─────────────────────────────
+  const modelKeys = await kvStore.keys("config-model:");
+  if (modelKeys.length === 0) {
+    reporter.skip(category, "*", "config model", "no config-model:* keys");
+  } else {
+    let modelInvalid = 0;
+    let modelTotal = 0;
+    for (const key of modelKeys) {
+      const raw = await kvStore.get(key);
+      if (!raw) continue;
+      modelTotal++;
+      let parsed: unknown;
+      try { parsed = JSON.parse(raw); } catch { modelInvalid++; continue; }
+      const obj = parsed as Record<string, unknown>;
+      if (!Array.isArray(obj.flags) || !Array.isArray(obj.constraints)) {
+        modelInvalid++;
+        continue;
+      }
+      const constraints = obj.constraints as RawConstraint[];
+      const badConstraint = constraints.some(
+        (c) =>
+          !VALID_CONSTRAINT_KINDS.has(c.kind as string) ||
+          !Array.isArray(c.flags) ||
+          (c.flags as unknown[]).length === 0 ||
+          (c.flags as unknown[]).some((f) => typeof f !== "string") ||
+          typeof c.description !== "string" ||
+          !VALID_CONSTRAINT_SOURCES.has(c.source as string),
+      );
+      if (badConstraint) modelInvalid++;
+    }
+
+    if (modelInvalid === 0) {
+      reporter.pass(category, "*", `config model structure valid (${modelTotal} entries)`);
+    } else {
+      reporter.fail(
+        category, "*", "config model structure valid",
+        `${modelInvalid} of ${modelTotal} config-model entries are invalid`,
+      );
+    }
+  }
+
+  // ── 3. SARIF config findings ──────────────────────────────
+  const allConfigFindings = await getAllFindings(kvStore, "config");
+  if (allConfigFindings.size === 0) {
+    reporter.skip(category, "*", "SARIF config findings", "no sarif:config:* keys");
+  } else {
+    const flat = flattenFindings(allConfigFindings);
+    const invalid = flat.filter(
+      ({ finding }) =>
+        typeof finding.ruleId !== "string" ||
+        !finding.ruleId.startsWith("config/") ||
+        typeof finding.message.text !== "string" ||
+        finding.message.text.length === 0,
+    );
+    if (invalid.length === 0) {
+      reporter.pass(category, "*", `SARIF config findings valid (${flat.length} findings)`);
+    } else {
+      reporter.fail(
+        category, "*", "SARIF config findings valid",
+        `${invalid.length} of ${flat.length} findings have invalid ruleId or missing message`,
+      );
+    }
+  }
+
+  // ── 4. Cross-consistency ──────────────────────────────────
+  const flagsKeys = await kvStore.keys("flags:");
+  const reposWithFlags = new Set<string>();
+  for (const key of flagsKeys) {
+    const raw = await kvStore.get(key);
+    if (!raw) continue;
+    try {
+      const obj = JSON.parse(raw) as Record<string, unknown>;
+      if (Array.isArray(obj.flags) && (obj.flags as unknown[]).length > 0) {
+        reposWithFlags.add(key.slice("flags:".length));
+      }
+    } catch { /* skip */ }
+  }
+  const reposWithInventoryParams = new Set<string>();
+  for (const key of inventoryKeys) {
+    const raw = await kvStore.get(key);
+    if (!raw) continue;
+    let parsed: unknown;
+    try { parsed = JSON.parse(raw); } catch { continue; }
+    const obj = parsed as Record<string, unknown>;
+    if (Array.isArray(obj.parameters) && (obj.parameters as unknown[]).length > 0) {
+      const repo = key.slice("config-inventory:".length);
+      reposWithInventoryParams.add(repo);
+    }
+  }
+
+  // Only repos with import edges can produce a config-model (model phase requires dep graph)
+  const candidates = new Set([...reposWithInventoryParams, ...reposWithFlags]);
+  const reposNeedingModel = new Set<string>();
+  for (const repo of candidates) {
+    const edges = await graphStore.getEdgesByKind("imports", repo, { limit: 1 });
+    if (edges.length > 0) reposNeedingModel.add(repo);
+  }
+  if (reposNeedingModel.size === 0) {
+    reporter.skip(category, "*", "config cross-consistency", "no repos with params/flags and dep graph");
+  } else {
+    const modelRepos = new Set(modelKeys.map((k) => k.slice("config-model:".length)));
+    const missingModel = [...reposNeedingModel].filter((r) => !modelRepos.has(r));
+    if (missingModel.length === 0) {
+      reporter.pass(category, "*", `config cross-consistency: all ${reposNeedingModel.size} repos have config-model`);
+    } else {
+      reporter.fail(
+        category, "*", "config cross-consistency: repos with params have config-model",
+        `missing config-model for: ${missingModel.join(", ")}`,
+      );
+    }
+  }
+}

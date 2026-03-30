@@ -53,6 +53,7 @@ export {
   checkSanityFeatureFlagSource,
   checkSanityCallGraphSource,
   checkSanityDashboard,
+  checkSanityConfigValidation,
 } from "./validation/sanity-checks.js";
 export type { SarifDocument } from "./validation/sanity-checks.js";
 
@@ -84,6 +85,7 @@ import {
   checkSanityFeatureFlagSource,
   checkSanityCallGraphSource,
   checkSanityDashboard,
+  checkSanityConfigValidation,
 } from "./validation/sanity-checks.js";
 import { formatTable, formatMarkdown } from "./validation/formatters.js";
 
@@ -116,6 +118,7 @@ export async function validateCommand(opts: ValidateOptions): Promise<ValidateRe
   await checkSanityFeatureFlags(opts.kvStore, opts.graphStore, reporter);
   await checkSanityPainZoneFilter(opts.kvStore, opts.graphStore, reporter);
   await checkSanityInstability(opts.kvStore, opts.graphStore, reporter);
+  await checkSanityConfigValidation(opts.kvStore, opts.graphStore, reporter);
 
   // Source-level sanity checks (require mirrorsDir)
   await checkSanityPatternRecall(opts.kvStore, opts.graphStore, reporter, sampleSize, rng, opts.mirrorsDir);
