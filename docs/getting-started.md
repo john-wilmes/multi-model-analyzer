@@ -92,15 +92,14 @@ Writes an anonymized SARIF report to `report.json`. Rule IDs and severity levels
 mma dashboard
 ```
 
-Opens a local web UI at `http://localhost:3000`. The dashboard has several tabs:
+Opens a local web UI at `http://localhost:3000`. The dashboard has several views:
 
 - **Overview**: ATDI score trend, top findings by severity, repo summary cards.
-- **Dependencies**: Interactive dependency graph (Cytoscape). Zoom and click nodes to inspect module-level edges.
-- **Call Graph**: Function-level call relationships filtered by repo or package.
 - **Findings**: Filterable table of all SARIF results with rule ID, severity, location, and message.
-- **Feature Flags**: Detected config flags and their usage sites across repos.
-- **Service Catalog**: Inferred service roles (API gateway, data layer, utility, etc.) with confidence scores.
-- **Fault Trees**: Cascading failure paths derived from the dependency graph.
+- **Cross-Repo**: Multi-repo analysis with four sub-tabs — Graph (interactive cross-repo dependency graph), Feature Flags (detected config flags and their usage sites), Cascading Faults (fault propagation across service boundaries), and Service Catalog (inferred service roles with confidence scores).
+- **Temporal Coupling**: Files that change together frequently across commits.
+- **Hotspots**: Files with high churn and complexity.
+- **Patterns**: Detected design patterns and structural conventions.
 
 ## Sharing a Baseline
 

@@ -37,6 +37,7 @@ Reference for all diagnostics produced by Multi-Model Analyzer. Each finding app
 | `cross-repo/shared-flag` | note | Cross-Repo | Feature flag is shared across multiple repos |
 | `cross-repo/cascading-fault` | warning | Cross-Repo | Fault in one repo can cascade to dependents |
 | `cross-repo/undocumented-consumer` | note | Cross-Repo | Repo consumes a service with no documentation |
+| `cross-repo/critical-path` | warning | Cross-Repo | Repo heads a dependency chain 4+ hops long |
 
 ## Reading SARIF Output
 
@@ -611,6 +612,16 @@ Cross-repo rules detect risks that emerge from dependencies between repositories
 **Action:** Run `mma index --enrich` to generate summaries, or add manual documentation to the consumed module.
 
 **When to ignore:** If the consumed module is a well-known utility with self-documenting API (e.g., type definitions).
+
+### `cross-repo/critical-path`
+
+**Severity:** warning
+
+**What it means:** A repo sits at the head of a dependency chain that is 4 or more hops long. Any failure in this repo — a breaking API change, an outage, or a build regression — cascades to every repo downstream in the chain.
+
+**Action:** Treat this repo's public API as high-risk to change. Prioritize reliability work (error handling, retries, SLOs) in this repo. Consider adding integration tests that exercise the downstream chain.
+
+**When to ignore:** If the downstream chain consists of low-criticality repos or the chain length is inflated by test/dev-only dependencies.
 
 ---
 
