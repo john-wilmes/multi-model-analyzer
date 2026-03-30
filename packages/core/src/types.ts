@@ -30,6 +30,7 @@ export interface RepoConfig {
     readonly validatorLibraries?: readonly string[];
     readonly configDefinitionNames?: readonly string[];
     readonly configScopes?: readonly ConfigScopeRule[];
+    readonly configGetObjectNames?: readonly string[];
   };
 }
 

@@ -19,6 +19,7 @@ import {
   detectPatternsWithMeta,
   scanForFlags,
   scanForSettings,
+  findEjsSettingsAccesses,
   extractFlagRegistry,
   extractFlagRegistryFromText,
   extractLogStatements,
@@ -338,7 +339,45 @@ export async function runPhaseHeuristics(
         validatorLibraries: repo.settings.validatorLibraries,
         configDefinitionNames: repo.settings.configDefinitionNames,
         configScopes: repo.settings.configScopes,
+        configGetObjectNames: repo.settings.configGetObjectNames,
       } : undefined);
+
+      // Scan EJS template files for settings/credentials references
+      const ejsFiles = repoClassified.filter(f => f.path.endsWith(".ejs"));
+      if (ejsFiles.length > 0) {
+        const commitRef = isBare ? await resolveCommitForBare(repoPath, changeSets, repo.name) : undefined;
+        const ejsParams: import("@mma/core").ConfigParameter[] = [];
+        for (const ejsFile of ejsFiles) {
+          try {
+            const text = isBare
+              ? await getFileContent(repoPath, commitRef!, ejsFile.path)
+              : await readFile(join(repoPath, ejsFile.path), "utf-8");
+            ejsParams.push(...findEjsSettingsAccesses(
+              text,
+              ejsFile.path,
+              repo.name,
+              repo.settings?.configScopes,
+            ));
+          } catch { /* skip unreadable EJS files */ }
+        }
+        if (ejsParams.length > 0) {
+          // Merge EJS params into settings inventory
+          const mergedMap = new Map<string, import("@mma/core").ConfigParameter>();
+          for (const p of settingsInventory.parameters) {
+            mergedMap.set(p.name, p);
+          }
+          for (const p of ejsParams) {
+            const existing = mergedMap.get(p.name);
+            if (existing) {
+              mergedMap.set(p.name, { ...existing, locations: [...existing.locations, ...p.locations] });
+            } else {
+              mergedMap.set(p.name, p);
+            }
+          }
+          settingsInventory = { repo: repo.name, parameters: [...mergedMap.values()] };
+          log(`    [${repo.name}] [settings/ejs]: ${ejsParams.length} config references from ${ejsFiles.length} EJS templates`);
+        }
+      }
 
       // Incremental mode: merge with cached parameters for files not re-scanned
       if (!options.forceFullReindex) {
@@ -347,6 +386,8 @@ export async function runPhaseHeuristics(
           try {
             const cached = JSON.parse(cachedSettingsJson) as import("@mma/core").ConfigInventory;
             const scannedFiles = new Set(trees.keys());
+            // Also mark EJS files as scanned to avoid duplicate locations on re-index
+            for (const ejsFile of ejsFiles) scannedFiles.add(ejsFile.path);
             const mergedParamMap = new Map<string, import("@mma/core").ConfigParameter>();
             // Keep cached parameters from files not re-scanned
             for (const param of cached.parameters) {

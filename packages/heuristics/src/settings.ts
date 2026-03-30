@@ -22,6 +22,7 @@ export interface SettingsScannerOptions {
   readonly excludePaths?: readonly RegExp[];
   readonly configDefinitionNames?: readonly string[];
   readonly configScopes?: readonly ConfigScopeRule[];
+  readonly configGetObjectNames?: readonly string[];
 }
 
 const DEFAULT_CONFIG_OBJECT_NAMES = ["config", "settings", "options", "opts", "cfg"];
@@ -70,7 +71,7 @@ const BUILTIN_PROPERTY_EXCLUSIONS = new Set([
   // HTTP request options (common on `options` objects)
   "headers", "method", "body", "url", "params", "data",
   // Framework/infra
-  "get", "set", "delete", "connect", "close", "destroy",
+  "get", "has", "set", "delete", "connect", "close", "destroy",
   "emit", "on", "once", "off", "removeListener",
   "client", "server", "request", "response",
 ]);
@@ -82,6 +83,17 @@ const BUILTIN_PROPERTY_EXCLUSIONS = new Set([
 const METHOD_NAME_PATTERN = /^(get|set|is|has|create|update|delete|remove|fetch|find|add|on|handle|emit)[A-Z]/;
 
 const CREDENTIAL_PROP_PATTERN = /password|secret|key|token|credential|apiKey|auth/i;
+
+/**
+ * Narrow set of JS built-in properties to strip from EJS template matches.
+ * Intentionally smaller than BUILTIN_PROPERTY_EXCLUSIONS — EJS templates use
+ * dotted paths like settings.feedback.promoter.url where 'url' is a real config
+ * param, not a built-in.
+ */
+const EJS_BUILTIN_TAILS = new Set([
+  "length", "constructor", "prototype", "toString", "valueOf",
+  "hasOwnProperty", "toJSON", "toLocaleString",
+]);
 
 /**
  * Resolve the scope for a config parameter based on configScopes rules.
@@ -216,6 +228,20 @@ export function scanForSettings(
       }
     }
 
+    // Scan for config.get('key') call expressions
+    if (options.configGetObjectNames && options.configGetObjectNames.length > 0) {
+      const getCallParams = findConfigGetCalls(
+        tree.rootNode,
+        filePath,
+        repo,
+        options.configGetObjectNames,
+        configScopes,
+      );
+      for (const param of getCallParams) {
+        mergeParameter(paramMap, param);
+      }
+    }
+
     // Scan for mongoose-style static config definitions
     const mongooseParams = findMongooseStyleDefinitions(
       tree.rootNode,
@@ -325,6 +351,56 @@ function findConfigPropertyAccesses(
       kind: "setting",
       ...(valueType !== undefined ? { valueType } : {}),
       ...(defaultValue !== undefined ? { defaultValue } : {}),
+      ...(scope !== undefined ? { scope } : {}),
+    });
+  });
+
+  return params;
+}
+
+/**
+ * Detect config.get('dotted.key') and config.has('dotted.key') call expressions.
+ * Used for the node-config / nconf pattern where config values are accessed via
+ * method calls with string keys rather than property access.
+ */
+function findConfigGetCalls(
+  node: TreeSitterNode,
+  filePath: string,
+  repo: string,
+  configGetObjectNames: readonly string[],
+  configScopes?: readonly ConfigScopeRule[],
+): ConfigParameter[] {
+  const params: ConfigParameter[] = [];
+
+  visitAll(node, (n) => {
+    if (n.type !== "call_expression") return;
+
+    const callee = n.namedChildren[0];
+    if (!callee || callee.type !== "member_expression") return;
+
+    // Check callee is obj.get or obj.has
+    const obj = callee.namedChildren[0];
+    const prop = callee.namedChildren[callee.namedChildren.length - 1];
+    if (!obj || !prop) return;
+    if (obj.type !== "identifier") return;
+    if (prop.type !== "property_identifier" || (prop.text !== "get" && prop.text !== "has")) return;
+
+    if (!configGetObjectNames.includes(obj.text)) return;
+
+    // Extract the first string argument
+    const args = n.namedChildren.find((c) => c.type === "arguments");
+    if (!args) return;
+    const firstArg = args.namedChildren[0];
+    if (!firstArg || firstArg.type !== "string") return;
+
+    const key = firstArg.text.replace(/['"]/g, "");
+    if (!key) return;
+
+    const scope = resolveScope(configScopes, { objectName: obj.text, propertyName: key });
+    params.push({
+      name: key,
+      locations: [{ repo, module: filePath }],
+      kind: "setting",
       ...(scope !== undefined ? { scope } : {}),
     });
   });
@@ -869,4 +945,66 @@ function extractStringLiteral(node: TreeSitterNode): string | null {
     if (found) return found;
   }
   return null;
+}
+
+/**
+ * Extract config parameter references from EJS template files using regex.
+ *
+ * Matches patterns like:
+ * - item.settings.reminder.enabled → param "reminder.enabled", object "settings"
+ * - user.owner.settings.feedback.promoter.url → param "feedback.promoter.url", object "settings"
+ * - integrator.credentials.dbURL → param "dbURL", object "credentials"
+ *
+ * This is a standalone function (not integrated into scanForSettings) because
+ * EJS files are not parsed by tree-sitter.
+ */
+const EJS_SETTINGS_PATTERN =
+  /\b(?:[\w]+(?:\.[\w]+)*)\.(settings|credentials)\.([\w.]+)/g;
+
+export function findEjsSettingsAccesses(
+  text: string,
+  filePath: string,
+  repo: string,
+  configScopes?: readonly ConfigScopeRule[],
+): ConfigParameter[] {
+  const paramMap = new Map<string, ConfigParameter>();
+
+  let match: RegExpExecArray | null;
+  EJS_SETTINGS_PATTERN.lastIndex = 0;
+  while ((match = EJS_SETTINGS_PATTERN.exec(text)) !== null) {
+    const objectName = match[1]!; // "settings" or "credentials"
+    const rawPath = match[2]!;
+    // Strip trailing method calls or non-identifier suffixes (e.g. ".toLowerCase()")
+    const cleanMatch = rawPath.match(/^([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)/);
+    if (!cleanMatch) continue;
+    let paramPath = cleanMatch[1]!;  // e.g. "reminder.enabled" or "dbURL"
+
+    // Strip trailing segment if it's a method call (followed by '(') or a
+    // JS built-in property that can't be a config parameter name.
+    // Note: we use a narrow set here — the full BUILTIN_PROPERTY_EXCLUSIONS is
+    // too aggressive for EJS (contains 'url', 'data', 'params' which are valid config names).
+    const nextCharIdx = match.index + match[0].length;
+    const tail = paramPath.slice(paramPath.lastIndexOf(".") + 1);
+    if (
+      (nextCharIdx < text.length && text[nextCharIdx] === "(") ||
+      EJS_BUILTIN_TAILS.has(tail)
+    ) {
+      const lastDot = paramPath.lastIndexOf(".");
+      if (lastDot <= 0) continue;  // nothing meaningful left after stripping
+      paramPath = paramPath.substring(0, lastDot);
+    }
+
+    const kind = objectName === "credentials" ? "credential" : "setting";
+    const scope = resolveScope(configScopes, { objectName, propertyName: paramPath });
+
+    const param: ConfigParameter = {
+      name: paramPath,
+      locations: [{ repo, module: filePath }],
+      kind,
+      ...(scope !== undefined ? { scope } : {}),
+    };
+    mergeParameter(paramMap, param);
+  }
+
+  return [...paramMap.values()];
 }

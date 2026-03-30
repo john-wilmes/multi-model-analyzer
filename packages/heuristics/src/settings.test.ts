@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { initTreeSitter, parseSource } from "@mma/parsing";
 import type { TreeSitterTree } from "@mma/parsing";
-import { scanForSettings } from "./settings.js";
+import { scanForSettings, findEjsSettingsAccesses } from "./settings.js";
 
 function makeFiles(entries: Record<string, string>): Map<string, TreeSitterTree> {
   const map = new Map<string, TreeSitterTree>();
@@ -687,6 +687,163 @@ describe("scanForSettings", () => {
       expect(names).toContain("maxRetries");
       expect(names).toContain("syncWindow");
       expect(names).toContain("whitespaces");
+    });
+  });
+
+  describe("config.get() call expression detection", () => {
+    it("detects config.get('redis.port') as a setting param", () => {
+      const files = makeFiles({
+        "src/db.ts": `const port = config.get('redis.port');`,
+      });
+      const result = scanForSettings(files, "repo", {
+        configGetObjectNames: ["config"],
+      });
+      const param = result.parameters.find((p) => p.name === "redis.port");
+      expect(param).toBeDefined();
+      expect(param!.kind).toBe("setting");
+    });
+
+    it("detects nconf.get('db.host') when configGetObjectNames includes nconf", () => {
+      const files = makeFiles({
+        "src/db.ts": `const host = nconf.get('db.host');`,
+      });
+      const result = scanForSettings(files, "repo", {
+        configGetObjectNames: ["nconf"],
+      });
+      const param = result.parameters.find((p) => p.name === "db.host");
+      expect(param).toBeDefined();
+      expect(param!.kind).toBe("setting");
+    });
+
+    it("ignores config.get() with no arguments", () => {
+      const files = makeFiles({
+        "src/app.ts": `const all = config.get();`,
+      });
+      const result = scanForSettings(files, "repo", {
+        configGetObjectNames: ["config"],
+      });
+      // Should not detect anything from a no-arg get()
+      expect(result.parameters).toHaveLength(0);
+    });
+
+    it("ignores foo.get('key') when foo is not in configGetObjectNames", () => {
+      const files = makeFiles({
+        "src/app.ts": `const val = foo.get('some.key');`,
+      });
+      const result = scanForSettings(files, "repo", {
+        configGetObjectNames: ["config"],
+      });
+      expect(result.parameters.find((p) => p.name === "some.key")).toBeUndefined();
+    });
+
+    it("applies scope via configScopes accessPatterns", () => {
+      const files = makeFiles({
+        "src/infra.ts": `
+          const rPort = config.get('redis.port');
+          const rmqHost = config.get('rabbitmq.host');
+          const apiUrl = config.get('api.baseUrl');
+        `,
+      });
+      const result = scanForSettings(files, "repo", {
+        configGetObjectNames: ["config"],
+        configScopes: [
+          { name: "infrastructure-config", accessPatterns: ["config.redis.*", "config.rabbitmq.*"] },
+          { name: "api-config", accessPatterns: ["config.api.*"] },
+        ],
+      });
+      expect(result.parameters.find((p) => p.name === "redis.port")?.scope).toBe("infrastructure-config");
+      expect(result.parameters.find((p) => p.name === "rabbitmq.host")?.scope).toBe("infrastructure-config");
+      expect(result.parameters.find((p) => p.name === "api.baseUrl")?.scope).toBe("api-config");
+    });
+
+    it("detects config.has('feature.enabled') as a setting param", () => {
+      const files = makeFiles({
+        "src/features.ts": `if (config.has('feature.enabled')) { ... }`,
+      });
+      const result = scanForSettings(files, "repo", {
+        configGetObjectNames: ["config"],
+      });
+      const param = result.parameters.find((p) => p.name === "feature.enabled");
+      expect(param).toBeDefined();
+      expect(param!.kind).toBe("setting");
+    });
+
+    it("does not emit spurious 'has' param from config.has() call", () => {
+      const files = makeFiles({
+        "src/app.ts": `if (config.has('feature.enabled')) { doSomething(); }`,
+      });
+      const result = scanForSettings(files, "repo", {
+        configGetObjectNames: ["config"],
+      });
+      expect(result.parameters.find((p) => p.name === "has")).toBeUndefined();
+      expect(
+        result.parameters.find((p) => p.name === "feature.enabled"),
+      ).toBeDefined();
+    });
+  });
+
+  describe("findEjsSettingsAccesses", () => {
+    it("extracts reminder.enabled from item.settings.reminder.enabled", () => {
+      const text = `<% if(item.settings.reminder.enabled) { %>`;
+      const result = findEjsSettingsAccesses(text, "views/email.ejs", "repo");
+      const param = result.find((p) => p.name === "reminder.enabled");
+      expect(param).toBeDefined();
+      expect(param!.kind).toBe("setting");
+    });
+
+    it("extracts feedback.promoter.url from user.owner.settings.feedback.promoter.url", () => {
+      const text = `<%= user.owner.settings.feedback.promoter.url %>`;
+      const result = findEjsSettingsAccesses(text, "views/feedback.ejs", "repo");
+      const param = result.find((p) => p.name === "feedback.promoter.url");
+      expect(param).toBeDefined();
+    });
+
+    it("extracts dbURL from integrator.credentials.dbURL with kind credential", () => {
+      const text = `<%= integrator.credentials.dbURL %>`;
+      const result = findEjsSettingsAccesses(text, "views/admin.ejs", "repo");
+      const param = result.find((p) => p.name === "dbURL");
+      expect(param).toBeDefined();
+      expect(param!.kind).toBe("credential");
+    });
+
+    it("strips trailing method calls from param path", () => {
+      const text = `<%= item.settings.site.name.toLowerCase() %>`;
+      const result = findEjsSettingsAccesses(text, "views/site.ejs", "repo");
+      const param = result.find((p) => p.name === "site.name");
+      expect(param).toBeDefined();
+      // Should NOT have a param named "site.name.toLowerCase"
+      expect(result.find((p) => p.name === "site.name.toLowerCase")).toBeUndefined();
+    });
+
+    it("strips built-in property tails like .length", () => {
+      const text = `<%= item.settings.site.name.length %>`;
+      const result = findEjsSettingsAccesses(text, "views/site.ejs", "repo");
+      const param = result.find((p) => p.name === "site.name");
+      expect(param).toBeDefined();
+      expect(result.find((p) => p.name === "site.name.length")).toBeUndefined();
+    });
+
+    it("matches arbitrary object prefixes before .settings", () => {
+      const text = `<%= org.account.settings.billing.enabled %>`;
+      const result = findEjsSettingsAccesses(text, "views/billing.ejs", "repo");
+      const param = result.find((p) => p.name === "billing.enabled");
+      expect(param).toBeDefined();
+    });
+
+    it("applies scope resolution", () => {
+      const text = `<%= item.settings.reminder.enabled %>`;
+      const result = findEjsSettingsAccesses(text, "views/email.ejs", "repo", [
+        { name: "account-setting", accessPatterns: ["settings.reminder.*"] },
+      ]);
+      const param = result.find((p) => p.name === "reminder.enabled");
+      expect(param).toBeDefined();
+      expect(param!.scope).toBe("account-setting");
+    });
+
+    it("returns empty for EJS with no settings references", () => {
+      const text = `<h1>Hello <%= user.name %></h1>`;
+      const result = findEjsSettingsAccesses(text, "views/hello.ejs", "repo");
+      expect(result).toHaveLength(0);
     });
   });
 });

@@ -64,6 +64,9 @@
           "settings",
           "config"
         ],
+        "configGetObjectNames": [
+          "config"
+        ],
         "configScopes": [
           {
             "name": "integrator-config",
@@ -89,6 +92,27 @@
               "settings.session.*",
               "settings.billing.*",
               "settings.rollouts.*"
+            ]
+          },
+          {
+            "name": "infrastructure-config",
+            "accessPatterns": [
+              "config.redis.*",
+              "config.redisIntegrator.*",
+              "config.redisCache.*",
+              "config.rabbitmq.*",
+              "config.db",
+              "config.db.*",
+              "config.api.*",
+              "config.web.*",
+              "config.site.*",
+              "config.sigma.*"
+            ]
+          },
+          {
+            "name": "ehr-credentials",
+            "accessPatterns": [
+              "config.integrators.*"
             ]
           }
         ]
@@ -160,6 +184,9 @@
       "name": "luma-utils",
       "url": "https://github.com/lumahealthhq/luma-utils.git",
       "settings": {
+        "configGetObjectNames": [
+          "config"
+        ],
         "configScopes": [
           {
             "name": "integrator-setting",
@@ -179,6 +206,27 @@
               "settings.session.*",
               "settings.billing.*",
               "settings.rollouts.*"
+            ]
+          },
+          {
+            "name": "infrastructure-config",
+            "accessPatterns": [
+              "config.redis.*",
+              "config.redisIntegrator.*",
+              "config.redisCache.*",
+              "config.rabbitmq.*",
+              "config.db",
+              "config.db.*",
+              "config.api.*",
+              "config.web.*",
+              "config.site.*",
+              "config.sigma.*"
+            ]
+          },
+          {
+            "name": "ehr-credentials",
+            "accessPatterns": [
+              "config.integrators.*"
             ]
           }
         ]
@@ -188,6 +236,9 @@
       "name": "rest-service",
       "url": "https://github.com/lumahealthhq/rest-service.git",
       "settings": {
+        "configGetObjectNames": [
+          "config"
+        ],
         "configScopes": [
           {
             "name": "integrator-setting",
@@ -207,6 +258,27 @@
               "settings.session.*",
               "settings.billing.*",
               "settings.rollouts.*"
+            ]
+          },
+          {
+            "name": "infrastructure-config",
+            "accessPatterns": [
+              "config.redis.*",
+              "config.redisIntegrator.*",
+              "config.redisCache.*",
+              "config.rabbitmq.*",
+              "config.db",
+              "config.db.*",
+              "config.api.*",
+              "config.web.*",
+              "config.site.*",
+              "config.sigma.*"
+            ]
+          },
+          {
+            "name": "ehr-credentials",
+            "accessPatterns": [
+              "config.integrators.*"
             ]
           }
         ]
@@ -216,6 +288,9 @@
       "name": "classic-service",
       "url": "https://github.com/lumahealthhq/classic-service.git",
       "settings": {
+        "configGetObjectNames": [
+          "config"
+        ],
         "configScopes": [
           {
             "name": "integrator-setting",
@@ -235,6 +310,28 @@
               "settings.session.*",
               "settings.billing.*",
               "settings.rollouts.*"
+            ]
+          },
+          {
+            "name": "infrastructure-config",
+            "accessPatterns": [
+              "config.redis.*",
+              "config.redisIntegrator.*",
+              "config.redisCache.*",
+              "config.rabbitmq.*",
+              "config.db",
+              "config.db.*",
+              "config.api.*",
+              "config.web.*",
+              "config.site.*",
+              "config.sigma.*"
+            ]
+          },
+          {
+            "name": "ehr-credentials",
+            "accessPatterns": [
+              "config.integrators.*",
+              "credentials.*"
             ]
           }
         ]
