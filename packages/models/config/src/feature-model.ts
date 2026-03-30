@@ -46,6 +46,24 @@ export function buildFeatureModel(
   };
 }
 
+/** An item (flag or parameter) with optional scope for constraint scoping. */
+interface ScopedItem {
+  readonly name: string;
+  readonly locations: readonly { module: string }[];
+  readonly scope?: string;
+}
+
+/**
+ * Two items are scope-compatible if they could plausibly interact:
+ * - Either has no scope (flags, unscoped params) → always compatible
+ * - Both have the same scope → compatible
+ * - Different scopes → not compatible (e.g. integrator-config vs account-setting)
+ */
+function scopeCompatible(a: ScopedItem, b: ScopedItem): boolean {
+  if (!a.scope || !b.scope) return true;
+  return a.scope === b.scope;
+}
+
 function inferConstraints(
   flags: readonly FeatureFlag[],
   graph: DependencyGraph,
@@ -53,20 +71,25 @@ function inferConstraints(
 ): FeatureConstraint[] {
   const constraints: FeatureConstraint[] = [];
 
-  // Build unified name set for co-location analysis
-  const allItems: Array<{ name: string; locations: readonly { module: string }[] }> = [
-    ...flags,
-  ];
+  // Build unified name set for co-location analysis, preserving scope
+  const allItems: ScopedItem[] = flags.map((f) => ({
+    name: f.name,
+    locations: f.locations,
+  }));
   if (parameters) {
-    allItems.push(...parameters);
+    for (const p of parameters) {
+      allItems.push({ name: p.name, locations: p.locations, scope: p.scope });
+    }
   }
 
   // Strategy 1: co-located flags/parameters likely have dependencies
+  // Only infer between scope-compatible items to avoid cross-scope noise.
   const itemsByFile = groupByFile(allItems);
   for (const [_file, fileItems] of itemsByFile) {
     if (fileItems.length >= 2) {
       for (let i = 0; i < fileItems.length; i++) {
         for (let j = i + 1; j < fileItems.length; j++) {
+          if (!scopeCompatible(fileItems[i]!, fileItems[j]!)) continue;
           constraints.push({
             kind: "implies",
             flags: [fileItems[i]!.name, fileItems[j]!.name],
@@ -85,6 +108,7 @@ function inferConstraints(
   for (const item of allItems) {
     for (const otherItem of allItems) {
       if (item.name === otherItem.name) continue;
+      if (!scopeCompatible(item, otherItem)) continue;
 
       const itemModules = item.locations.map((l) => l.module);
       const otherModules = otherItem.locations.map((l) => l.module);
@@ -137,9 +161,9 @@ function inferConstraints(
 }
 
 function groupByFile(
-  items: readonly { name: string; locations: readonly { module: string }[] }[],
-): Map<string, Array<{ name: string; locations: readonly { module: string }[] }>> {
-  const map = new Map<string, Array<{ name: string; locations: readonly { module: string }[] }>>();
+  items: readonly ScopedItem[],
+): Map<string, ScopedItem[]> {
+  const map = new Map<string, ScopedItem[]>();
   for (const item of items) {
     for (const loc of item.locations) {
       const existing = map.get(loc.module) ?? [];
