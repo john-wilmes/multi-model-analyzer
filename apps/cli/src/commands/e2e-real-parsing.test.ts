@@ -6,6 +6,9 @@
  * against actual .ts files written to a temp directory. Only LLM-dependent
  * packages (summarization, model-config, model-fault, model-functional,
  * correlation) and git-dependent ingestion functions are mocked.
+ *
+ * See also: e2e-config-validation.test.ts — E2E test for the config validation
+ * pipeline (settings scanner → feature model → SAT validation → SARIF findings).
  */
 
 import { mkdtemp, writeFile, mkdir, rm } from "node:fs/promises";
