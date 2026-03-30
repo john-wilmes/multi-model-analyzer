@@ -1,5 +1,7 @@
 /**
  * AST utility functions used by phase-models (fault tree construction).
+ *
+ * @see ast-utils.test.ts for unit tests
  */
 
 import type { TreeSitterNode } from "@mma/parsing";
@@ -68,12 +70,23 @@ export function detectMissingErrorBoundaries(
 ): SarifResult[] {
   const results: SarifResult[] = [];
 
+  // Pattern: .catch( or .catch( with preceding whitespace — Promise-chain error handling
+  const promiseCatchPattern = /\.catch\s*\(/;
+  // Pattern: error callback wrappers — catchError (RxJS), onrejected, handleError
+  const errorCallbackPattern = /\b(catchError|onrejected|handleError|onError)\s*\(/;
+
   for (const [functionId, cfg] of cfgs) {
     const hasAwait = cfg.nodes.some(n => n.kind === "statement" && /\bawait\b/.test(n.label));
     if (!hasAwait) continue;
 
     const hasTryCatch = cfg.nodes.some(n => n.kind === "catch" || n.kind === "try");
     if (hasTryCatch) continue;
+
+    // Check for Promise .catch() chains or error callbacks in any statement
+    const hasPromiseCatch = cfg.nodes.some(
+      n => n.kind === "statement" && (promiseCatchPattern.test(n.label) || errorCallbackPattern.test(n.label)),
+    );
+    if (hasPromiseCatch) continue;
 
     results.push(
       createSarifResult(
