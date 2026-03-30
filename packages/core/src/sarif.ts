@@ -182,10 +182,11 @@ export function createSarifResult(
     properties?: Record<string, unknown>;
   },
 ): SarifResult {
-  // Compute a fingerprint from ruleId + first logical location FQN (if any),
-  // falling back to the physical location URI when the FQN is absent.
-  // Mirrors the fingerprint() logic in @mma/diagnostics/baseline.ts but uses
-  // only the first location to keep the value stable across minor location changes.
+  // Compute a SARIF-spec fingerprint from ruleId + first logical location FQN
+  // (if any), falling back to the physical location URI when absent.
+  // Note: this differs from the baseline fingerprint in @mma/diagnostics which
+  // uses ALL locations as a raw string for richer matching across runs. This
+  // stored fingerprint uses only the first location (hashed) for stability.
   const firstLocation = options?.locations?.[0];
   const firstFqn =
     firstLocation?.logicalLocations?.[0]?.fullyQualifiedName ??

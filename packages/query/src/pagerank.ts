@@ -6,6 +6,7 @@
  */
 
 import type { GraphEdge, SarifResult } from "@mma/core";
+import { createSarifResult } from "@mma/core";
 
 export interface PageRankOptions {
   /** Damping factor (probability of following a link). Default: 0.85 */
@@ -165,20 +166,20 @@ export function pageRankToSarif(
 
   return filtered.map((f, i) => {
     const rank = i + 1;
-    return {
-      ruleId: "blast-radius/high-pagerank",
-      level: "note" as const,
-      message: {
-        text: `High blast radius: "${f.path}" has PageRank score ${f.score.toFixed(4)} (rank #${rank}). Changes to this file affect many dependents.`,
-      },
-      locations: [{
-        logicalLocations: [{
-          fullyQualifiedName: f.path,
-          kind: "module",
-          properties: { repo },
+    return createSarifResult(
+      "blast-radius/high-pagerank",
+      "note",
+      `High blast radius: "${f.path}" has PageRank score ${f.score.toFixed(4)} (rank #${rank}). Changes to this file affect many dependents.`,
+      {
+        locations: [{
+          logicalLocations: [{
+            fullyQualifiedName: f.path,
+            kind: "module",
+            properties: { repo },
+          }],
         }],
-      }],
-      properties: { pageRankScore: f.score, rank },
-    };
+        properties: { pageRankScore: f.score, rank },
+      },
+    );
   });
 }
