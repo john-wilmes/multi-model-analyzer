@@ -149,7 +149,7 @@ function extractImports(rootNode: TreeSitterNode): ImportInfo[] {
     } else if (child.type === "export_statement") {
       // Handle re-exports: export * from './x', export { X } from './x'
       // Use the "source" field to avoid matching strings inside exported class/function bodies
-      const sourceNode = (child as any).childForFieldName?.("source");
+      const sourceNode = child.childForFieldName("source");
       if (sourceNode) {
         const source = findStringLiteral(sourceNode);
         if (source) {
@@ -186,7 +186,7 @@ function extractImportedNames(importNode: TreeSitterNode): string[] {
           for (const spec of clauseChild.namedChildren) {
             if (spec.type === "import_specifier") {
               // The "name" field is the imported name; "alias" is the local name
-              const nameNode = (spec as any).childForFieldName?.("name");
+              const nameNode = spec.childForFieldName("name");
               if (nameNode) {
                 names.push(nameNode.text);
               } else if (spec.namedChildren.length > 0) {
@@ -217,7 +217,7 @@ function extractReexportNames(exportNode: TreeSitterNode): string[] {
       hasNamedExports = true;
       for (const spec of child.namedChildren) {
         if (spec.type === "export_specifier") {
-          const nameNode = (spec as any).childForFieldName?.("name");
+          const nameNode = spec.childForFieldName("name");
           if (nameNode) {
             names.push(nameNode.text);
           } else if (spec.namedChildren.length > 0) {
@@ -464,7 +464,7 @@ export function isBarrelFile(tree: TreeSitterTree): boolean {
         continue;
       case "export_statement": {
         // Re-export: must have a "source" field (the `from '…'` clause).
-        const sourceNode = (child as any).childForFieldName?.("source");
+        const sourceNode = child.childForFieldName("source");
         if (sourceNode) {
           hasReexport = true;
         } else {
