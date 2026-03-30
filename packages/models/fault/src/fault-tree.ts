@@ -354,6 +354,7 @@ export function analyzeCascadingRisk(
   return results;
 }
 
+/** @internal */
 export function faultTreeToCodeFlow(
   tree: FaultTree,
 ): SarifCodeFlow {

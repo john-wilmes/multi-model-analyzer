@@ -12,6 +12,7 @@
 import type { ServiceCatalogEntry, Summary, SarifResult, SarifReportingDescriptor } from "@mma/core";
 import { createSarifResult, createLogicalLocation } from "@mma/core";
 
+/** @internal */
 export const FUNCTIONAL_RULES: readonly SarifReportingDescriptor[] = [
   {
     id: "functional/undocumented-service",
@@ -82,6 +83,7 @@ function generateServiceSection(
   return lines.join("\n");
 }
 
+/** @internal */
 export function findDocumentationGaps(
   catalog: readonly ServiceCatalogEntry[],
   summaries: ReadonlyMap<string, Summary>,
