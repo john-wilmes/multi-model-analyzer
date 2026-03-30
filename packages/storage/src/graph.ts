@@ -32,10 +32,6 @@ export interface GraphStore {
   close(): Promise<void>;
 }
 
-export interface GraphStoreOptions {
-  readonly dbPath: string;
-}
-
 /**
  * In-memory graph store for POC and testing.
  * Replace with SQLite adapter for persistent POC, Neo4j for scale.

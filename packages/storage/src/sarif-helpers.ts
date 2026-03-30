@@ -7,7 +7,12 @@
 
 import type { KVStore } from "./kv.js";
 
-export interface SarifResult {
+/**
+ * Raw SARIF result row as deserialized from storage JSON blobs.
+ * Weaker than `@mma/core`'s `SarifResult` — `level` is optional because
+ * stored JSON may omit it or contain unexpected values.
+ */
+interface SarifResultRow {
   readonly ruleId: string;
   readonly level?: string;
   readonly message: { readonly text: string };
@@ -23,7 +28,7 @@ export interface SarifLatestIndex {
 }
 
 export interface PaginatedSarifResults {
-  readonly results: SarifResult[];
+  readonly results: SarifResultRow[];
   readonly total: number;
 }
 
@@ -34,12 +39,16 @@ export interface PaginatedSarifResults {
 export async function getSarifResultsForRepo(
   kvStore: KVStore,
   repo: string,
-): Promise<SarifResult[]> {
+): Promise<SarifResultRow[]> {
   // Try per-repo key first
   const perRepoJson = await kvStore.get(`sarif:repo:${repo}`);
   if (perRepoJson) {
     try {
-      return JSON.parse(perRepoJson) as SarifResult[];
+      const parsed: unknown = JSON.parse(perRepoJson);
+      if (Array.isArray(parsed)) {
+        return parsed as SarifResultRow[];
+      }
+      // Fall through to sarif:latest on unexpected shape
     } catch {
       // Fall through to sarif:latest
     }
@@ -56,14 +65,14 @@ export async function getSarifResultsForRepo(
 /** Accumulator for lazy pagination: filters results and collects only the page window. */
 interface PageAccumulator {
   total: number;
-  readonly pageResults: SarifResult[];
+  readonly pageResults: SarifResultRow[];
   readonly offset: number;
   readonly limit: number;
   readonly ruleId?: string;
   readonly level?: string | string[];
 }
 
-function accumulateResults(acc: PageAccumulator, results: Iterable<SarifResult>): void {
+function accumulateResults(acc: PageAccumulator, results: Iterable<SarifResultRow>): void {
   for (const result of results) {
     if (acc.ruleId && result.ruleId !== acc.ruleId) continue;
     if (acc.level) {
@@ -121,11 +130,11 @@ export async function getSarifResultsPaginated(
 async function filterSarifLatestByRepo(
   kvStore: KVStore,
   repo: string,
-): Promise<SarifResult[]> {
+): Promise<SarifResultRow[]> {
   const sarifJson = await kvStore.get("sarif:latest");
   if (!sarifJson) return [];
   try {
-    const log = JSON.parse(sarifJson) as { runs: Array<{ results: SarifResult[] }> };
+    const log = JSON.parse(sarifJson) as { runs: Array<{ results: SarifResultRow[] }> };
     return log.runs.flatMap((r) =>
       r.results.filter((res) => {
         const locs = res.locations as Array<{ logicalLocations?: Array<{ properties?: Record<string, unknown> }> }> | undefined;
@@ -139,11 +148,11 @@ async function filterSarifLatestByRepo(
   }
 }
 
-async function getAllFromSarifLatest(kvStore: KVStore): Promise<SarifResult[]> {
+async function getAllFromSarifLatest(kvStore: KVStore): Promise<SarifResultRow[]> {
   const sarifJson = await kvStore.get("sarif:latest");
   if (!sarifJson) return [];
   try {
-    const log = JSON.parse(sarifJson) as { runs: Array<{ results: SarifResult[] }> };
+    const log = JSON.parse(sarifJson) as { runs: Array<{ results: SarifResultRow[] }> };
     return log.runs.flatMap((r) => r.results);
   } catch {
     return [];

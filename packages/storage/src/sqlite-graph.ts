@@ -237,7 +237,7 @@ function toGraphEdge(row: RawEdgeRow): GraphEdge {
     try {
       metadata = JSON.parse(row.metadata) as Record<string, unknown>;
     } catch {
-      metadata = {};
+      metadata = undefined;
     }
   }
   return {
