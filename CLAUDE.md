@@ -59,7 +59,7 @@ The `parseFiles()` orchestrator runs tree-sitter first, then optionally augments
 - Build must pass (`npx tsc --build`) before committing
 - Do not commit generated files: `dist/`, `*.tsbuildinfo`
 - Do not commit `mma.config.json` (contains local paths)
-- Single-developer project: use feature branches + PRs to main
+- Single-developer project: use feature branches + PRs to main. The `protect-main.js` hook (from the playbook repo) blocks direct commits to main/master.
 - All PRs are reviewed by CodeRabbit (GitHub app). Wait for the review and address findings before merging.
 - CodeRabbit MCP server is available for local review queries (coderabbitai in ~/.claude/settings.json)
 
