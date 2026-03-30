@@ -64,11 +64,9 @@ Implemented in `packages/heuristics/src/temporal-coupling.ts`. Detects co-change
 
 Implemented in `packages/heuristics/src/vuln-match.ts`. Matches npm audit advisories against import graph reachability.
 
-## Planned
+### Configuration Validation & Feature Interaction Analysis ✓
 
-### Configuration Validation & Feature Interaction Analysis
-
-Extend static analysis to cover application settings, credentials, and their interactions with feature flags. Enable agents to validate configurations before deployment using constraint satisfaction. Phased approach: settings scanner, unified constraint extraction, SAT-based validation, combinatorial interaction testing. See [config-validation-plan.md](config-validation-plan.md) for the detailed design.
+Implemented across four phases: settings scanner (`packages/heuristics/src/settings.ts`), unified constraint extraction, SAT-based validation (`packages/models/config/src/z3.ts`), and combinatorial interaction testing (`packages/models/config/src/covering-array.ts`). See [config-validation-plan.md](config-validation-plan.md) for the detailed design.
 
 ## Lower Priority
 
