@@ -199,7 +199,7 @@ async function indexSingleRepo(
     console.error(
       `  \u2717 Failed to index ${repo.name}: ${err instanceof Error ? err.message : String(err)}`,
     );
-    // State remains "indexing" — user can retry by re-running explore
+    await stateManager.resetToCandidate(repo.name);
   }
 }
 

@@ -54,7 +54,7 @@ export async function dispatchCommand(
     let serveMirrorDir = resolve("mirrors");
     let serveCustomQueueFrameworks: CliConfig["customQueueFrameworks"] | undefined;
     let serveFlagDefaults: CliConfig["flagDefaults"] | undefined;
-    if (values.config) {
+    if (values.config && existsSync(resolve(values.config))) {
       try {
         const { readFileSync } = await import("node:fs");
         const cfgRaw = JSON.parse(readFileSync(resolve(values.config), "utf-8")) as Record<string, unknown>;
@@ -183,6 +183,10 @@ export async function dispatchCommand(
 
   // audit command: parse npm audit JSON and check transitive vulnerability reachability
   if (command === "audit") {
+    if (!existsSync(dbPath)) {
+      console.error(`Database not found: ${dbPath}\nRun 'mma index' first.`);
+      process.exit(1);
+    }
     const stores = await createStores({ backend: earlyBackend, dbPath });
     let auditResult: { hasFindings: boolean } = { hasFindings: false };
     try {

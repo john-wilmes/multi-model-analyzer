@@ -384,7 +384,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
 
   // Aggregate all per-repo SARIF into a combined latest result
   tracer.startPhase("SARIF Aggregation");
-  const allSarifResults: import("@mma/core").SarifResult[] = [];
+  let allSarifResults: import("@mma/core").SarifResult[] = [];
   const sarifRepoNames: string[] = [];
   const repoSarifCounts = new Map<string, Record<string, number>>();
   await Promise.all(repos.map(async (repo) => {
@@ -435,8 +435,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     if (deduped.length < allSarifResults.length) {
       log(`  Deduplicated: removed ${allSarifResults.length - deduped.length} duplicate findings`);
     }
-    allSarifResults.length = 0;
-    allSarifResults.push(...deduped);
+    allSarifResults = deduped;
   }
 
   // Compare against previous baseline for incremental adoption

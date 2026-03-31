@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import cytoscape from 'cytoscape';
-import cytoscapeDagre from 'cytoscape-dagre';
+import { cytoscape, ensureDagreRegistered } from '../lib/cytoscape-setup.ts';
 import { fetchGraph } from '../api/client.ts';
 import { GraphControls } from './shared/GraphControls.tsx';
 
-cytoscapeDagre(cytoscape);
+ensureDagreRegistered();
 
 const EDGE_KINDS = [
   'imports',

@@ -93,19 +93,28 @@ export async function runPhaseHeuristics(
     }
   }
 
+  // --- Phase 4e+4f: Hotspot analysis and temporal coupling share commit history ---
+  const pf4ef = ctx.parsedFilesByRepo.get(repo.name);
+  let sharedFileChanges: Awaited<ReturnType<typeof getCommitHistory>> | undefined;
+  if (pf4ef && pf4ef.length > 0) {
+    try {
+      sharedFileChanges = await getCommitHistory(repoPath, 200);
+    } catch (error) {
+      console.error(`  Failed to get commit history for ${repo.name}:`, error);
+    }
+  }
+
   // --- Phase 4e: Hotspot analysis ---
   {
-    const pf4e = ctx.parsedFilesByRepo.get(repo.name);
-    if (pf4e && pf4e.length > 0) {
+    if (pf4ef && pf4ef.length > 0 && sharedFileChanges) {
       log(`  [${repo.name}] Computing hotspots...`);
       try {
         const start = performance.now();
-        const fileChanges = await getCommitHistory(repoPath, 200);
         const symbolCounts = new Map<string, number>();
-        for (const pf of pf4e) {
+        for (const pf of pf4ef) {
           symbolCounts.set(pf.path, pf.symbols.length);
         }
-        const hotspotResult = computeHotspots(fileChanges, symbolCounts);
+        const hotspotResult = computeHotspots(sharedFileChanges, symbolCounts);
         const hotspotSarif = hotspotFindings(hotspotResult.hotspots, repo.name);
         await kvStore.set(`hotspots:${repo.name}`, JSON.stringify(hotspotResult.hotspots));
         await kvStore.set(`sarif:hotspot:${repo.name}`, JSON.stringify(hotspotSarif));
@@ -119,13 +128,11 @@ export async function runPhaseHeuristics(
 
   // --- Phase 4f: Temporal coupling ---
   {
-    const pf4f = ctx.parsedFilesByRepo.get(repo.name);
-    if (pf4f && pf4f.length > 0) {
+    if (pf4ef && pf4ef.length > 0 && sharedFileChanges) {
       log(`  [${repo.name}] Computing temporal coupling...`);
       try {
         const start = performance.now();
-        const fileChanges = await getCommitHistory(repoPath, 200);
-        const commits: CommitInfo[] = groupByCommit(fileChanges);
+        const commits: CommitInfo[] = groupByCommit(sharedFileChanges);
         const tcResult = detectTemporalCoupling(commits);
         const tcSarif = temporalCouplingToSarif(tcResult, repo.name);
         await kvStore.set(`temporal-coupling:${repo.name}`, JSON.stringify(tcResult));

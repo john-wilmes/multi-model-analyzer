@@ -1,5 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { getFlagInventory, computeFlagImpact, getConfigInventory, getConfigModel } from "@mma/query";
+import { getFlagInventory, computeFlagImpact, getConfigInventory, getConfigModel, getIntegratorConfigMap } from "@mma/query";
 import { validateConfiguration, generateCoveringArray, computeInteractionStrength } from "@mma/model-config";
 import type { CrossRepoGraph } from "@mma/correlation";
 import { computeCrossRepoImpact } from "@mma/correlation";
@@ -266,5 +266,24 @@ export function registerPatternsTools(server: McpServer, stores: Stores): void {
     }
     const result = computeInteractionStrength(model, parameter);
     return jsonResult({ repo, ...result }, undefined, ["Call get_test_configurations with appropriate strength based on this coupling analysis."]);
+  });
+
+  server.registerTool("get_integrator_config_map", {
+    description: "Derive per-integrator credential and setting requirements from static analysis of client code. Groups config parameters by integrator type (extracted from module paths). Use to audit credential requirements or generate mapping files. Conditional requirements (runtime logic) cannot be derived statically.",
+    inputSchema: {
+      repo: z.string().optional().describe("Repository to analyze (default: integrator-service-clients)"),
+      type: z.string().optional().describe("Filter to integrator types matching this substring (case-insensitive)"),
+      search: z.string().optional().describe("Filter by type name or parameter name substring (case-insensitive). If the type name matches, all its parameters are included; otherwise only matching parameters are returned."),
+    },
+  }, async ({ repo, type, search }) => {
+    const result = await getIntegratorConfigMap(kvStore, { repo, type, search });
+    const hints = result.returned > 0
+      ? [
+          "Use 'type' filter to drill into a specific integrator.",
+          "Cross-reference credentials with runtime org config to detect missing fields.",
+          "Call get_config_model to see constraint relationships between parameters.",
+        ]
+      : ["No integrator types found. Ensure integrator-service-clients is indexed."];
+    return jsonResult(result, undefined, hints);
   });
 }

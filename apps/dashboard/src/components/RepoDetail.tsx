@@ -45,6 +45,8 @@ export default function RepoDetail() {
 
   useEffect(() => {
     if (!repo) return;
+    setMetrics([]); setFindings([]); setDsm(null); setAtdi(null); setDebt(null); setCoupling(null);
+    setLoading(true);
     Promise.all([
       fetchMetrics(repo),
       fetchFindings({ repo, limit: '10' }),

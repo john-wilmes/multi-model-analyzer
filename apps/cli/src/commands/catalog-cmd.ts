@@ -82,9 +82,13 @@ export function slugify(name: string): string {
 // YAML serializer (minimal, for the known Backstage entity structure only)
 // ---------------------------------------------------------------------------
 
+const YAML_SPECIAL_VALUES = new Set([
+  "true", "false", "yes", "no", "on", "off", "null", "~",
+  "True", "False", "Yes", "No", "On", "Off", "Null",
+  "TRUE", "FALSE", "YES", "NO", "ON", "OFF", "NULL",
+]);
+
 function yamlStr(value: string): string {
-  // Quote if the string contains characters that would confuse YAML parsers:
-  // leading/trailing whitespace, colons followed by space, #, or special starts.
   if (
     value === "" ||
     /^\s|\s$/.test(value) ||
@@ -93,9 +97,10 @@ function yamlStr(value: string): string {
     value.includes("#") ||
     value.includes('"') ||
     value.includes("'") ||
-    value.includes("\n")
+    value.includes("\n") ||
+    YAML_SPECIAL_VALUES.has(value) ||
+    String(Number(value)) === value
   ) {
-    // Use double-quoted scalar; escape backslashes and double quotes
     const escaped = value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
     return `"${escaped}"`;
   }

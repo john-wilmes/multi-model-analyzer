@@ -36,6 +36,7 @@ vi.mock("@mma/ingestion", () => ({
   classifyFiles: vi.fn().mockReturnValue([]),
   isBareRepo: vi.fn().mockResolvedValue(false),
   isExcludedPath: vi.fn().mockReturnValue(false),
+  getCommitHistory: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("@mma/parsing", () => ({
@@ -47,6 +48,9 @@ vi.mock("@mma/structural", () => ({
   buildControlFlowGraph: vi.fn(),
   createCfgIdCounter: vi.fn().mockReturnValue({ next: () => 0 }),
   extractCallEdgesFromTreeSitter: vi.fn().mockReturnValue([]),
+  extractHeritageEdges: vi.fn().mockReturnValue([]),
+  tagBarrelMediatedCycles: vi.fn().mockReturnValue([]),
+  getBarrelPaths: vi.fn().mockReturnValue([]),
   computeModuleMetrics: vi.fn().mockReturnValue([]),
   summarizeRepoMetrics: vi.fn().mockReturnValue({
     repo: "", moduleCount: 0, avgInstability: 0, avgAbstractness: 0,

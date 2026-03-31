@@ -11,9 +11,9 @@ import { EmptyState } from './shared/EmptyState.tsx';
 interface RepoSummary {
   name: string;
   grade?: string;
-  errorCount?: number;
-  warningCount?: number;
-  noteCount?: number;
+  painZoneCount?: number;
+  uselessnessZoneCount?: number;
+  moduleCount?: number;
   avgInstability?: number;
   avgAbstractness?: number;
 }
@@ -122,22 +122,15 @@ export default function Overview() {
         setPractices(pd);
         const ms = metricsSummary as Record<string, MetricsSummaryEntry>;
 
-        // Build a lookup from scorecard for finding counts
-        const scorecard = pd.scorecard ?? [];
-        const totalErrors = scorecard.reduce((s, c) => s + c.errorCount, 0);
-        const totalWarnings = scorecard.reduce((s, c) => s + c.warningCount, 0);
-        const totalNotes = scorecard.reduce((s, c) => s + c.noteCount, 0);
-
         const summaries: RepoSummary[] = reposData.repos.map((repo) => {
           const mse = ms[repo];
           return {
             name: repo,
             avgInstability: mse?.avgInstability,
             avgAbstractness: mse?.avgAbstractness,
-            // Per-repo finding counts aren't available; show module count instead
-            errorCount: mse?.painZoneCount,
-            warningCount: mse?.uselessnessZoneCount,
-            noteCount: mse?.moduleCount,
+            painZoneCount: mse?.painZoneCount,
+            uselessnessZoneCount: mse?.uselessnessZoneCount,
+            moduleCount: mse?.moduleCount,
           };
         });
         setRepoSummaries(summaries);
@@ -157,8 +150,6 @@ export default function Overview() {
           .filter((p) => p.moduleCount > 0);
         setRepoPoints(points);
 
-        // Store aggregate counts for potential use
-        void totalErrors; void totalWarnings; void totalNotes;
       })
       .catch((err: unknown) => console.error("Failed to fetch overview data:", err))
       .finally(() => setLoading(false));
@@ -341,19 +332,19 @@ export default function Overview() {
 
                 {/* Zone badges */}
                 <div className="flex gap-2 mb-3">
-                  {(repo.errorCount ?? 0) > 0 && (
+                  {(repo.painZoneCount ?? 0) > 0 && (
                     <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400">
-                      {repo.errorCount} pain zone
+                      {repo.painZoneCount} pain zone
                     </span>
                   )}
-                  {(repo.warningCount ?? 0) > 0 && (
+                  {(repo.uselessnessZoneCount ?? 0) > 0 && (
                     <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400">
-                      {repo.warningCount} useless zone
+                      {repo.uselessnessZoneCount} useless zone
                     </span>
                   )}
-                  {(repo.noteCount ?? 0) > 0 && (
+                  {(repo.moduleCount ?? 0) > 0 && (
                     <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
-                      {repo.noteCount} modules
+                      {repo.moduleCount} modules
                     </span>
                   )}
                 </div>

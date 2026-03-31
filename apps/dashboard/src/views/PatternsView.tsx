@@ -65,17 +65,21 @@ export default function PatternsView() {
     fetchRepos()
       .then(async ({ repos: repoList }) => {
         setRepos(repoList);
-        const results = await Promise.allSettled(
-          repoList.map((repo) =>
-            fetchPatterns(repo).then((data) => {
-              const patterns = Array.isArray(data) ? (data as DetectedPattern[]) : [];
-              return patterns.map((p): PatternRow => ({ ...p, repo }));
-            })
-          )
-        );
         const rows: PatternRow[] = [];
-        for (const r of results) {
-          if (r.status === 'fulfilled') rows.push(...r.value);
+        const BATCH_SIZE = 10;
+        for (let i = 0; i < repoList.length; i += BATCH_SIZE) {
+          const batch = repoList.slice(i, i + BATCH_SIZE);
+          const results = await Promise.allSettled(
+            batch.map((repo) =>
+              fetchPatterns(repo).then((data) => {
+                const patterns = Array.isArray(data) ? (data as DetectedPattern[]) : [];
+                return patterns.map((p): PatternRow => ({ ...p, repo }));
+              })
+            )
+          );
+          for (const r of results) {
+            if (r.status === 'fulfilled') rows.push(...r.value);
+          }
         }
         setAllPatterns(rows);
       })

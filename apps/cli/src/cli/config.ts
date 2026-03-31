@@ -149,68 +149,70 @@ export async function loadConfig(
   const configPath = resolve(configFlag);
   let config: CliConfig;
 
+  let raw: string;
   try {
-    const raw = await readFile(configPath, "utf-8");
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch (jsonErr) {
-      console.error(`Could not parse config file: ${configPath}`);
-      console.error(`  JSON error: ${jsonErr instanceof Error ? jsonErr.message : String(jsonErr)}`);
-      process.exit(1);
-    }
-
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      console.error(`Config file must be a JSON object: ${configPath}`);
-      process.exit(1);
-    }
-
-    const cfg = parsed as Record<string, unknown>;
-    if (!Array.isArray(cfg["repos"])) {
-      console.error(`Config missing required field: "repos" (must be an array)`);
-      process.exit(1);
-    }
-    if (typeof cfg["mirrorDir"] !== "string") {
-      console.error(`Config missing required field: "mirrorDir" (must be a string)`);
-      process.exit(1);
-    }
-
-    // Warn on unknown top-level fields (catches typos)
-    const knownFields = new Set([
-      "repos", "mirrorDir", "dbPath", "rules", "baselinePath",
-      "backend", "advisories", "llmProvider", "llmApiKey", "llmModel",
-      "customQueueFrameworks", "flagDefaults",
-    ]);
-    for (const key of Object.keys(cfg)) {
-      if (!knownFields.has(key)) {
-        console.error(`warning: unknown config field "${key}" — possible typo`);
-      }
-    }
-
-    // Validate customQueueFrameworks if present
-    if (cfg["customQueueFrameworks"] !== undefined) {
-      validateCustomQueueFrameworks(cfg["customQueueFrameworks"]);
-    }
-
-    // Validate flagDefaults if present
-    if (cfg["flagDefaults"] !== undefined) {
-      validateFlagDefaults(cfg["flagDefaults"]);
-    }
-
-    config = cfg as unknown as CliConfig;
-
-    // Expand ${ENV_VAR} references in llmApiKey
-    if (typeof config.llmApiKey === "string" && config.llmApiKey.includes("${")) {
-      const expanded = config.llmApiKey.replace(
-        /\$\{(\w+)\}/g,
-        (_, name) => process.env[name] ?? "",
-      );
-      config = { ...config, llmApiKey: expanded };
-    }
+    raw = await readFile(configPath, "utf-8");
   } catch {
     console.error(`Could not read config file: ${configPath}`);
     console.error("Create an mma.config.json with repos and mirrorDir.");
     process.exit(1);
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (jsonErr) {
+    console.error(`Could not parse config file: ${configPath}`);
+    console.error(`  JSON error: ${jsonErr instanceof Error ? jsonErr.message : String(jsonErr)}`);
+    process.exit(1);
+  }
+
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    console.error(`Config file must be a JSON object: ${configPath}`);
+    process.exit(1);
+  }
+
+  const cfg = parsed as Record<string, unknown>;
+  if (!Array.isArray(cfg["repos"])) {
+    console.error(`Config missing required field: "repos" (must be an array)`);
+    process.exit(1);
+  }
+  if (typeof cfg["mirrorDir"] !== "string") {
+    console.error(`Config missing required field: "mirrorDir" (must be a string)`);
+    process.exit(1);
+  }
+
+  // Warn on unknown top-level fields (catches typos)
+  const knownFields = new Set([
+    "repos", "mirrorDir", "dbPath", "rules", "baselinePath",
+    "backend", "advisories", "llmProvider", "llmApiKey", "llmModel",
+    "customQueueFrameworks", "flagDefaults",
+  ]);
+  for (const key of Object.keys(cfg)) {
+    if (!knownFields.has(key)) {
+      console.error(`warning: unknown config field "${key}" — possible typo`);
+    }
+  }
+
+  // Validate customQueueFrameworks if present
+  if (cfg["customQueueFrameworks"] !== undefined) {
+    validateCustomQueueFrameworks(cfg["customQueueFrameworks"]);
+  }
+
+  // Validate flagDefaults if present
+  if (cfg["flagDefaults"] !== undefined) {
+    validateFlagDefaults(cfg["flagDefaults"]);
+  }
+
+  config = cfg as unknown as CliConfig;
+
+  // Expand ${ENV_VAR} references in llmApiKey
+  if (typeof config.llmApiKey === "string" && config.llmApiKey.includes("${")) {
+    const expanded = config.llmApiKey.replace(
+      /\$\{(\w+)\}/g,
+      (_, name) => process.env[name] ?? "",
+    );
+    config = { ...config, llmApiKey: expanded };
   }
 
   // Resolve all paths relative to the config file's directory

@@ -26,6 +26,7 @@ export async function runPhaseStructural(
   const repoPath = repo.localPath ?? join(mirrorDir, `${repo.name}.git`);
   const trees = treesByRepo.get(repo.name);
 
+  let hadError = false;
   const changedFilePaths = classified.map(f => f.path);
 
   // Clean up all edge kinds for changed files before any edges are added.
@@ -141,6 +142,7 @@ export async function runPhaseStructural(
       }
     } catch (error) {
       console.error(`  Failed to extract dependency graph for ${repo.name}:`, error);
+      hadError = true;
     }
   }
 
@@ -168,6 +170,7 @@ export async function runPhaseStructural(
       log(`  [${repo.name}] ${callEdges.length} call edges (${elapsed}ms)`);
     } catch (error) {
       console.error(`  Failed to extract call graph for ${repo.name}:`, error);
+      hadError = true;
     }
   }
 
@@ -185,13 +188,13 @@ export async function runPhaseStructural(
       log(`  [${repo.name}] ${heritageEdges.length} heritage edges (extends/implements) (${elapsed}ms)`);
     } catch (error) {
       console.error(`  Failed to extract heritage edges for ${repo.name}:`, error);
+      hadError = true;
     }
   }
 
-  // Save commit hash after graph extraction completes (Phases 3-4b done).
-  // Clear pipelineComplete so a Phase 5+ failure triggers recovery next run.
+  // Save commit hash only if no extraction phase failed.
   const repoChangeSet = changeSets.find(cs => cs.repo === repo.name);
-  if (repoChangeSet) {
+  if (repoChangeSet && !hadError) {
     await kvStore.delete(`pipelineComplete:${repo.name}`);
     await kvStore.set(`commit:${repo.name}`, repoChangeSet.commitHash);
   }

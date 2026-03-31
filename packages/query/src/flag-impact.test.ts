@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { getFlagInventory, computeFlagImpact } from "./flag-impact.js";
+import { getFlagInventory, computeFlagImpact, getIntegratorConfigMap } from "./flag-impact.js";
 import { InMemoryGraphStore, InMemoryKVStore } from "@mma/storage";
-import type { FlagInventory, GraphEdge } from "@mma/core";
+import type { FlagInventory, GraphEdge, ConfigInventory } from "@mma/core";
 
 function importEdge(source: string, target: string, repo = "repo"): GraphEdge {
   return { source, target, kind: "imports", repo, metadata: { repo } };
@@ -263,5 +263,196 @@ describe("computeFlagImpact", () => {
     expect(result.affectedServices).toHaveLength(1);
     expect(result.affectedServices[0]!.endpoint).toBe("/api/users");
     expect(result.affectedServices[0]!.sourceFile).toBe("handler.ts");
+  });
+});
+
+function makeConfigInventory(
+  repo: string,
+  params: Array<{
+    name: string;
+    kind: "setting" | "credential" | "flag";
+    modules: string[];
+    scope?: string;
+  }>,
+): ConfigInventory {
+  return {
+    repo,
+    parameters: params.map((p) => ({
+      name: p.name,
+      kind: p.kind,
+      locations: p.modules.map((m) => ({ repo, module: m })),
+      ...(p.scope ? { scope: p.scope } : {}),
+    })),
+  };
+}
+
+describe("getIntegratorConfigMap", () => {
+  it("returns empty result when no inventory stored", async () => {
+    const kv = new InMemoryKVStore();
+    const result = await getIntegratorConfigMap(kv);
+    expect(result.total).toBe(0);
+    expect(result.returned).toBe(0);
+    expect(result.types).toEqual([]);
+  });
+
+  it("groups credentials and settings by integrator type from module path", async () => {
+    const kv = new InMemoryKVStore();
+    const repo = "integrator-service-clients";
+    await kv.set(
+      `config-inventory:${repo}`,
+      JSON.stringify(makeConfigInventory(repo, [
+        { name: "API_KEY", kind: "credential", modules: [`src/clients/athena/client.ts`] },
+        { name: "BASE_URL", kind: "setting", modules: [`src/clients/athena/client.ts`] },
+      ])),
+    );
+
+    const result = await getIntegratorConfigMap(kv);
+    expect(result.total).toBe(1);
+    expect(result.returned).toBe(1);
+    expect(result.types).toHaveLength(1);
+
+    const athena = result.types[0]!;
+    expect(athena.type).toBe("athena");
+    expect(athena.credentials).toHaveLength(1);
+    expect(athena.credentials[0]!.name).toBe("API_KEY");
+    expect(athena.settings).toHaveLength(1);
+    expect(athena.settings[0]!.name).toBe("BASE_URL");
+  });
+
+  it("excludes utility segments from integrator type extraction", async () => {
+    const kv = new InMemoryKVStore();
+    const repo = "integrator-service-clients";
+    await kv.set(
+      `config-inventory:${repo}`,
+      JSON.stringify(makeConfigInventory(repo, [
+        { name: "TIMEOUT", kind: "setting", modules: [`src/clients/shared/config.ts`] },
+        { name: "UTIL_KEY", kind: "setting", modules: [`src/clients/utils/helper.ts`] },
+        { name: "TEST_VAR", kind: "setting", modules: [`src/clients/__tests__/setup.ts`] },
+        { name: "REAL_KEY", kind: "credential", modules: [`src/clients/epic/client.ts`] },
+      ])),
+    );
+
+    const result = await getIntegratorConfigMap(kv);
+    expect(result.total).toBe(1);
+    expect(result.types[0]!.type).toBe("epic");
+  });
+
+  it("filters by type substring (case-insensitive)", async () => {
+    const kv = new InMemoryKVStore();
+    const repo = "integrator-service-clients";
+    await kv.set(
+      `config-inventory:${repo}`,
+      JSON.stringify(makeConfigInventory(repo, [
+        { name: "KEY_A", kind: "credential", modules: [`src/clients/athena/a.ts`] },
+        { name: "KEY_B", kind: "credential", modules: [`src/clients/epic/b.ts`] },
+      ])),
+    );
+
+    const result = await getIntegratorConfigMap(kv, { type: "ATH" });
+    expect(result.total).toBe(2);
+    expect(result.returned).toBe(1);
+    expect(result.types[0]!.type).toBe("athena");
+  });
+
+  it("filters by search substring within parameter names (case-insensitive)", async () => {
+    const kv = new InMemoryKVStore();
+    const repo = "integrator-service-clients";
+    await kv.set(
+      `config-inventory:${repo}`,
+      JSON.stringify(makeConfigInventory(repo, [
+        { name: "API_KEY", kind: "credential", modules: [`src/clients/athena/a.ts`] },
+        { name: "BASE_URL", kind: "setting", modules: [`src/clients/athena/a.ts`] },
+        { name: "TIMEOUT", kind: "setting", modules: [`src/clients/athena/a.ts`] },
+      ])),
+    );
+
+    const result = await getIntegratorConfigMap(kv, { search: "url" });
+    expect(result.returned).toBe(1);
+    const athena = result.types[0]!;
+    expect(athena.credentials).toHaveLength(0);
+    expect(athena.settings).toHaveLength(1);
+    expect(athena.settings[0]!.name).toBe("BASE_URL");
+  });
+
+  it("attributes parameter to each matching integrator type when in multiple modules", async () => {
+    const kv = new InMemoryKVStore();
+    const repo = "integrator-service-clients";
+    await kv.set(
+      `config-inventory:${repo}`,
+      JSON.stringify(makeConfigInventory(repo, [
+        {
+          name: "SHARED_SECRET",
+          kind: "credential",
+          modules: [
+            `src/clients/athena/a.ts`,
+            `src/clients/epic/b.ts`,
+          ],
+        },
+      ])),
+    );
+
+    const result = await getIntegratorConfigMap(kv);
+    expect(result.total).toBe(2);
+    expect(result.types.map((t) => t.type).sort()).toEqual(["athena", "epic"]);
+    for (const entry of result.types) {
+      expect(entry.credentials).toHaveLength(1);
+      expect(entry.credentials[0]!.name).toBe("SHARED_SECRET");
+      // Each entry's modules should only contain paths for its own type
+      for (const mod of entry.credentials[0]!.modules) {
+        expect(mod).toContain(`clients/${entry.type}/`);
+      }
+    }
+  });
+
+  it("returns types sorted alphabetically", async () => {
+    const kv = new InMemoryKVStore();
+    const repo = "integrator-service-clients";
+    await kv.set(
+      `config-inventory:${repo}`,
+      JSON.stringify(makeConfigInventory(repo, [
+        { name: "Z_KEY", kind: "credential", modules: [`src/clients/zebra/z.ts`] },
+        { name: "A_KEY", kind: "credential", modules: [`src/clients/alpha/a.ts`] },
+        { name: "M_KEY", kind: "credential", modules: [`src/clients/middle/m.ts`] },
+      ])),
+    );
+
+    const result = await getIntegratorConfigMap(kv);
+    expect(result.types.map((t) => t.type)).toEqual(["alpha", "middle", "zebra"]);
+  });
+
+  it("search matching type name returns all params for that type", async () => {
+    const kv = new InMemoryKVStore();
+    const repo = "integrator-service-clients";
+    await kv.set(
+      `config-inventory:${repo}`,
+      JSON.stringify(makeConfigInventory(repo, [
+        { name: "API_KEY", kind: "credential", modules: [`src/clients/athena/a.ts`] },
+        { name: "BASE_URL", kind: "setting", modules: [`src/clients/athena/a.ts`] },
+        { name: "TIMEOUT", kind: "setting", modules: [`src/clients/epic/b.ts`] },
+      ])),
+    );
+
+    const result = await getIntegratorConfigMap(kv, { search: "athena" });
+    expect(result.returned).toBe(1);
+    const athena = result.types[0]!;
+    expect(athena.type).toBe("athena");
+    expect(athena.credentials).toHaveLength(1);
+    expect(athena.settings).toHaveLength(1);
+  });
+
+  it("excludes type when search filter removes all its parameters", async () => {
+    const kv = new InMemoryKVStore();
+    const repo = "integrator-service-clients";
+    await kv.set(
+      `config-inventory:${repo}`,
+      JSON.stringify(makeConfigInventory(repo, [
+        { name: "API_KEY", kind: "credential", modules: [`src/clients/athena/a.ts`] },
+        { name: "BASE_URL", kind: "setting", modules: [`src/clients/epic/b.ts`] },
+      ])),
+    );
+
+    const result = await getIntegratorConfigMap(kv, { search: "api_key" });
+    expect(result.returned).toBe(1);
+    expect(result.types[0]!.type).toBe("athena");
   });
 });
