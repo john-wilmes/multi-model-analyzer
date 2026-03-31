@@ -1,5 +1,6 @@
 /**
- * Phase 0: Remove stale data for deleted files.
+ * Phase 0: Remove stale data for deleted and modified files.
+ * @see ./phase-cleanup.test.ts
  */
 
 import type { ChangeSet } from "@mma/core";
@@ -61,6 +62,20 @@ export async function runPhaseCleanup(input: PhaseCleanupInput): Promise<void> {
       }));
 
       log(`  Removed stale data for ${changeSet.deletedFiles.length} files`);
+    }
+
+    // Invalidate Tier 3 (LLM) summaries for modified files so they get
+    // regenerated on the next enrich run. T3 keys are entity-addressed
+    // (no contentHash), so without this they persist with stale descriptions.
+    // Tier 1 handles its own invalidation via contentHash-keyed entries.
+    if (changeSet.modifiedFiles.length > 0) {
+      const t3Deletes = changeSet.modifiedFiles.map(filePath =>
+        kvStore.deleteByPrefix(`summary:t3:${changeSet.repo}:${filePath}#`),
+      );
+      await Promise.all(t3Deletes);
+      if (t3Deletes.length > 0) {
+        log(`Phase 0: Invalidated T3 summaries for ${changeSet.modifiedFiles.length} modified files in ${changeSet.repo}`);
+      }
     }
   }));
 }
