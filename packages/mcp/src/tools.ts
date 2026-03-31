@@ -14,9 +14,10 @@ import { registerSymbolTools } from "./tools/symbolTools.js";
 /** Orientation blurb prepended to the first tool response in a session (stdio only). */
 export const WELCOME_BLURB = [
   "[MMA] You are connected to the Multi-Model Analyzer with 31 tools across 7 categories.",
+  "MMA provides static analysis of TypeScript/JavaScript codebases. It pairs with runtime data sources (MongoDB for config state, Datadog for logs) to bridge the gap between what code expects and what is actually deployed.",
   "Quick start: 'search' finds symbols → 'get_callers'/'get_callees' traces the graph → 'get_blast_radius' shows impact.",
   "Responses include a _hints field with contextual next-step suggestions when available.",
-  "For the full guide, use the 'mma-guide' prompt or read the mma://guide resource.",
+  "For the full guide including cross-tool workflows, use the 'mma-guide' prompt or read the mma://guide resource.",
 ].join("\n");
 
 export interface RegisterToolsOptions {

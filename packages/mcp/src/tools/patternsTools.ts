@@ -12,7 +12,7 @@ export function registerPatternsTools(server: McpServer, stores: Stores): void {
 
   // 13. Feature flag inventory
   server.registerTool("get_flag_inventory", {
-    description: "List and search feature flags detected across indexed repositories. Supports filtering by repo, substring search, and pagination. Call before get_flag_impact to find exact flag names. Use unregistered:true to surface dead-flag candidates.",
+    description: "List and search feature flags detected across indexed repositories. Supports filtering by repo, substring search, and pagination. Call before get_flag_impact to find exact flag names. Use unregistered:true to surface dead-flag candidates. Cross-reference with MongoDB users.featureFlags to check which accounts have a flag enabled.",
     inputSchema: {
       repo: z.string().optional().describe("Filter to a specific repository name"),
       search: z.string().optional().describe("Substring to filter flag names by (case-insensitive)"),
@@ -149,7 +149,7 @@ export function registerPatternsTools(server: McpServer, stores: Stores): void {
 
   // Config inventory: settings, credentials, and flags unified view
   server.registerTool("get_config_inventory", {
-    description: "List configuration parameters (settings, credentials, flags) detected across indexed repositories. Filter by repo, kind, or substring search. Call before get_config_model and validate_config.",
+    description: "List configuration parameters (settings, credentials, flags) detected across indexed repositories. Filter by repo, kind, or substring search. Call before get_config_model and validate_config. Compare with runtime config from MongoDB to identify drift between code expectations and actual deployment.",
     inputSchema: {
       repo: z.string().optional().describe("Filter to a specific repository name"),
       search: z.string().optional().describe("Substring to filter parameter names by (case-insensitive)"),
@@ -269,7 +269,7 @@ export function registerPatternsTools(server: McpServer, stores: Stores): void {
   });
 
   server.registerTool("get_integrator_config_map", {
-    description: "Derive per-integrator credential and setting requirements from static analysis of client code. Groups config parameters by integrator type (extracted from module paths). Use to audit credential requirements or generate mapping files. Conditional requirements (runtime logic) cannot be derived statically.",
+    description: "Derive per-integrator credential and setting requirements from static analysis of client code. Groups config parameters by integrator type (extracted from module paths). Use to audit credential requirements or generate mapping files. Compare results against MongoDB integrators collection to validate that deployed integrators have all required credentials. Conditional requirements (runtime logic) cannot be derived statically.",
     inputSchema: {
       repo: z.string().optional().describe("Repository to analyze (default: integrator-service-clients)"),
       type: z.string().optional().describe("Filter to integrator types matching this substring (case-insensitive)"),

@@ -270,7 +270,46 @@ Use \`get_interaction_strength\` to identify which parameters have many constrai
 
 ---
 
-## 6. Maintenance Note
+## 6. Combining MMA with Runtime Data Sources
+
+MMA tells you **what the code says** — what flags exist, what credentials are expected, what the call graph looks like. To understand what is **actually configured or happening** in a live system, pair MMA with runtime data sources available through other MCP servers.
+
+| Question | MMA provides | Runtime source fills the gap |
+|----------|-------------|------------------------------|
+| Is this flag still used? | \`get_flag_inventory\` — where it appears in code | MongoDB \`users\` collection — which accounts have it enabled |
+| Is this integrator configured correctly? | \`get_integrator_config_map\` — required credentials per type | MongoDB \`integrators\` collection — actual credential fields present |
+| What broke in production? | \`get_callers\`/\`get_blast_radius\` — code path and impact scope | Datadog logs — actual errors, timestamps, stack traces |
+| Who owns the affected code? | \`get_architecture\` — repo roles and service topology | ClickUp — team assignments and task tracking |
+
+### Cross-tool workflow: Validate an account's configuration
+1. \`get_integrator_config_map\` — get credential and setting requirements per integrator type (from static analysis)
+2. \`get_flag_inventory\` — get the list of feature flags that gate integrations
+3. Query MongoDB \`integrators\` collection — fetch the account's actual integrator configs
+4. Query MongoDB \`users\` collection — fetch the account's actual \`featureFlags\` array
+5. Compare: are required credentials present? Are gating flags enabled? Report mismatches as findings.
+
+### Cross-tool workflow: Debug an integrator failure
+1. Query Datadog logs (\`service: "integrator"\`, filter by org ID) — find the error message and timing
+2. \`search\` — find the failing function or module in MMA's index
+3. \`get_callers\` / \`get_callees\` — trace the code path to understand control flow
+4. \`get_blast_radius\` — identify what else is affected by this code path
+5. Query MongoDB \`integrators\` — check the account's integrator config state for misconfigurations
+
+### Cross-tool workflow: Dead flag cleanup
+1. \`get_flag_inventory\` with \`unregistered: true\` — find flags in code that are not in the canonical registry
+2. Query MongoDB \`users\` collection with aggregation — count how many accounts still have each flag enabled
+3. \`get_flag_impact\` — compute blast radius if the flag is removed from code
+4. Decision: if zero accounts have the flag and code impact is isolated, it is safe to remove
+
+### Cross-tool workflow: Change risk assessment
+1. \`get_blast_radius\` with \`crossRepo: true\` — find all files and repos affected by proposed changes
+2. \`get_diagnostics\` — check for existing findings in affected files
+3. \`get_hotspots\` — identify if affected files are high-churn hotspots
+4. Query ClickUp — find which teams own the affected repos and notify them
+
+---
+
+## 7. Maintenance Note
 
 This guide is updated with each new MMA feature. If a tool is not documented here, check its description directly via the MCP tool list. When in doubt, \`query\` routes natural language questions to the right backend automatically.
 `;
