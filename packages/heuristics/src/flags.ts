@@ -653,6 +653,12 @@ function mergeFlag(
 
 const ENUM_FLAG_PATTERN = /^(IS_\w+_ENABLED|FEATURE_\w+|FF_\w+|FLAG_\w+|ENABLE_\w+|DISABLE_\w+)$/;
 
+// Member names containing these words are status/build constants, not feature flags.
+const ENUM_FLAG_NEGATIVE_WORDS = /\b(STATUS|STATE|MODE|BUILD|ENV|VERSION|DEPRECATED)\b/;
+
+// Enum type names that indicate the whole enum is a status/mode type, not a flag set.
+const NON_FLAG_ENUM_NAME = /(?:Status|State|Mode|Build|Version|Config)$/i;
+
 function findEnumFlags(
   node: TreeSitterNode,
   filePath: string,
@@ -663,6 +669,11 @@ function findEnumFlags(
   visitAll(node, (n) => {
     // Match enum declarations with flag-like members
     if (n.type === "enum_declaration") {
+      // Skip enums whose names suggest they are status/mode/config types.
+      const enumNameNode = n.namedChildren.find((c) => c.type === "type_identifier");
+      const enumName = enumNameNode?.text ?? "";
+      if (NON_FLAG_ENUM_NAME.test(enumName)) return;
+
       const body = n.namedChildren.find((c) => c.type === "enum_body");
       if (!body) return;
 
@@ -672,7 +683,7 @@ function findEnumFlags(
           ? member.namedChildren.find((c) => c.type === "property_identifier")
           : member;
         const memberName = nameNode?.text ?? member.text;
-        if (ENUM_FLAG_PATTERN.test(memberName)) {
+        if (ENUM_FLAG_PATTERN.test(memberName) && !ENUM_FLAG_NEGATIVE_WORDS.test(memberName)) {
           flags.push({
             name: memberName,
             locations: [{ repo, module: filePath }],

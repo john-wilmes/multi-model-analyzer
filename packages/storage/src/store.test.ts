@@ -137,8 +137,8 @@ for (const makeFactory of factories) {
 
     it("clears by repo", async () => {
       await store.addEdges([
-        { source: "a", target: "b", kind: "calls", metadata: { repo: "r1" } },
-        { source: "c", target: "d", kind: "calls", metadata: { repo: "r2" } },
+        { source: "a", target: "b", kind: "calls", repo: "r1", metadata: { repo: "r1" } },
+        { source: "c", target: "d", kind: "calls", repo: "r2", metadata: { repo: "r2" } },
       ]);
 
       await store.clear("r1");
@@ -165,10 +165,10 @@ for (const makeFactory of factories) {
 
     it("traverseBFS with repo filter returns only matching edges", async () => {
       await store.addEdges([
-        { source: "a", target: "b", kind: "imports", metadata: { repo: "r1" } },
-        { source: "a", target: "c", kind: "imports", metadata: { repo: "r2" } },
-        { source: "b", target: "d", kind: "imports", metadata: { repo: "r1" } },
-        { source: "c", target: "e", kind: "imports", metadata: { repo: "r2" } },
+        { source: "a", target: "b", kind: "imports", repo: "r1", metadata: { repo: "r1" } },
+        { source: "a", target: "c", kind: "imports", repo: "r2", metadata: { repo: "r2" } },
+        { source: "b", target: "d", kind: "imports", repo: "r1", metadata: { repo: "r1" } },
+        { source: "c", target: "e", kind: "imports", repo: "r2", metadata: { repo: "r2" } },
       ]);
 
       const r1Edges = await store.traverseBFS("a", { maxDepth: 3, repo: "r1" });
@@ -181,8 +181,8 @@ for (const makeFactory of factories) {
 
     it("traverseBFS without repo filter returns all edges", async () => {
       await store.addEdges([
-        { source: "a", target: "b", kind: "imports", metadata: { repo: "r1" } },
-        { source: "a", target: "c", kind: "imports", metadata: { repo: "r2" } },
+        { source: "a", target: "b", kind: "imports", repo: "r1", metadata: { repo: "r1" } },
+        { source: "a", target: "c", kind: "imports", repo: "r2", metadata: { repo: "r2" } },
       ]);
 
       const allEdges = await store.traverseBFS("a", { maxDepth: 1 });
@@ -191,8 +191,8 @@ for (const makeFactory of factories) {
 
     it("getEdgesFrom with repo filter", async () => {
       await store.addEdges([
-        { source: "a", target: "b", kind: "calls", metadata: { repo: "r1" } },
-        { source: "a", target: "c", kind: "calls", metadata: { repo: "r2" } },
+        { source: "a", target: "b", kind: "calls", repo: "r1", metadata: { repo: "r1" } },
+        { source: "a", target: "c", kind: "calls", repo: "r2", metadata: { repo: "r2" } },
       ]);
 
       const r1Edges = await store.getEdgesFrom("a", "r1");
@@ -202,8 +202,8 @@ for (const makeFactory of factories) {
 
     it("getEdgesTo with repo filter", async () => {
       await store.addEdges([
-        { source: "x", target: "z", kind: "calls", metadata: { repo: "r1" } },
-        { source: "y", target: "z", kind: "calls", metadata: { repo: "r2" } },
+        { source: "x", target: "z", kind: "calls", repo: "r1", metadata: { repo: "r1" } },
+        { source: "y", target: "z", kind: "calls", repo: "r2", metadata: { repo: "r2" } },
       ]);
 
       const r2Edges = await store.getEdgesTo("z", "r2");
@@ -213,9 +213,9 @@ for (const makeFactory of factories) {
 
     it("getEdgesByKind with repo filter", async () => {
       await store.addEdges([
-        { source: "a", target: "b", kind: "calls", metadata: { repo: "r1" } },
-        { source: "c", target: "d", kind: "calls", metadata: { repo: "r2" } },
-        { source: "e", target: "f", kind: "imports", metadata: { repo: "r1" } },
+        { source: "a", target: "b", kind: "calls", repo: "r1", metadata: { repo: "r1" } },
+        { source: "c", target: "d", kind: "calls", repo: "r2", metadata: { repo: "r2" } },
+        { source: "e", target: "f", kind: "imports", repo: "r1", metadata: { repo: "r1" } },
       ]);
 
       const r1Calls = await store.getEdgesByKind("calls", "r1");
@@ -232,9 +232,9 @@ for (const makeFactory of factories) {
 
     it("clear(repo) only removes edges for that repo", async () => {
       await store.addEdges([
-        { source: "a", target: "b", kind: "imports", metadata: { repo: "r1" } },
-        { source: "c", target: "d", kind: "imports", metadata: { repo: "r1" } },
-        { source: "e", target: "f", kind: "imports", metadata: { repo: "r2" } },
+        { source: "a", target: "b", kind: "imports", repo: "r1", metadata: { repo: "r1" } },
+        { source: "c", target: "d", kind: "imports", repo: "r1", metadata: { repo: "r1" } },
+        { source: "e", target: "f", kind: "imports", repo: "r2", metadata: { repo: "r2" } },
       ]);
 
       await store.clear("r1");

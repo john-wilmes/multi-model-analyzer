@@ -137,7 +137,7 @@ describe("tool handlers", () => {
     const server = createMockServer();
     const stores = makeStores();
     await stores.kvStore.set("sarif:latest", JSON.stringify({
-      $schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
+      $schema: "https://json.schemastore.org/sarif-2.1.0.json",
       version: "2.1.0",
       runs: [{
         tool: { driver: { name: "mma", version: "0.1.0", rules: [] } },
@@ -176,7 +176,7 @@ describe("pagination", () => {
       message: { text: `Finding ${i}` },
     }));
     void stores.kvStore.set("sarif:latest", JSON.stringify({
-      $schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
+      $schema: "https://json.schemastore.org/sarif-2.1.0.json",
       version: "2.1.0",
       runs: [{ tool: { driver: { name: "mma", version: "0.1.0", rules: [] } }, results }],
     }));
@@ -685,7 +685,7 @@ function makeSarifStoresWithRepoMetadata(count: number) {
     logicalLocations: [{ name: `file-${i % 3 === 0 ? "repo-a" : "repo-b"}.ts`, properties: { repo: i % 3 === 0 ? "repo-a" : "repo-b" } }],
   }));
   void stores.kvStore.set("sarif:latest", JSON.stringify({
-    $schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
+    $schema: "https://json.schemastore.org/sarif-2.1.0.json",
     version: "2.1.0",
     runs: [{ tool: { driver: { name: "mma", version: "0.1.0", rules: [] } }, results }],
   }));
@@ -795,7 +795,7 @@ describe("MCP tool sanity checks", () => {
       { ruleId: "test/note", level: "note", message: { text: "Note finding" } },
     ];
     await stores.kvStore.set("sarif:latest", JSON.stringify({
-      $schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
+      $schema: "https://json.schemastore.org/sarif-2.1.0.json",
       version: "2.1.0",
       runs: [{ tool: { driver: { name: "mma", version: "0.1.0", rules: [] } }, results }],
     }));
@@ -1327,7 +1327,7 @@ describe("MCP meta-sanity checks", () => {
     const stores = makeStores();
     // Seed so get_diagnostics produces a resource_link for repo filter
     await stores.kvStore.set("sarif:latest", JSON.stringify({
-      $schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
+      $schema: "https://json.schemastore.org/sarif-2.1.0.json",
       version: "2.1.0",
       runs: [{ tool: { driver: { name: "mma", version: "0.1.0", rules: [] } }, results: [] }],
     }));

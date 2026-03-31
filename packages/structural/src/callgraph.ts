@@ -198,6 +198,7 @@ function collectCallEdges(
           source,
           target,
           kind: "calls",
+          repo,
           metadata: { repo },
         });
       }

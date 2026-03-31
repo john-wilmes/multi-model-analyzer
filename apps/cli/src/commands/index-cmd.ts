@@ -490,7 +490,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     });
 
     const sarifLog: import("@mma/core").SarifLog = {
-      $schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
+      $schema: "https://json.schemastore.org/sarif-2.1.0.json",
       version: "2.1.0",
       runs: [{
         tool: { driver: { name: "multi-model-analyzer", version: "0.1.0", rules: ruleDescriptors } },

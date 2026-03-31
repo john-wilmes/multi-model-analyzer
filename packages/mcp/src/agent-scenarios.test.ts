@@ -87,18 +87,21 @@ describe("agent scenarios", () => {
         source: "src/utils/auth.ts",
         target: "src/utils/crypto.ts",
         kind: "imports",
+        repo: "api-server",
         metadata: { repo: "api-server" },
       }]);
       await stores.graphStore.addEdges([{
         source: "src/controllers/user-ctrl.ts",
         target: "src/utils/auth.ts",
         kind: "imports",
+        repo: "api-server",
         metadata: { repo: "api-server" },
       }]);
       await stores.graphStore.addEdges([{
         source: "src/controllers/admin-ctrl.ts",
         target: "src/utils/auth.ts",
         kind: "imports",
+        repo: "api-server",
         metadata: { repo: "api-server" },
       }]);
 
@@ -207,12 +210,14 @@ describe("agent scenarios", () => {
         source: "src/handler.ts",
         target: "src/db/pool.ts",
         kind: "imports",
+        repo: "payments-svc",
         metadata: { repo: "payments-svc" },
       }]);
       await stores.graphStore.addEdges([{
         source: "src/handler.ts",
         target: "src/utils/auth.ts",
         kind: "imports",
+        repo: "payments-svc",
         metadata: { repo: "payments-svc" },
       }]);
 
@@ -284,12 +289,14 @@ describe("agent scenarios", () => {
         source: "src/checkout/summary.ts",
         target: "src/checkout/flow.ts",
         kind: "imports",
+        repo: "checkout-svc",
         metadata: { repo: "checkout-svc" },
       }]);
       await stores.graphStore.addEdges([{
         source: "src/checkout/routes.ts",
         target: "src/checkout/cart.ts",
         kind: "imports",
+        repo: "checkout-svc",
         metadata: { repo: "checkout-svc" },
       }]);
 
@@ -400,12 +407,14 @@ describe("agent scenarios", () => {
         source: "src/processing/processor.ts",
         target: "src/core/engine.ts",
         kind: "imports",
+        repo: "engine-repo",
         metadata: { repo: "engine-repo" },
       }]);
       await stores.graphStore.addEdges([{
         source: "src/api/handler.ts",
         target: "src/core/engine.ts",
         kind: "imports",
+        repo: "engine-repo",
         metadata: { repo: "engine-repo" },
       }]);
 
@@ -470,18 +479,21 @@ describe("agent scenarios", () => {
         source: "src/pipeline/transformer.ts",
         target: "src/lib/data.ts",
         kind: "imports",
+        repo: "api-svc",
         metadata: { repo: "api-svc" },
       }]);
       await stores.graphStore.addEdges([{
         source: "src/pipeline/ingest.ts",
         target: "src/lib/data.ts",
         kind: "imports",
+        repo: "api-svc",
         metadata: { repo: "api-svc" },
       }]);
       await stores.graphStore.addEdges([{
         source: "src/pipeline/batch.ts",
         target: "src/pipeline/transformer.ts",
         kind: "imports",
+        repo: "api-svc",
         metadata: { repo: "api-svc" },
       }]);
 
@@ -537,12 +549,14 @@ describe("agent scenarios", () => {
         source: "src/index.ts",
         target: "src/db.ts",
         kind: "imports",
+        repo: "data-svc",
         metadata: { repo: "data-svc" },
       }]);
       await stores.graphStore.addEdges([{
         source: "src/app.ts",
         target: "src/api.ts",
         kind: "imports",
+        repo: "web-svc",
         metadata: { repo: "web-svc" },
       }]);
 
@@ -778,12 +792,14 @@ describe("agent scenarios", () => {
         source: "src/api/reporter.ts",
         target: "src/core/pipeline.ts",
         kind: "imports",
+        repo: "analytics-svc",
         metadata: { repo: "analytics-svc" },
       }]);
       await stores.graphStore.addEdges([{
         source: "src/api/exporter.ts",
         target: "src/core/pipeline.ts",
         kind: "imports",
+        repo: "analytics-svc",
         metadata: { repo: "analytics-svc" },
       }]);
 
@@ -895,6 +911,7 @@ describe("agent scenarios", () => {
         source: "src/user/controller.ts",
         target: "src/user/service.ts",
         kind: "imports",
+        repo: "api-svc",
         metadata: { repo: "api-svc" },
       }]);
 
@@ -959,12 +976,14 @@ describe("agent scenarios", () => {
         source: "src/db/user-repo.ts#UserRepository.findById",
         target: "src/db/pool.ts#ConnectionPool.query",
         kind: "calls",
+        repo: "data-svc",
         metadata: { repo: "data-svc" },
       }]);
       await stores.graphStore.addEdges([{
         source: "src/db/user-repo.ts#UserRepository.findAll",
         target: "src/db/pool.ts#ConnectionPool.query",
         kind: "calls",
+        repo: "data-svc",
         metadata: { repo: "data-svc" },
       }]);
 

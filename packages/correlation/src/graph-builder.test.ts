@@ -55,6 +55,7 @@ describe("buildCrossRepoGraph", () => {
         source: "repo-a/src/index.ts",
         target: "@org/auth/src/index.ts",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a", targetRepo: "repo-b" },
       },
     ]);
@@ -74,6 +75,7 @@ describe("buildCrossRepoGraph", () => {
         source: "repo-a/src/service.ts",
         target: "@org/auth/src/client.ts",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
     ]);
@@ -93,6 +95,7 @@ describe("buildCrossRepoGraph", () => {
         source: "repo-a/package.json",
         target: "@org/shared",
         kind: "depends-on",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
     ]);
@@ -110,6 +113,7 @@ describe("buildCrossRepoGraph", () => {
         source: "repo-b/src/a.ts",
         target: "@org/auth/src/b.ts",
         kind: "imports",
+        repo: "repo-b",
         metadata: { repo: "repo-b" },
       },
     ]);
@@ -125,6 +129,7 @@ describe("buildCrossRepoGraph", () => {
         source: "repo-a/src/a.ts",
         target: "./utils/helper.ts",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
     ]);
@@ -140,6 +145,7 @@ describe("buildCrossRepoGraph", () => {
         source: "repo-a/src/a.ts",
         target: "some-unknown-package/index.js",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
     ]);
@@ -155,18 +161,21 @@ describe("buildCrossRepoGraph", () => {
         source: "repo-a/src/index.ts",
         target: "@org/auth/src/index.ts",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
       {
         source: "repo-a/src/index.ts",
         target: "@org/shared/src/index.ts",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
       {
         source: "repo-b/src/index.ts",
         target: "@org/shared/src/types.ts",
         kind: "imports",
+        repo: "repo-b",
         metadata: { repo: "repo-b" },
       },
     ]);
@@ -194,6 +203,7 @@ describe("buildCrossRepoGraph", () => {
         source: "repo-a/src/index.ts",
         target: "@org/auth/src/index.ts",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
       // Duplicate pair — should only appear once in repoPairs
@@ -201,6 +211,7 @@ describe("buildCrossRepoGraph", () => {
         source: "repo-a/src/other.ts",
         target: "@org/auth/src/utils.ts",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
     ]);
@@ -220,6 +231,7 @@ describe("buildCrossRepoGraph", () => {
         source: "repo-a/src/utils.ts",
         target: "lodash/cloneDeep",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
     ]);
@@ -238,6 +250,7 @@ describe("buildCrossRepoGraph", () => {
         source: "src/service.ts",
         target: "repo-b:src/index.ts",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
     ]);
@@ -258,6 +271,7 @@ describe("buildCrossRepoGraph", () => {
         source: "src/a.ts",
         target: "repo-a:src/b.ts",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
     ]);
@@ -275,6 +289,7 @@ describe("buildCrossRepoGraph", () => {
         source: "src/a.ts",
         target: "repo-b:src/lib.ts",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a", targetRepo: "repo-c" },
       },
     ]);
@@ -291,6 +306,7 @@ describe("buildCrossRepoGraph", () => {
         source: "src/controller.ts#AppController",
         target: "repo-b:src/auth.ts#AuthService",
         kind: "calls",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
     ]);
@@ -307,18 +323,21 @@ describe("buildCrossRepoGraph", () => {
         source: "repo-a/src/utils.ts",
         target: "node:path",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
       {
         source: "repo-a/src/server.ts",
         target: "node:fs",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
       {
         source: "repo-a/src/stream.ts",
         target: "node:stream/promises",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
     ]);
@@ -336,24 +355,28 @@ describe("buildCrossRepoGraph", () => {
         source: "repo-a/src/server.ts",
         target: "https://deno.land/std/http/server.ts",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
       {
         source: "repo-a/src/db.ts",
         target: "npm:postgres",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
       {
         source: "repo-a/src/test.ts",
         target: "bun:test",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
       {
         source: "repo-a/src/lib.ts",
         target: "jsr:@supabase/ssr",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
     ]);
@@ -370,6 +393,7 @@ describe("buildCrossRepoGraph", () => {
         source: "repo-a/src/index.ts",
         target: "unknown-repo:src/lib.ts",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
     ]);
@@ -404,6 +428,7 @@ describe("buildCrossRepoGraph", () => {
         source: "repo-a/src/index.ts",
         target: "@org/extra/src/index.ts",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
     ]);

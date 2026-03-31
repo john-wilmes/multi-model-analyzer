@@ -149,10 +149,12 @@ export interface GraphEdge {
   readonly source: string;
   readonly target: string;
   readonly kind: EdgeKind;
+  /** Repo partition key — used by all store implementations for repo-scoped queries. */
+  readonly repo?: string;
   /**
    * Arbitrary key-value metadata attached to the edge.
-   * Convention: `metadata.repo` is the partitioning key used by all store
-   * implementations for repo-scoped queries (filters, deletes, BFS traversal).
+   * Use the top-level `repo` field for the repo partition key.
+   * This field is for truly unstructured supplemental data.
    */
   readonly metadata?: Record<string, unknown>;
 }

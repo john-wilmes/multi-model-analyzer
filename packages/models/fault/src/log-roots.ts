@@ -40,6 +40,21 @@ export function identifyLogRoots(
   return roots.sort((a, b) => severityOrder(a.severity) - severityOrder(b.severity));
 }
 
+// Returns true when `term` appears in `text` at least once and is NOT preceded
+// by a negating phrase like "without", "no", "prevent", "avoid", "eliminate".
+// All occurrences are checked — if any occurrence is non-negated, returns true.
+function matchesTerm(text: string, term: string): boolean {
+  const negationRe = /(?:without|no|prevent(?:s|ed|ing)?|avoid(?:s|ed|ing)?|eliminat(?:es|ed|ing)?)\s+$/;
+  let searchFrom = 0;
+  while (true) {
+    const idx = text.indexOf(term, searchFrom);
+    if (idx === -1) return false;
+    const preceding = text.slice(Math.max(0, idx - 30), idx);
+    if (!negationRe.test(preceding)) return true;
+    searchFrom = idx + 1;
+  }
+}
+
 function classifySeverity(template: LogTemplate): LogRoot["severity"] {
   const text = template.template.toLowerCase();
 
@@ -47,7 +62,7 @@ function classifySeverity(template: LogTemplate): LogRoot["severity"] {
     text.includes("fatal") ||
     text.includes("crash") ||
     text.includes("unrecoverable") ||
-    text.includes("data loss")
+    matchesTerm(text, "data loss")
   ) {
     return "critical";
   }
@@ -56,7 +71,7 @@ function classifySeverity(template: LogTemplate): LogRoot["severity"] {
     text.includes("failed") ||
     text.includes("error") ||
     text.includes("exception") ||
-    text.includes("timeout")
+    matchesTerm(text, "timeout")
   ) {
     return "high";
   }

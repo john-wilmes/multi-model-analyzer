@@ -43,10 +43,29 @@ export async function runCorrelation(
     if (!target.startsWith("./") && !target.startsWith("../")) return target;
     const sourceDir = path.dirname(source.slice(repo.length + 1));
     const resolved = path.normalize(path.join(sourceDir, target));
-    // Try swapping .js → .ts since sources are typically TypeScript
-    if (resolved.endsWith(".js")) {
-      const tsVariant = makeFileId(repo, resolved.replace(/\.js$/, ".ts"));
-      if (exportIndex.has(tsVariant)) return tsVariant;
+    // Try extension alternatives: prefer TypeScript source over emitted JS
+    const extSwaps: Array<[RegExp, string[]]> = [
+      [/\.js$/, [".ts", ".tsx"]],
+      [/\.jsx$/, [".tsx"]],
+      [/\.mjs$/, [".mts"]],
+      [/\.cjs$/, [".cts"]],
+    ];
+    for (const [pattern, replacements] of extSwaps) {
+      if (pattern.test(resolved)) {
+        for (const ext of replacements) {
+          const variant = makeFileId(repo, resolved.replace(pattern, ext));
+          if (exportIndex.has(variant)) return variant;
+        }
+        break;
+      }
+    }
+    // Also try dropping the extension and appending each TS extension
+    const withoutExt = resolved.replace(/\.[^./]+$/, "");
+    if (withoutExt !== resolved) {
+      for (const ext of [".ts", ".tsx", ".mts", ".cts"]) {
+        const variant = makeFileId(repo, withoutExt + ext);
+        if (exportIndex.has(variant)) return variant;
+      }
     }
     return makeFileId(repo, resolved);
   };

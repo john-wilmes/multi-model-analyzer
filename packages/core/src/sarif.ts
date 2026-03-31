@@ -9,7 +9,7 @@
  */
 
 export interface SarifLog {
-  readonly $schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json";
+  readonly $schema: "https://json.schemastore.org/sarif-2.1.0.json";
   readonly version: "2.1.0";
   readonly runs: readonly SarifRun[];
 }
@@ -140,7 +140,7 @@ function djb2Hash(s: string): string {
 export function createSarifLog(runs: readonly SarifRun[]): SarifLog {
   return {
     $schema:
-      "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
+      "https://json.schemastore.org/sarif-2.1.0.json",
     version: "2.1.0",
     runs,
   };

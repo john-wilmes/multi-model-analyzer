@@ -68,6 +68,7 @@ function extractFromNode(
                   source,
                   target: typeNode.text,
                   kind: "extends",
+                  repo,
                   metadata: { repo, file: filePath },
                 });
                 // Only one base class per extends clause
@@ -85,6 +86,7 @@ function extractFromNode(
                   source,
                   target: typeNode.text,
                   kind: "implements",
+                  repo,
                   metadata: { repo, file: filePath },
                 });
               }

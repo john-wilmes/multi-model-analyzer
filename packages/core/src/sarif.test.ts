@@ -16,7 +16,7 @@ describe("createSarifLog", () => {
     const log = createSarifLog([]);
 
     expect(log.version).toBe("2.1.0");
-    expect(log.$schema).toContain("sarif-schema-2.1.0");
+    expect(log.$schema).toContain("sarif-2.1.0");
     expect(log.runs).toEqual([]);
   });
 

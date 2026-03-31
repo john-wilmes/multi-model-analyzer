@@ -240,10 +240,12 @@ function toGraphEdge(row: RawEdgeRow): GraphEdge {
       metadata = undefined;
     }
   }
+  const repo = typeof metadata?.["repo"] === "string" ? metadata["repo"] : undefined;
   return {
     source: row.source,
     target: row.target,
     kind: row.kind as EdgeKind,
+    ...(repo ? { repo } : {}),
     ...(metadata ? { metadata } : {}),
   };
 }

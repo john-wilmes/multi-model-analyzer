@@ -41,3 +41,14 @@ data-*/
 
 # Test results
 test-results/
+
+# Local analysis databases (root-level)
+/*.db
+/*.db-shm
+/*.db-wal
+
+# Git mirrors (local clones for indexing)
+mirrors/
+
+# Misc
+.claire/

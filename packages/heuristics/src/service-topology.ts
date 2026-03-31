@@ -46,6 +46,7 @@ export function extractServiceTopology(
         source: filePath,
         target: producer.queueName,
         kind: "service-call",
+        repo: input.repo,
         metadata: {
           repo: input.repo,
           protocol: "queue",
@@ -62,6 +63,7 @@ export function extractServiceTopology(
         source: filePath,
         target: consumer.queueName,
         kind: "service-call",
+        repo: input.repo,
         metadata: {
           repo: input.repo,
           protocol: "queue",
@@ -71,13 +73,15 @@ export function extractServiceTopology(
       });
     }
 
-    // Detect HTTP client calls
-    const httpCalls = findHttpCalls(tree.rootNode, filePath, fileImports);
+    // Detect HTTP client calls — skip test/mock files to avoid false service edges
+    const isTestFile = /(?:^|\/)(?:__tests__|__mocks__|tests?)\//u.test(filePath) || /\.(?:test|spec)\./.test(filePath);
+    const httpCalls = isTestFile ? [] : findHttpCalls(tree.rootNode, filePath, fileImports);
     for (const call of httpCalls) {
       edges.push({
         source: filePath,
         target: call.target,
         kind: "service-call",
+        repo: input.repo,
         metadata: {
           repo: input.repo,
           protocol: "http",
@@ -94,6 +98,7 @@ export function extractServiceTopology(
         source: filePath,
         target: ws.target,
         kind: "service-call",
+        repo: input.repo,
         metadata: {
           repo: input.repo,
           protocol: "websocket",

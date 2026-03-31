@@ -84,8 +84,12 @@ function inferConstraints(
 
   // Strategy 1: co-located flags/parameters likely have dependencies
   // Only infer between scope-compatible items to avoid cross-scope noise.
+  // Files with many flags are likely config definition files, not evidence of
+  // feature coupling. Skip them to avoid O(n²) spurious constraints.
+  const MAX_COLOCATION_FLAGS = 10;
   const itemsByFile = groupByFile(allItems);
   for (const [_file, fileItems] of itemsByFile) {
+    if (fileItems.length > MAX_COLOCATION_FLAGS) continue;
     if (fileItems.length >= 2) {
       for (let i = 0; i < fileItems.length; i++) {
         for (let j = i + 1; j < fileItems.length; j++) {

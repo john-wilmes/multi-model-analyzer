@@ -79,6 +79,7 @@ export function extractDependencyGraph(
         source,
         target,
         kind: "imports",
+        repo,
         metadata,
       });
     }

@@ -683,7 +683,7 @@ export async function checkSanityCallGraphSource(
   // Group edges by repo (extract from edge metadata)
   const byRepo = new Map<string, GraphEdge[]>();
   for (const edge of allCallEdges) {
-    const repo = edge.metadata?.["repo"];
+    const repo = edge.repo;
     if (typeof repo !== "string") continue;
     let list = byRepo.get(repo);
     if (!list) { list = []; byRepo.set(repo, list); }
