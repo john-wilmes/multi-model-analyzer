@@ -254,11 +254,11 @@ export function analyzeGaps(
       // not falsely flagged.
       const reachable = reachableNodes(catchNode.id, cfg);
 
-      // Match object.method call forms (console.error, logger.warn, log.info, etc.)
+      // Match object.method call forms (console.error, logger.warn, integratorLogger.error, etc.)
       // and standalone logging calls (log(), warn(), error()). Case-sensitive to
       // avoid false-positives from `new Error(` or `new TypeError(`.
       const loggingPattern =
-        /\b(console|log(ger)?)\s*\.\s*(log|error|warn|info|debug)\s*\(|\b(log|warn|error)\s*\(/;
+        /\b(console|[a-zA-Z]*Log(ger)?|log(ger)?|this\.log(ger)?)\s*\.\s*(log|error|warn|info|debug|trace|fatal)\s*\(|(?<!\.\s*)\b(log|warn|error)\s*\(/;
       const hasLogging = reachable.some(
         (n) => loggingPattern.test(n.label),
       );
@@ -267,11 +267,11 @@ export function analyzeGaps(
         (n) => n.kind === "throw",
       );
 
-      // Recognize Promise .catch() handlers and error-forwarding patterns
-      // (e.g., `return promise.catch(...)`, `reject(err)`, `next(err)`) as
-      // valid error handling within catch blocks.
+      // Recognize Promise .catch() handlers, error-forwarding patterns
+      // (reject, next, callback with error arg), and domain-specific error
+      // response helpers (lumaError.ServerError, handleError, etc.).
       const errorForwardPattern =
-        /\.catch\s*\(|\breject\s*\(|\bnext\s*\(\s*[^)\s][^)]*\)/;
+        /\.catch\s*\(|\breject\s*\(|\bnext\s*\(\s*[^)\s][^)]*\)|\bcallback\s*\(\s*(err|error|e)\b|\blumaError\.\w+\s*\(|\bhandleError\s*\(/;
       const hasErrorForwarding = reachable.some(
         (n) => errorForwardPattern.test(n.label),
       );

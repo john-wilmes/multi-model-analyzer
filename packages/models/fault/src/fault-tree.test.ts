@@ -205,15 +205,17 @@ describe("analyzeGaps", () => {
         { id: "n1", kind: "catch", label: "catch", location: loc },
         { id: "n2", kind: "statement", label: "updateCatalog()", location: loc },
         { id: "n3", kind: "statement", label: "showDialog()", location: loc },
+        { id: "n4", kind: "statement", label: "catalog.error('item not found')", location: loc },
       ],
       edges: [
         { from: "n1", to: "n2" },
         { from: "n1", to: "n3" },
+        { from: "n1", to: "n4" },
       ],
     };
 
     const results = analyzeGaps(new Map([["test#fn", cfg]]), "test-repo");
-    expect(results).toHaveLength(1); // no real logging present
+    expect(results).toHaveLength(1); // no real logging present — catalog.error is not a logger
   });
 
   it("does not flag catch block with .catch() error forwarding", () => {
@@ -250,6 +252,90 @@ describe("analyzeGaps", () => {
       nodes: [
         { id: "n1", kind: "catch", label: "catch", location: loc },
         { id: "n2", kind: "statement", label: "next(err)", location: loc },
+      ],
+      edges: [{ from: "n1", to: "n2" }],
+    };
+
+    const results = analyzeGaps(new Map([["test#fn", cfg]]), "test-repo");
+    expect(results).toHaveLength(0);
+  });
+
+  it("does not flag catch block with prefixed logger (e.g. integratorLogger.error)", () => {
+    const cfg: ControlFlowGraph = {
+      functionId: "test#fn",
+      nodes: [
+        { id: "n1", kind: "catch", label: "catch", location: loc },
+        { id: "n2", kind: "statement", label: "integratorLogger.error('failed', e)", location: loc },
+      ],
+      edges: [{ from: "n1", to: "n2" }],
+    };
+
+    const results = analyzeGaps(new Map([["test#fn", cfg]]), "test-repo");
+    expect(results).toHaveLength(0);
+  });
+
+  it("does not flag catch block with contextLogger.warn", () => {
+    const cfg: ControlFlowGraph = {
+      functionId: "test#fn",
+      nodes: [
+        { id: "n1", kind: "catch", label: "catch", location: loc },
+        { id: "n2", kind: "statement", label: "contextLogger.warn('retry failed', err)", location: loc },
+      ],
+      edges: [{ from: "n1", to: "n2" }],
+    };
+
+    const results = analyzeGaps(new Map([["test#fn", cfg]]), "test-repo");
+    expect(results).toHaveLength(0);
+  });
+
+  it("does not flag catch block with this.log.error", () => {
+    const cfg: ControlFlowGraph = {
+      functionId: "test#fn",
+      nodes: [
+        { id: "n1", kind: "catch", label: "catch", location: loc },
+        { id: "n2", kind: "statement", label: "this.log.error('operation failed', e)", location: loc },
+      ],
+      edges: [{ from: "n1", to: "n2" }],
+    };
+
+    const results = analyzeGaps(new Map([["test#fn", cfg]]), "test-repo");
+    expect(results).toHaveLength(0);
+  });
+
+  it("does not flag catch block with callback(err) forwarding", () => {
+    const cfg: ControlFlowGraph = {
+      functionId: "test#fn",
+      nodes: [
+        { id: "n1", kind: "catch", label: "catch", location: loc },
+        { id: "n2", kind: "statement", label: "callback(err)", location: loc },
+      ],
+      edges: [{ from: "n1", to: "n2" }],
+    };
+
+    const results = analyzeGaps(new Map([["test#fn", cfg]]), "test-repo");
+    expect(results).toHaveLength(0);
+  });
+
+  it("does not flag catch block with lumaError.ServerError", () => {
+    const cfg: ControlFlowGraph = {
+      functionId: "test#fn",
+      nodes: [
+        { id: "n1", kind: "catch", label: "catch", location: loc },
+        { id: "n2", kind: "statement", label: "lumaError.ServerError(err, callback)", location: loc },
+      ],
+      edges: [{ from: "n1", to: "n2" }],
+    };
+
+    const results = analyzeGaps(new Map([["test#fn", cfg]]), "test-repo");
+    expect(results).toHaveLength(0);
+  });
+
+  it("does not flag catch block with handleError call", () => {
+    const cfg: ControlFlowGraph = {
+      functionId: "test#fn",
+      nodes: [
+        { id: "n1", kind: "catch", label: "catch", location: loc },
+        { id: "n2", kind: "statement", label: "handleError(error, 'GET')", location: loc },
       ],
       edges: [{ from: "n1", to: "n2" }],
     };

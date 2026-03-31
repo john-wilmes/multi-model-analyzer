@@ -331,7 +331,7 @@ describe("checkFault", () => {
 
     const findings = [
       {
-        ruleId: "structural/fault",
+        ruleId: "fault/unhandled-error-path",
         level: "error",
         message: { text: "Silent catch block" },
         locations: [
@@ -366,7 +366,7 @@ describe("checkFault", () => {
 
     const findings = [
       {
-        ruleId: "structural/fault",
+        ruleId: "fault/unhandled-error-path",
         level: "error",
         message: { text: "Silent catch block" },
         locations: [

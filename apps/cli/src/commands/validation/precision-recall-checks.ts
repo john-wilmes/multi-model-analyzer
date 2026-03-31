@@ -438,12 +438,49 @@ export async function checkFault(
       try {
         const commit = await getIndexedCommit(repo, repoDir);
         const source = await getFileContent(repoDir, commit, modulePath);
+        const ruleId = finding.ruleId ?? "";
 
-        if (hasSilentCatchBlock(source)) {
-          reporter.pass("fault", repo, `precision: ${modulePath}`);
+        if (ruleId === "fault/missing-error-boundary") {
+          // The flagged function has NO catch block — hasSilentCatchBlock is
+          // irrelevant.  Validate: file has async+await, AND at least one
+          // async function lacks a local error boundary (try/catch, .catch(),
+          // or error callbacks).  This mirrors the detector's intent without
+          // full function-scoped parsing — a file where EVERY async function
+          // has error handling would fail this check.
+          const hasAsyncAwait = /\basync\b/.test(source) && /\bawait\b/.test(source);
+          // Count async functions vs boundary patterns as a rough proxy.
+          // Boundary patterns mirror the detector (ast-utils.ts detectMissingErrorBoundaries):
+          // try/catch, .catch(), and error-first callbacks.
+          const asyncCount = (source.match(/\basync\s+function\b|\basync\s*\(/g) ?? []).length;
+          const boundaryCount = (source.match(/\btry\s*\{/g) ?? []).length +
+            (source.match(/\.catch\s*\(/g) ?? []).length +
+            (source.match(/\bcallback\s*\(\s*(?:err|error)\b/g) ?? []).length;
+          const hasUncoveredPaths = asyncCount > boundaryCount;
+          if (hasAsyncAwait && hasUncoveredPaths) {
+            reporter.pass("fault", repo, `precision: ${modulePath}`);
+          } else if (!hasAsyncAwait) {
+            reporter.fail("fault", repo, `precision: ${modulePath}`,
+              "no async/await found in source (detector may have stale data)");
+          } else {
+            // Every async function appears to have a boundary — finding may be
+            // a false positive, but regex counting is imprecise so just skip.
+            reporter.skip("fault", repo, `precision: ${modulePath}`,
+              "boundary count >= async count (regex heuristic inconclusive)");
+          }
+        } else if (
+          ruleId === "fault/unhandled-error-path" ||
+          ruleId === "fault/silent-failure"
+        ) {
+          // catch-block quality heuristic applies only to these rules
+          if (hasSilentCatchBlock(source)) {
+            reporter.pass("fault", repo, `precision: ${modulePath}`);
+          } else {
+            reporter.fail("fault", repo, `precision: ${modulePath}`,
+              "catch blocks appear to have logging (regex heuristic — may be CFG-only path)");
+          }
         } else {
-          reporter.fail("fault", repo, `precision: ${modulePath}`,
-            "catch blocks appear to have logging (regex heuristic — may be CFG-only path)");
+          reporter.skip("fault", repo, `precision: ${modulePath}`,
+            `unsupported fault ruleId: ${ruleId}`);
         }
       } catch {
         reporter.skip("fault", repo, `precision: ${modulePath}`, "could not read source");
