@@ -8,8 +8,9 @@ async function fetchJson<T>(url: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export async function fetchRepos(): Promise<{ repos: string[] }> {
-  return fetchJson(`${BASE}/api/repos`);
+export async function fetchRepos(opts?: { indexed?: boolean }): Promise<{ repos: string[] }> {
+  const qs = opts?.indexed ? '?indexed=true' : '';
+  return fetchJson(`${BASE}/api/repos${qs}`);
 }
 
 export async function fetchMetrics(repo: string): Promise<unknown[]> {

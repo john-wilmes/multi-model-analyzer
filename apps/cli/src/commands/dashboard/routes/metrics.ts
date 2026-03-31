@@ -16,9 +16,25 @@ export async function handleRepos(
   _req: IncomingMessage,
   res: ServerResponse,
   kvStore: KVStore,
+  query: ParsedQuery,
   corsOrigin: string | undefined,
 ): Promise<void> {
-  const repos = await discoverRepos(kvStore);
+  let repos = await discoverRepos(kvStore);
+
+  // ?indexed=true filters to only repos with ATDI scores (actively indexed, not just imported)
+  if (query.single["indexed"] === "true") {
+    const raw = await kvStore.get("atdi:system");
+    if (raw) {
+      try {
+        const atdi = JSON.parse(raw) as { repoScores?: Array<{ repo: string }> };
+        if (atdi.repoScores) {
+          const indexedSet = new Set(atdi.repoScores.map((r) => r.repo));
+          repos = repos.filter((r) => indexedSet.has(r));
+        }
+      } catch { /* use unfiltered */ }
+    }
+  }
+
   return sendJson(res, { repos }, 200, corsOrigin);
 }
 

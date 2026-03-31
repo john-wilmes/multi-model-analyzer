@@ -254,6 +254,7 @@ export default function Layout() {
   const [repos, setRepos] = useState<string[]>([]);
   const [repoSearch, setRepoSearch] = useState('');
   const [repoShowAll, setRepoShowAll] = useState(false);
+  const [indexedOnly, setIndexedOnly] = useState(true);
   const location = useLocation();
 
   // Sidebar collapsed state — persisted
@@ -312,10 +313,10 @@ export default function Layout() {
   }, [collapsed]);
 
   useEffect(() => {
-    fetchRepos()
+    fetchRepos({ indexed: indexedOnly })
       .then((data) => setRepos(data.repos))
       .catch(() => setRepos([]));
-  }, []);
+  }, [indexedOnly]);
 
   const breadcrumbs = useBreadcrumbs();
   usePageTitle(breadcrumbs);
@@ -453,6 +454,15 @@ export default function Layout() {
                       {repos.length}
                     </span>
                   </div>
+                  <label className="flex items-center gap-1.5 px-3 mb-1 text-xs text-slate-400 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={indexedOnly}
+                      onChange={(e) => setIndexedOnly(e.target.checked)}
+                      className="accent-blue-500"
+                    />
+                    Indexed only
+                  </label>
                   {/* B5: Repo search filter */}
                   <div className="px-3 mb-1">
                     <input

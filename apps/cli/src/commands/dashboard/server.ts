@@ -58,7 +58,7 @@ export async function handleApi(
   const path = url.split("?")[0]!;
   const query = parseQuery(url);
 
-  if (path === "/api/repos") return handleRepos(req, res, kvStore, corsOrigin);
+  if (path === "/api/repos") return handleRepos(req, res, kvStore, query, corsOrigin);
   if (path === "/api/metrics-summary") return handleMetricsSummary(req, res, kvStore, corsOrigin);
   if (path === "/api/metrics-all") return handleMetricsAll(req, res, kvStore, query, corsOrigin);
 
