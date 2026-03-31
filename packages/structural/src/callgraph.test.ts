@@ -27,7 +27,8 @@ function foo() {
 
     expect(edges).toHaveLength(1);
     expect(edges[0]!.source).toBe("test-repo:test.ts#foo");
-    expect(edges[0]!.target).toBe("bar");
+    // Identifier calls now use makeSymbolId with the calling file as best-guess location
+    expect(edges[0]!.target).toBe("test-repo:test.ts#bar");
     expect(edges[0]!.kind).toBe("calls");
     expect(edges[0]!.metadata?.["repo"]).toBe("test-repo");
   });
@@ -67,7 +68,7 @@ const handler = () => {
 
     expect(edges).toHaveLength(1);
     expect(edges[0]!.source).toBe("test-repo:test.ts#handler");
-    expect(edges[0]!.target).toBe("doSomething");
+    expect(edges[0]!.target).toBe("test-repo:test.ts#doSomething");
   });
 
   it("extracts multiple calls from the same function", () => {
@@ -86,7 +87,7 @@ function a() {
 
     expect(edges).toHaveLength(2);
     const targets = edges.map((e) => e.target).sort();
-    expect(targets).toEqual(["b", "c"]);
+    expect(targets).toEqual(["test-repo:test.ts#b", "test-repo:test.ts#c"]);
   });
 
   it("does not produce edges for new expressions", () => {
@@ -120,7 +121,8 @@ function run() {
     );
 
     expect(edges).toHaveLength(1);
-    expect(edges[0]!.target).toBe("console.log");
+    // obj.method() calls use makeSymbolId with empty filePath (receiver file unknown)
+    expect(edges[0]!.target).toBe("test-repo:#console.log");
   });
 
   it("resolves this.client.fetch() chain via resolveMemberChain", () => {
@@ -139,8 +141,10 @@ class ApiService {
     );
 
     expect(edges).toHaveLength(1);
-    // this.client.fetch() should resolve to "this.client.fetch" via resolveMemberChain
-    expect(edges[0]!.target).toBe("this.client.fetch");
+    // this.client.fetch() — object is "this" but there's an intermediate
+    // member_expression (this.client), so resolveMemberChain is used and the
+    // receiver file is unknown → makeSymbolId with empty filePath.
+    expect(edges[0]!.target).toBe("test-repo:#this.client.fetch");
     expect(edges[0]!.source).toBe("test-repo:test.ts#ApiService.fetch");
   });
 
@@ -164,8 +168,8 @@ function outer() {
     const outerEdges = edges.filter((e) => e.source === "test-repo:test.ts#outer");
     const innerEdges = edges.filter((e) => e.source === "test-repo:test.ts#inner");
     expect(outerEdges).toHaveLength(1);
-    expect(outerEdges[0]!.target).toBe("a");
+    expect(outerEdges[0]!.target).toBe("test-repo:test.ts#a");
     expect(innerEdges).toHaveLength(1);
-    expect(innerEdges[0]!.target).toBe("b");
+    expect(innerEdges[0]!.target).toBe("test-repo:test.ts#b");
   });
 });

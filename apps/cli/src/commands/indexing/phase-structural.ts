@@ -26,6 +26,16 @@ export async function runPhaseStructural(
   const repoPath = repo.localPath ?? join(mirrorDir, `${repo.name}.git`);
   const trees = treesByRepo.get(repo.name);
 
+  const changedFilePaths = classified.map(f => f.path);
+
+  // Clean up all edge kinds for changed files before any edges are added.
+  // This is idempotent: if a prior run failed mid-phase, re-running will clean
+  // up any partial state before re-inserting. Covers imports, calls, extends,
+  // and implements edges all at once.
+  if (!options.forceFullReindex && changedFilePaths.length > 0) {
+    await graphStore.deleteEdgesForFiles(repo.name, changedFilePaths);
+  }
+
   // --- Phase 4a: Dependency graph extraction ---
   if (trees && trees.size > 0) {
     log(`  [${repo.name}] Extracting dependency graph...`);
@@ -35,7 +45,6 @@ export async function runPhaseStructural(
       const elapsed = Math.round(performance.now() - start);
 
       ctx.depGraphByRepo.set(repo.name, graph);
-      const changedFilePaths = classified.map(f => f.path);
       if (options.forceFullReindex) {
         await graphStore.clear(repo.name);
         // Remove KV entries for files that are now excluded (e.g. dist/ files
@@ -61,8 +70,6 @@ export async function runPhaseStructural(
           ]));
           log(`  [${repo.name}] Removed KV entries for ${excludedFilePaths.length} excluded files`);
         }
-      } else {
-        await graphStore.deleteEdgesForFiles(repo.name, changedFilePaths);
       }
       await graphStore.addEdges(graph.edges);
 

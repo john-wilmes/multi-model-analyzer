@@ -254,7 +254,10 @@ function resolveCallTarget(
   if (!fnChild) return null;
 
   if (fnChild.type === "identifier") {
-    return fnChild.text;
+    // Use makeSymbolId with the current file as the best-guess location so
+    // that all call-target IDs are in the same canonical format. Unresolved
+    // bare-name calls will be matched against defined symbols during analysis.
+    return makeSymbolId(repo, filePath, fnChild.text);
   }
 
   if (fnChild.type === "member_expression") {
@@ -264,20 +267,24 @@ function resolveCallTarget(
     const object = fnChild.childForFieldName("object");
     if (!object) return null;
 
-    // this.method() -> resolve to ClassName.method
+    // this.method() -> resolve to ClassName.method (canonical ID, file known)
     if (object.type === "this" && enclosingClassName) {
       return makeSymbolId(repo, filePath, `${enclosingClassName}.${property.text}`);
     }
 
-    // Simple: obj.method()
+    // obj.method() and chained a.b.method() — the receiver is an external
+    // variable; we don't know which file defines it, so keep as a qualified
+    // name string without a file segment.  Use makeSymbolId with an empty
+    // filePath so the format is still "repo:#obj.method" rather than a bare
+    // "obj.method", giving a consistent repo-scoped prefix.
     if (object.type === "identifier") {
-      return `${object.text}.${property.text}`;
+      return makeSymbolId(repo, "", `${object.text}.${property.text}`);
     }
 
-    // Chained: a.b.method() -> "a.b.method" (resolve recursively, max 3 levels)
+    // Chained: a.b.method() (resolve recursively, max 3 levels)
     if (object.type === "member_expression") {
       const prefix = resolveMemberChain(object, 3);
-      if (prefix) return `${prefix}.${property.text}`;
+      if (prefix) return makeSymbolId(repo, "", `${prefix}.${property.text}`);
     }
 
     return null;

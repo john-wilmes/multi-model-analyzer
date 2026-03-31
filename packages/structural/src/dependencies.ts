@@ -440,6 +440,17 @@ export function findCircularDependencies(edges: readonly GraphEdge[]): string[][
   }
 
   const cycles: string[][] = [];
+  // 3-color DFS (Tarjan-style):
+  // WHITE = not yet visited (not in either set)
+  // GRAY  = on the current DFS stack (in `stack` but not yet in `visited`)
+  // BLACK = fully processed (in `visited`)
+  //
+  // A back-edge to a GRAY node indicates a cycle.
+  // BLACK nodes are guaranteed cycle-free from that node onward — skip them.
+  // The key fix vs the naive approach: we only move a node to BLACK (visited)
+  // AFTER all its neighbors have been processed. Adding to visited on entry
+  // (before processing neighbors) conflates GRAY and BLACK, causing cycles to
+  // be missed when a node is reached via a non-cyclic path before a cyclic one.
   const visited = new Set<string>();
   const stack = new Set<string>();
 
@@ -447,15 +458,16 @@ export function findCircularDependencies(edges: readonly GraphEdge[]): string[][
 
   function dfs(node: string): void {
     if (stack.has(node)) {
+      // Back-edge to a GRAY node — we found a cycle
       const cycleStart = path.indexOf(node);
       if (cycleStart >= 0) {
         cycles.push(path.slice(cycleStart));
       }
       return;
     }
-    if (visited.has(node)) return;
+    if (visited.has(node)) return; // BLACK — already fully processed
 
-    visited.add(node);
+    // Mark GRAY: on the current stack
     stack.add(node);
     path.push(node);
 
@@ -465,6 +477,8 @@ export function findCircularDependencies(edges: readonly GraphEdge[]): string[][
 
     path.pop();
     stack.delete(node);
+    // Mark BLACK: fully processed
+    visited.add(node);
   }
 
   for (const node of adjacency.keys()) {

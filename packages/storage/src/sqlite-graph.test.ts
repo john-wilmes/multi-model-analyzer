@@ -70,6 +70,25 @@ describe("SqliteGraphStore", () => {
       expect(result).toHaveLength(1);
       expect(result[0]!.metadata).toBeUndefined();
     });
+
+    it("propagates top-level repo into metadata so repo-filtered queries find it", async () => {
+      // Edge has repo set at top level but no metadata.repo — repo-filtered
+      // queries use json_extract(metadata, '$.repo') so without propagation
+      // they silently miss this edge.
+      await graphStore.addEdges([{
+        source: "x.ts",
+        target: "y.ts",
+        kind: "imports",
+        repo: "my-repo",
+      }]);
+
+      const byRepo = await graphStore.getEdgesFrom("x.ts", "my-repo");
+      expect(byRepo).toHaveLength(1);
+      expect(byRepo[0]!.target).toBe("y.ts");
+
+      const byKindAndRepo = await graphStore.getEdgesByKind("imports", "my-repo");
+      expect(byKindAndRepo).toHaveLength(1);
+    });
   });
 
   describe("getEdgesFrom / getEdgesTo", () => {

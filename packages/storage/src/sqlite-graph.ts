@@ -121,7 +121,14 @@ export class SqliteGraphStore implements GraphStore {
 
     this.insertMany = db.transaction((edges: readonly GraphEdge[]) => {
       for (const edge of edges) {
-        const meta = edge.metadata ? JSON.stringify(edge.metadata) : null;
+        // Ensure edge.repo is reflected in metadata so that repo-filtered
+        // queries (which use json_extract(metadata, '$.repo')) can find this
+        // edge even when the caller sets only the top-level repo field.
+        let metadata = edge.metadata;
+        if (edge.repo && (!metadata || metadata["repo"] === undefined)) {
+          metadata = { ...metadata, repo: edge.repo };
+        }
+        const meta = metadata ? JSON.stringify(metadata) : null;
         this.stmtInsert.run(edge.source, edge.target, edge.kind, meta);
       }
     });
