@@ -14,6 +14,26 @@ export interface ConfigScopeRule {
   readonly definitionNames?: readonly string[];
 }
 
+/** Custom queue framework pattern for service-topology detection. */
+export interface CustomQueueFramework {
+  /** Package import that activates this framework's patterns (e.g., "my-queue-lib"). */
+  readonly importTrigger: string;
+  /** Producer patterns: member expression objects whose properties are queue names. */
+  readonly producers?: readonly {
+    /** Object name to match in member expressions (e.g., "MyQueues"). */
+    readonly memberObject: string;
+  }[];
+  /** Consumer patterns. */
+  readonly consumers?: readonly {
+    /** Class property whose string value is the queue name (e.g., "queueName"). */
+    readonly classProperty?: string;
+    /** Method call that registers consumers (e.g., "subscribeFromListeners"). */
+    readonly methodCall?: string;
+    /** Fixed target name for method-call consumers (e.g., "event-bus"). */
+    readonly target?: string;
+  }[];
+}
+
 export interface RepoConfig {
   readonly name: string;
   readonly url: string;

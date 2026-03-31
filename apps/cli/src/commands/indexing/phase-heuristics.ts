@@ -223,11 +223,16 @@ export async function runPhaseHeuristics(
     }
 
     const importsByFile = new Map<string, string[]>();
+    const repoPrefix = `${repo.name}:`;
     for (const edge of depGraph.edges) {
-      let imports = importsByFile.get(edge.source);
+      // Strip repo prefix from source so keys match tree-sitter tree keys (bare paths)
+      const source = edge.source.startsWith(repoPrefix)
+        ? edge.source.slice(repoPrefix.length)
+        : edge.source;
+      let imports = importsByFile.get(source);
       if (!imports) {
         imports = [];
-        importsByFile.set(edge.source, imports);
+        importsByFile.set(source, imports);
       }
       imports.push(edge.target);
     }
@@ -488,6 +493,7 @@ export async function runPhaseHeuristics(
         repo: repo.name,
         trees,
         imports: importsByFile,
+        customQueueFrameworks: ctx.options.customQueueFrameworks,
       });
       if (topologyEdges.length > 0) {
         await graphStore.addEdges(topologyEdges);

@@ -96,7 +96,7 @@ export function scanForFlags(
       mergeFlag(flagMap, flag);
     }
 
-    // Scan for rollout/featureFlags patterns (Luma-style flags stored in Redis or user.featureFlags)
+    // Scan for rollout/featureFlags patterns (flags stored in Redis or user.featureFlags)
     const rolloutFlags = findRolloutFlags(tree.rootNode, filePath, repo, options.rolloutCallMethods, options.flagPropertyName);
     for (const flag of rolloutFlags) {
       mergeFlag(flagMap, flag);
@@ -266,7 +266,7 @@ function findCustomPatternFlags(
 }
 
 /**
- * Detect Luma-style rollout/featureFlags patterns:
+ * Detect rollout/featureFlags patterns:
  * - isRolledOut(id, 'flag-name') / isUserRolledOut(id, id, 'flag-name')
  * - addRollout(id, 'flag-name') / removeRollout(id, 'flag-name')
  * - featureFlags.includes('flag-name')

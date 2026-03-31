@@ -2,20 +2,22 @@
  * Cross-repo service topology detection.
  *
  * Detects inter-service communication patterns from tree-sitter ASTs:
- * - Queue producers: queue.add(), addBulk(), @InjectQueue
- * - Queue consumers: @Process(), @Processor(), extends *WorkerService, initWorker()
+ * - Queue producers: queue.add(), addBulk(), @InjectQueue, custom queue framework patterns (config-driven)
+ * - Queue consumers: @Process(), @Processor(), extends *WorkerService, initWorker(),
+ *   custom queue framework patterns (config-driven)
  * - HTTP clients: fetch(), axios/got calls, HttpService injection
  *
  * Produces "service-call" graph edges with protocol metadata.
  */
 
-import type { GraphEdge } from "@mma/core";
+import type { GraphEdge, CustomQueueFramework } from "@mma/core";
 import type { TreeSitterNode, TreeSitterTree } from "@mma/parsing";
 
 export interface ServiceTopologyInput {
   readonly repo: string;
   readonly trees: ReadonlyMap<string, TreeSitterTree>;
   readonly imports: ReadonlyMap<string, readonly string[]>;
+  readonly customQueueFrameworks?: readonly CustomQueueFramework[];
 }
 
 export interface ServiceCallEdge {
@@ -38,7 +40,7 @@ export function extractServiceTopology(
     const fileImports = input.imports.get(filePath) ?? [];
 
     // Detect queue producers
-    const queueProducers = findQueueProducers(tree.rootNode, filePath, fileImports);
+    const queueProducers = findQueueProducers(tree.rootNode, filePath, fileImports, input.customQueueFrameworks ?? []);
     for (const producer of queueProducers) {
       edges.push({
         source: filePath,
@@ -54,7 +56,7 @@ export function extractServiceTopology(
     }
 
     // Detect queue consumers
-    const queueConsumers = findQueueConsumers(tree.rootNode, filePath);
+    const queueConsumers = findQueueConsumers(tree.rootNode, filePath, fileImports, input.customQueueFrameworks ?? []);
     for (const consumer of queueConsumers) {
       edges.push({
         source: filePath,
@@ -130,11 +132,13 @@ const NON_BROKER_QUEUE_IMPORTS = new Set(["p-queue"]);
  * - Constructor injection of *QueueService + method calls to .add()/.addBulk()
  * - Direct queue.add() calls
  * - @InjectQueue('name') decorators
+ * - Custom queue framework member access patterns (config-driven)
  */
 function findQueueProducers(
   rootNode: TreeSitterNode,
   _filePath: string,
   fileImports: readonly string[] = [],
+  customQueueFrameworks: readonly CustomQueueFramework[] = [],
 ): QueueRef[] {
   // If the file imports a non-broker queue library (e.g. p-queue), skip
   // heuristic .add()/.addBulk() detection — those calls are concurrency
@@ -143,6 +147,21 @@ function findQueueProducers(
     [...NON_BROKER_QUEUE_IMPORTS].some(
       (pkg) => imp === pkg || imp.startsWith(`${pkg}/`),
     ),
+  );
+
+  // Collect all active custom frameworks (those whose importTrigger is present)
+  const activeFrameworks = customQueueFrameworks.filter((fw) =>
+    fileImports.some(
+      (imp) => imp === fw.importTrigger || imp.startsWith(`${fw.importTrigger}/`),
+    ),
+  );
+
+  // Collect all memberObject names from ALL configured frameworks for Pass 2 exclusion.
+  // We exclude these regardless of import presence so that the generic name heuristic
+  // never fires on custom-framework objects — the framework's own Pass 3 handles them
+  // with proper import-gating.
+  const customMemberObjects = new Set<string>(
+    customQueueFrameworks.flatMap((fw) => (fw.producers ?? []).map((p) => p.memberObject)),
   );
 
   const results: QueueRef[] = [];
@@ -196,8 +215,16 @@ function findQueueProducers(
         // explicitly typed queue fields — the generic name heuristic would
         // false-positive on PQueue.add() / queue.add().
         const isKnownQueueField = queueFields.has(objectKey);
+        // Exclude custom framework member objects — handled by Pass 3 below.
+        const isCustomMemberObject =
+          customMemberObjects.has(objectText) ||
+          customMemberObjects.has(objectKey) ||
+          [...customMemberObjects].some(
+            (mo) => objectText.includes(`${mo}.`) || objectText.includes(`.${mo.charAt(0).toLowerCase()}${mo.slice(1)}.`),
+          );
         const matchesNameHeuristic =
           !usesNonBrokerQueue &&
+          !isCustomMemberObject &&
           (objectKey.endsWith("Queue") || objectKey.endsWith("queue"));
         if (isKnownQueueField || matchesNameHeuristic) {
           const args = node.childForFieldName("arguments");
@@ -229,6 +256,35 @@ function findQueueProducers(
     }
   });
 
+  // Pass 3: Config-driven custom queue framework producer patterns.
+  // For each active framework, scan for member_expression nodes matching
+  // any producers[].memberObject.
+  for (const framework of activeFrameworks) {
+    for (const producer of framework.producers ?? []) {
+      const { memberObject } = producer;
+      visitNodes(rootNode, (node) => {
+        if (node.type === "member_expression") {
+          const object = node.childForFieldName("object");
+          const property = node.childForFieldName("property");
+          if (!object || !property) return;
+          const objectText = object.text;
+          if (
+            objectText === memberObject ||
+            objectText.endsWith(`.${memberObject}`) ||
+            objectText === memberObject.charAt(0).toLowerCase() + memberObject.slice(1) ||
+            objectText.endsWith(`.${memberObject.charAt(0).toLowerCase()}${memberObject.slice(1)}`)
+          ) {
+            const queueName = property.text;
+            results.push({
+              queueName,
+              detail: `${objectText}.${queueName}`,
+            });
+          }
+        }
+      });
+    }
+  }
+
   return results;
 }
 
@@ -237,12 +293,25 @@ function findQueueProducers(
  * - @Process() / @Processor() decorators
  * - Classes extending *WorkerService
  * - initWorker() / createWorker() calls
+ * - Custom queue framework patterns (config-driven): classProperty and methodCall consumers
  */
 function findQueueConsumers(
   rootNode: TreeSitterNode,
   _filePath: string,
+  fileImports: readonly string[] = [],
+  customQueueFrameworks: readonly CustomQueueFramework[] = [],
 ): QueueRef[] {
   const results: QueueRef[] = [];
+  // Track (nodeStartIndex, frameworkIndex, consumerIndex) to prevent a consumer
+  // with both methodCall and classProperty from emitting the same node twice.
+  const seenConsumerNodes = new Set<string>();
+
+  // Collect active custom frameworks for this file
+  const activeFrameworks = customQueueFrameworks.filter((fw) =>
+    fileImports.some(
+      (imp) => imp === fw.importTrigger || imp.startsWith(`${fw.importTrigger}/`),
+    ),
+  );
 
   visitNodes(rootNode, (node) => {
     // Strategy 1: @Processor('queueName') binds a class to a queue;
@@ -300,7 +369,96 @@ function findQueueConsumers(
         }
       }
     }
+
+    // Config-driven methodCall consumers
+    for (let fi = 0; fi < activeFrameworks.length; fi++) {
+      const framework = activeFrameworks[fi]!;
+      for (let ci = 0; ci < (framework.consumers ?? []).length; ci++) {
+        const consumer = framework.consumers![ci]!;
+        if (consumer.methodCall && !consumer.classProperty && node.type === "call_expression") {
+          const func = node.childForFieldName("function");
+          if (func?.type === "member_expression") {
+            const method = func.childForFieldName("property")?.text;
+            if (method === consumer.methodCall) {
+              const seenKey = `${node.startIndex}:${fi}:${ci}`;
+              if (!seenConsumerNodes.has(seenKey)) {
+                seenConsumerNodes.add(seenKey);
+                results.push({
+                  queueName: consumer.target ?? "unknown",
+                  detail: `${consumer.methodCall}()`,
+                });
+              }
+            }
+          }
+        }
+      }
+    }
   });
+
+  // Config-driven classProperty consumers.
+  // Covers TypeScript `public_field_definition` (readonly propName = '...') and
+  // JS constructor assignment `this.propName = '...'`.
+  for (let fi = 0; fi < activeFrameworks.length; fi++) {
+    const framework = activeFrameworks[fi]!;
+    for (let ci = 0; ci < (framework.consumers ?? []).length; ci++) {
+      const consumer = framework.consumers![ci]!;
+      if (!consumer.classProperty) continue;
+      const propName = consumer.classProperty;
+      visitNodes(rootNode, (node) => {
+        // TypeScript class field: readonly <propName> = 'QueueName'
+        if (
+          node.type === "public_field_definition" ||
+          node.type === "property_declaration"
+        ) {
+          const nameNode =
+            node.childForFieldName("name") ??
+            findChildByType(node, "property_identifier", "identifier");
+          if (nameNode?.text === propName) {
+            const valueNode =
+              node.childForFieldName("value") ??
+              findChildByType(node, "string");
+            const queueName = valueNode
+              ? extractStringValue(valueNode)
+              : null;
+            if (queueName) {
+              const seenKey = `${node.startIndex}:${fi}:${ci}`;
+              if (!seenConsumerNodes.has(seenKey)) {
+                seenConsumerNodes.add(seenKey);
+                results.push({
+                  queueName,
+                  detail: `${propName} = '${queueName}'`,
+                });
+              }
+            }
+          }
+        }
+
+        // JS constructor assignment: this.<propName> = 'QueueName'
+        if (node.type === "assignment_expression") {
+          const left = node.childForFieldName("left");
+          const right = node.childForFieldName("right");
+          if (
+            left?.type === "member_expression" &&
+            left.childForFieldName("object")?.text === "this" &&
+            left.childForFieldName("property")?.text === propName &&
+            right?.type === "string"
+          ) {
+            const queueName = extractStringValue(right);
+            if (queueName) {
+              const seenKey = `${node.startIndex}:${fi}:${ci}`;
+              if (!seenConsumerNodes.has(seenKey)) {
+                seenConsumerNodes.add(seenKey);
+                results.push({
+                  queueName,
+                  detail: `${propName} = '${queueName}'`,
+                });
+              }
+            }
+          }
+        }
+      });
+    }
+  }
 
   return results;
 }
@@ -490,6 +648,21 @@ function findWebSocketCalls(
 
 // --- AST helpers ---
 
+/**
+ * Find the first direct named child of `node` whose type matches one of the
+ * given types. Used in place of inline IIFEs that loop over namedChildren.
+ */
+function findChildByType(
+  node: TreeSitterNode,
+  ...types: string[]
+): TreeSitterNode | null {
+  for (let i = 0; i < node.namedChildCount; i++) {
+    const c = node.namedChild(i)!;
+    if (types.includes(c.type)) return c;
+  }
+  return null;
+}
+
 function visitNodes(
   node: TreeSitterNode,
   callback: (node: TreeSitterNode) => void,
@@ -544,6 +717,21 @@ function findHeritageClause(classNode: TreeSitterNode): string | null {
   return null;
 }
 
+/** Extract string value from a string literal node, stripping quotes. */
+function extractStringValue(node: TreeSitterNode): string | null {
+  const text = node.text;
+  if (
+    (text.startsWith("'") && text.endsWith("'")) ||
+    (text.startsWith('"') && text.endsWith('"'))
+  ) {
+    return text.slice(1, -1);
+  }
+  if (text.startsWith("`") && text.endsWith("`")) {
+    return text.slice(1, -1);
+  }
+  return null;
+}
+
 function extractFirstStringArg(
   argsNode: TreeSitterNode | null,
 ): string | null {
@@ -554,18 +742,7 @@ function extractFirstStringArg(
       return arg.text;
     }
     if (arg.type === "string" || arg.type === "template_string") {
-      // Strip quotes
-      const text = arg.text;
-      if (
-        (text.startsWith("'") && text.endsWith("'")) ||
-        (text.startsWith('"') && text.endsWith('"'))
-      ) {
-        return text.slice(1, -1);
-      }
-      if (text.startsWith("`") && text.endsWith("`")) {
-        return text.slice(1, -1);
-      }
-      return text;
+      return extractStringValue(arg) ?? arg.text;
     }
   }
   return null;

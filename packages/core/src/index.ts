@@ -1,5 +1,6 @@
 export type {
   // Repository & Ingestion
+  CustomQueueFramework,
   ConfigScopeRule,
   RepoConfig,
   ChangeSet,

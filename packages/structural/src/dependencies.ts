@@ -143,9 +143,22 @@ function extractImports(rootNode: TreeSitterNode): ImportInfo[] {
         imports.push({ specifier: stripLoaderPrefix(source), importedNames: names });
       }
     } else if (child.type === "expression_statement") {
-      // Handle require() calls
+      // Handle bare require() calls: require('./side-effect')
       const req = findRequireCall(child);
       if (req) imports.push({ specifier: stripLoaderPrefix(req), importedNames: [] });
+    } else if (
+      child.type === "lexical_declaration" ||
+      child.type === "variable_declaration"
+    ) {
+      // Handle CJS: const x = require('...'), const { a, b } = require('...')
+      for (const declarator of child.namedChildren) {
+        if (declarator.type !== "variable_declarator") continue;
+        const req = findRequireCall(declarator);
+        if (req) {
+          const names = extractRequireNames(declarator);
+          imports.push({ specifier: stripLoaderPrefix(req), importedNames: names });
+        }
+      }
     } else if (child.type === "export_statement") {
       // Handle re-exports: export * from './x', export { X } from './x'
       // Use the "source" field to avoid matching strings inside exported class/function bodies
@@ -270,6 +283,37 @@ function findRequireCall(node: TreeSitterNode): string | null {
     if (found) return found;
   }
   return null;
+}
+
+/**
+ * Extract imported names from a CJS variable_declarator node.
+ * - `const x = require('…')` → `["default"]`
+ * - `const { a, b } = require('…')` → `["a", "b"]`
+ * - `const { a: renamed } = require('…')` → `["a"]`
+ */
+function extractRequireNames(declarator: TreeSitterNode): string[] {
+  const nameNode = declarator.childForFieldName("name");
+  if (!nameNode) return [];
+
+  if (nameNode.type === "identifier") {
+    return ["default"];
+  }
+
+  if (nameNode.type === "object_pattern") {
+    const names: string[] = [];
+    for (const prop of nameNode.namedChildren) {
+      if (prop.type === "shorthand_property_identifier_pattern") {
+        names.push(prop.text);
+      } else if (prop.type === "pair_pattern") {
+        // const { original: alias } = require('...') → extract "original"
+        const key = prop.childForFieldName("key");
+        if (key) names.push(key.text);
+      }
+    }
+    return names;
+  }
+
+  return [];
 }
 
 /**

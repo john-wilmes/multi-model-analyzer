@@ -20,7 +20,7 @@ import { auditCommand } from "../commands/audit-cmd.js";
 import { enrichCommand } from "../commands/enrich-cmd.js";
 import { printJson, printTable, printSarif, validateFormat, validateReportFormat } from "../formatter.js";
 import { parseWatchInterval, watchLoop } from "../watch.js";
-import { resolveDbPath, resolveEarlyBackend, loadConfig } from "./config.js";
+import { resolveDbPath, resolveEarlyBackend, loadConfig, validateCustomQueueFrameworks } from "./config.js";
 import type { CliConfig } from "./config.js";
 import type { ParsedArgs } from "./args.js";
 
@@ -52,6 +52,7 @@ export async function dispatchCommand(
     // W24: Respect config.backend for serve command; also read mirrorDir for index_repo
     let serveBackend = earlyBackend;
     let serveMirrorDir = resolve("mirrors");
+    let serveCustomQueueFrameworks: CliConfig["customQueueFrameworks"] | undefined;
     if (values.config) {
       try {
         const { readFileSync } = await import("node:fs");
@@ -60,6 +61,7 @@ export async function dispatchCommand(
         if (typeof cfgRaw["mirrorDir"] === "string" && cfgRaw["mirrorDir"].trim() !== "") {
           serveMirrorDir = resolve(dirname(resolve(values.config)), cfgRaw["mirrorDir"]);
         }
+        serveCustomQueueFrameworks = validateCustomQueueFrameworks(cfgRaw["customQueueFrameworks"]);
       } catch { /* use defaults */ }
     }
     // Open writable stores so index_repo can persist analysis results
@@ -83,6 +85,7 @@ export async function dispatchCommand(
             graphStore: stores.graphStore,
             searchStore: stores.searchStore,
             verbose: false,
+            customQueueFrameworks: serveCustomQueueFrameworks,
           });
           return {
             hadChanges: result.hadChanges,
@@ -741,6 +744,7 @@ export async function dispatchCommand(
           llmProvider: (values["llm-provider"] ?? config.llmProvider ?? "ollama") as "anthropic" | "openai" | "ollama",
           llmApiKey: values["llm-api-key"] ?? config.llmApiKey,
           llmModel: values["llm-model"] ?? config.llmModel,
+          customQueueFrameworks: config.customQueueFrameworks,
         } as const;
 
         if (values.watch) {

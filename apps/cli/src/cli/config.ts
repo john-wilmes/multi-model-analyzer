@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
-import type { RepoConfig, ArchitecturalRule } from "@mma/core";
+import type { RepoConfig, ArchitecturalRule, CustomQueueFramework } from "@mma/core";
 import type { StorageBackend } from "@mma/storage";
 import { validateArchRules } from "@mma/heuristics";
 import type { RawArchRule, Advisory } from "@mma/heuristics";
@@ -17,6 +17,7 @@ export interface CliConfig {
   readonly llmProvider?: "anthropic" | "openai" | "ollama";
   readonly llmApiKey?: string;
   readonly llmModel?: string;
+  readonly customQueueFrameworks?: readonly CustomQueueFramework[];
 }
 
 /**
@@ -51,6 +52,42 @@ export function resolveDbPath(
  */
 export function resolveEarlyBackend(backendFlag: string | undefined): StorageBackend {
   return backendFlag === "kuzu" ? "kuzu" : "sqlite";
+}
+
+/**
+ * Validate a raw `customQueueFrameworks` value from a config file or serve request.
+ * Exits with an error message on invalid input; returns the validated array on success.
+ * Accepts `undefined` and returns `undefined` (no frameworks configured).
+ */
+export function validateCustomQueueFrameworks(
+  value: unknown,
+): readonly CustomQueueFramework[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    console.error(`Config field "customQueueFrameworks" must be an array`);
+    process.exit(1);
+  }
+  for (let i = 0; i < (value as unknown[]).length; i++) {
+    const fw = (value as unknown[])[i];
+    if (typeof fw !== "object" || fw === null || Array.isArray(fw)) {
+      console.error(`Config field "customQueueFrameworks[${i}]" must be an object`);
+      process.exit(1);
+    }
+    const fwObj = fw as Record<string, unknown>;
+    if (typeof fwObj["importTrigger"] !== "string" || fwObj["importTrigger"].trim() === "") {
+      console.error(`Config field "customQueueFrameworks[${i}].importTrigger" must be a non-empty string`);
+      process.exit(1);
+    }
+    if (fwObj["consumers"] !== undefined && !Array.isArray(fwObj["consumers"])) {
+      console.error(`Config field "customQueueFrameworks[${i}].consumers" must be an array`);
+      process.exit(1);
+    }
+    if (fwObj["producers"] !== undefined && !Array.isArray(fwObj["producers"])) {
+      console.error(`Config field "customQueueFrameworks[${i}].producers" must be an array`);
+      process.exit(1);
+    }
+  }
+  return value as readonly CustomQueueFramework[];
 }
 
 /**
@@ -104,11 +141,17 @@ export async function loadConfig(
     const knownFields = new Set([
       "repos", "mirrorDir", "dbPath", "rules", "baselinePath",
       "backend", "advisories", "llmProvider", "llmApiKey", "llmModel",
+      "customQueueFrameworks",
     ]);
     for (const key of Object.keys(cfg)) {
       if (!knownFields.has(key)) {
         console.error(`warning: unknown config field "${key}" — possible typo`);
       }
+    }
+
+    // Validate customQueueFrameworks if present
+    if (cfg["customQueueFrameworks"] !== undefined) {
+      validateCustomQueueFrameworks(cfg["customQueueFrameworks"]);
     }
 
     config = cfg as unknown as CliConfig;

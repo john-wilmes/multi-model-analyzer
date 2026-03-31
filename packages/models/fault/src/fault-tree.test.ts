@@ -316,12 +316,12 @@ describe("analyzeGaps", () => {
     expect(results).toHaveLength(0);
   });
 
-  it("does not flag catch block with lumaError.ServerError", () => {
+  it("does not flag catch block with custom error factory", () => {
     const cfg: ControlFlowGraph = {
       functionId: "test#fn",
       nodes: [
         { id: "n1", kind: "catch", label: "catch", location: loc },
-        { id: "n2", kind: "statement", label: "lumaError.ServerError(err, callback)", location: loc },
+        { id: "n2", kind: "statement", label: "appError.ServerError(err, callback)", location: loc },
       ],
       edges: [{ from: "n1", to: "n2" }],
     };

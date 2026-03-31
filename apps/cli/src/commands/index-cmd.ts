@@ -330,7 +330,10 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       await kvStore.set("flagRegistry:checked", "1");
       for (const repo of repos) {
         const repoPath = repo.localPath ?? join(mirrorDir, `${repo.name}.git`);
-        const candidates = repo.flagRegistryFilePaths ?? ["src/luma/utils/feature-flags-enums.ts"];
+        // Empty array when not configured: repos must set flagRegistryFilePaths
+        // explicitly. No generic fallback exists because registry file locations
+        // are project-specific (there is no universal convention to scan).
+        const candidates = repo.flagRegistryFilePaths ?? [];
         for (const candidate of candidates) {
           try {
             const text = await readFile(join(repoPath, candidate), "utf-8");

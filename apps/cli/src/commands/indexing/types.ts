@@ -13,6 +13,7 @@ import type {
   ConfigInventory,
   LogTemplateIndex,
   MethodPurposeMap,
+  CustomQueueFramework,
 } from "@mma/core";
 import type { KVStore, GraphStore, SearchStore } from "@mma/storage";
 import type { ArchitecturalRule } from "@mma/core";
@@ -39,6 +40,7 @@ export interface IndexOptions {
   readonly llmProvider?: "anthropic" | "openai" | "ollama";
   readonly llmApiKey?: string;
   readonly llmModel?: string;
+  readonly customQueueFrameworks?: readonly CustomQueueFramework[];
 }
 
 export interface IndexResult {

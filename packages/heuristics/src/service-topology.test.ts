@@ -125,6 +125,46 @@ class BulkSender {
       expect(queueEdge!.target).toBe("workflow");
       expect(queueEdge!.metadata?.detail).toContain("addBulk");
     });
+
+    describe("custom queue framework patterns", () => {
+      const customFrameworks = [{
+        importTrigger: "my-queue-lib",
+        producers: [{ memberObject: "MyQueues" }],
+        consumers: [
+          { classProperty: "queueName" },
+          { methodCall: "subscribeFromListeners", target: "event-bus" },
+        ],
+      }];
+
+      it("detects custom member access producer with matching import", () => {
+        const source = `
+const MyQueues = lib.queues;
+function enqueue() {
+  MyQueues.StatusQueue.add({ status: 'sent' });
+}`;
+        const input = makeInput([
+          { path: "enqueue.ts", source, imports: ["my-queue-lib"] },
+        ]);
+        const edges = extractServiceTopology({ ...input, customQueueFrameworks: customFrameworks });
+        const queueEdge = edges.find(
+          (e) => e.metadata?.protocol === "queue" && e.metadata?.role === "producer",
+        );
+        expect(queueEdge).toBeDefined();
+        expect(queueEdge!.target).toBe("StatusQueue");
+        expect(queueEdge!.metadata?.detail).toContain("MyQueues");
+      });
+
+      it("ignores custom member access without matching import", () => {
+        const source = `
+MyQueues.SomeQueue.add({ data: 1 });`;
+        const input = makeInput([{ path: "no-import.ts", source }]);
+        const edges = extractServiceTopology({ ...input, customQueueFrameworks: customFrameworks });
+        const queueEdge = edges.find(
+          (e) => e.metadata?.protocol === "queue" && e.metadata?.role === "producer",
+        );
+        expect(queueEdge).toBeUndefined();
+      });
+    });
   });
 
   describe("queue consumers", () => {
@@ -190,6 +230,91 @@ class Scheduler {
       );
       expect(consumerEdge).toBeDefined();
       expect(consumerEdge!.target).toBe("email-queue");
+    });
+
+    describe("custom queue framework patterns", () => {
+      const customFrameworks = [{
+        importTrigger: "my-queue-lib",
+        producers: [{ memberObject: "MyQueues" }],
+        consumers: [
+          { classProperty: "queueName" },
+          { methodCall: "subscribeFromListeners", target: "event-bus" },
+        ],
+      }];
+
+      it("detects classProperty consumer with matching import", () => {
+        const source = `
+class ReminderHandler {
+  readonly queueName = 'ReminderFailures';
+  async handle(context) {}
+}`;
+        const input = makeInput([
+          { path: "handler.ts", source, imports: ["my-queue-lib"] },
+        ]);
+        const edges = extractServiceTopology({ ...input, customQueueFrameworks: customFrameworks });
+        const consumerEdge = edges.find(
+          (e) => e.metadata?.protocol === "queue" && e.metadata?.role === "consumer",
+        );
+        expect(consumerEdge).toBeDefined();
+        expect(consumerEdge!.target).toBe("ReminderFailures");
+        expect(consumerEdge!.metadata?.detail).toContain("queueName");
+      });
+
+      it("detects methodCall consumer with matching import", () => {
+        const source = `
+const sf = new lib.serverFramework();
+sf.subscribeFromListeners(listeners);`;
+        const input = makeInput([
+          { path: "server.ts", source, imports: ["my-queue-lib"] },
+        ]);
+        const edges = extractServiceTopology({ ...input, customQueueFrameworks: customFrameworks });
+        const consumerEdge = edges.find(
+          (e) => e.metadata?.protocol === "queue" && e.metadata?.role === "consumer",
+        );
+        expect(consumerEdge).toBeDefined();
+        expect(consumerEdge!.target).toBe("event-bus");
+        expect(consumerEdge!.metadata?.detail).toContain("subscribeFromListeners");
+      });
+
+      it("ignores classProperty consumer without matching import", () => {
+        const source = `
+class SomeHandler {
+  readonly queueName = 'TestQueue';
+}`;
+        const input = makeInput([{ path: "no-import.ts", source }]);
+        const edges = extractServiceTopology({ ...input, customQueueFrameworks: customFrameworks });
+        const consumerEdge = edges.find(
+          (e) =>
+            e.metadata?.protocol === "queue" &&
+            e.metadata?.role === "consumer" &&
+            (e.metadata?.detail as string)?.includes("queueName"),
+        );
+        expect(consumerEdge).toBeUndefined();
+      });
+
+      it("deduplicates consumer with both methodCall and classProperty", () => {
+        const combinedFrameworks = [{
+          importTrigger: "my-queue-lib",
+          producers: [],
+          consumers: [
+            { methodCall: "subscribeFromListeners", classProperty: "queueName", target: "fallback-queue" },
+          ],
+        }];
+        const source = `
+class MyHandler {
+  readonly queueName = 'ActualQueue';
+  async subscribeFromListeners() {}
+}`;
+        const input = makeInput([
+          { path: "handler.ts", source, imports: ["my-queue-lib"] },
+        ]);
+        const edges = extractServiceTopology({ ...input, customQueueFrameworks: combinedFrameworks });
+        const consumerEdges = edges.filter(
+          (e) => e.metadata?.protocol === "queue" && e.metadata?.role === "consumer",
+        );
+        expect(consumerEdges).toHaveLength(1);
+        expect(consumerEdges[0]!.target).toBe("ActualQueue");
+      });
     });
   });
 

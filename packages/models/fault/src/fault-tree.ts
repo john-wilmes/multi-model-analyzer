@@ -269,9 +269,9 @@ export function analyzeGaps(
 
       // Recognize Promise .catch() handlers, error-forwarding patterns
       // (reject, next, callback with error arg), and domain-specific error
-      // response helpers (lumaError.ServerError, handleError, etc.).
+      // response helpers (e.g., custom error factories, handleError).
       const errorForwardPattern =
-        /\.catch\s*\(|\breject\s*\(|\bnext\s*\(\s*[^)\s][^)]*\)|\bcallback\s*\(\s*(err|error|e)\b|\blumaError\.\w+\s*\(|\bhandleError\s*\(/;
+        /\.catch\s*\(|\breject\s*\(|\bnext\s*\(\s*[^)\s][^)]*\)|\bcallback\s*\(\s*(err|error|e)\b|\b\w+Error\.\w+\s*\(|\bhandleError\s*\(/;
       const hasErrorForwarding = reachable.some(
         (n) => errorForwardPattern.test(n.label),
       );
