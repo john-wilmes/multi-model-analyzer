@@ -2,6 +2,7 @@ export type {
   // Repository & Ingestion
   CustomQueueFramework,
   ConfigScopeRule,
+  FlagDefaults,
   RepoConfig,
   ChangeSet,
   FileKind,

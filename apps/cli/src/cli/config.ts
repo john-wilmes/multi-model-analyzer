@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
-import type { RepoConfig, ArchitecturalRule, CustomQueueFramework } from "@mma/core";
+import type { RepoConfig, ArchitecturalRule, CustomQueueFramework, FlagDefaults } from "@mma/core";
 import type { StorageBackend } from "@mma/storage";
 import { validateArchRules } from "@mma/heuristics";
 import type { RawArchRule, Advisory } from "@mma/heuristics";
@@ -18,6 +18,7 @@ export interface CliConfig {
   readonly llmApiKey?: string;
   readonly llmModel?: string;
   readonly customQueueFrameworks?: readonly CustomQueueFramework[];
+  readonly flagDefaults?: FlagDefaults;
 }
 
 /**
@@ -91,6 +92,43 @@ export function validateCustomQueueFrameworks(
 }
 
 /**
+ * Validate a raw `flagDefaults` value from a config file.
+ * Exits with an error message on invalid input; returns the validated object on success.
+ * Accepts `undefined` and returns `undefined` (no defaults configured).
+ */
+export function validateFlagDefaults(value: unknown): FlagDefaults | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    console.error(`Config field "flagDefaults" must be an object`);
+    process.exit(1);
+  }
+  const obj = value as Record<string, unknown>;
+  const arrayOfStringsFields = ["sdkImports", "sdkMethods", "hookPatterns", "rolloutCallMethods"] as const;
+  for (const field of arrayOfStringsFields) {
+    if (obj[field] !== undefined) {
+      if (!Array.isArray(obj[field])) {
+        console.error(`Config field "flagDefaults.${field}" must be an array`);
+        process.exit(1);
+      }
+      for (let i = 0; i < (obj[field] as unknown[]).length; i++) {
+        if (typeof (obj[field] as unknown[])[i] !== "string") {
+          console.error(`Config field "flagDefaults.${field}[${i}]" must be a string`);
+          process.exit(1);
+        }
+      }
+    }
+  }
+  const stringFields = ["flagPropertyName", "registryEnumName"] as const;
+  for (const field of stringFields) {
+    if (obj[field] !== undefined && typeof obj[field] !== "string") {
+      console.error(`Config field "flagDefaults.${field}" must be a string`);
+      process.exit(1);
+    }
+  }
+  return obj as FlagDefaults;
+}
+
+/**
  * Load and validate a full CliConfig from the config file path.
  * Resolves all paths relative to the config file directory.
  * Exits with error on missing/invalid required fields.
@@ -141,7 +179,7 @@ export async function loadConfig(
     const knownFields = new Set([
       "repos", "mirrorDir", "dbPath", "rules", "baselinePath",
       "backend", "advisories", "llmProvider", "llmApiKey", "llmModel",
-      "customQueueFrameworks",
+      "customQueueFrameworks", "flagDefaults",
     ]);
     for (const key of Object.keys(cfg)) {
       if (!knownFields.has(key)) {
@@ -152,6 +190,11 @@ export async function loadConfig(
     // Validate customQueueFrameworks if present
     if (cfg["customQueueFrameworks"] !== undefined) {
       validateCustomQueueFrameworks(cfg["customQueueFrameworks"]);
+    }
+
+    // Validate flagDefaults if present
+    if (cfg["flagDefaults"] !== undefined) {
+      validateFlagDefaults(cfg["flagDefaults"]);
     }
 
     config = cfg as unknown as CliConfig;

@@ -301,7 +301,16 @@ export async function runPhaseHeuristics(
         try { allRegistryFlags = JSON.parse(registryJson); } catch { /* skip */ }
       }
 
-      let flagInventory = scanForFlags(trees, repo.name, { registryFlags: allRegistryFlags, registryEnumName: repo.flagRegistryEnumName, rolloutCallMethods: repo.rolloutCallMethods, flagPropertyName: repo.flagPropertyName });
+      const { flagDefaults } = ctx.options;
+      let flagInventory = scanForFlags(trees, repo.name, {
+        registryFlags: allRegistryFlags,
+        registryEnumName: repo.flagRegistryEnumName ?? flagDefaults?.registryEnumName,
+        rolloutCallMethods: repo.rolloutCallMethods ?? flagDefaults?.rolloutCallMethods,
+        flagPropertyName: repo.flagPropertyName ?? flagDefaults?.flagPropertyName,
+        sdkMethods: flagDefaults?.sdkMethods,
+        hookPatterns: flagDefaults?.hookPatterns,
+        sdkImports: flagDefaults?.sdkImports,
+      });
 
       // Incremental mode: merge with cached flags for files not re-scanned
       if (!options.forceFullReindex) {

@@ -20,7 +20,7 @@ import { auditCommand } from "../commands/audit-cmd.js";
 import { enrichCommand } from "../commands/enrich-cmd.js";
 import { printJson, printTable, printSarif, validateFormat, validateReportFormat } from "../formatter.js";
 import { parseWatchInterval, watchLoop } from "../watch.js";
-import { resolveDbPath, resolveEarlyBackend, loadConfig, validateCustomQueueFrameworks } from "./config.js";
+import { resolveDbPath, resolveEarlyBackend, loadConfig, validateCustomQueueFrameworks, validateFlagDefaults } from "./config.js";
 import type { CliConfig } from "./config.js";
 import type { ParsedArgs } from "./args.js";
 
@@ -53,6 +53,7 @@ export async function dispatchCommand(
     let serveBackend = earlyBackend;
     let serveMirrorDir = resolve("mirrors");
     let serveCustomQueueFrameworks: CliConfig["customQueueFrameworks"] | undefined;
+    let serveFlagDefaults: CliConfig["flagDefaults"] | undefined;
     if (values.config) {
       try {
         const { readFileSync } = await import("node:fs");
@@ -62,6 +63,7 @@ export async function dispatchCommand(
           serveMirrorDir = resolve(dirname(resolve(values.config)), cfgRaw["mirrorDir"]);
         }
         serveCustomQueueFrameworks = validateCustomQueueFrameworks(cfgRaw["customQueueFrameworks"]);
+        serveFlagDefaults = validateFlagDefaults(cfgRaw["flagDefaults"]);
       } catch { /* use defaults */ }
     }
     // Open writable stores so index_repo can persist analysis results
@@ -86,6 +88,7 @@ export async function dispatchCommand(
             searchStore: stores.searchStore,
             verbose: false,
             customQueueFrameworks: serveCustomQueueFrameworks,
+            flagDefaults: serveFlagDefaults,
           });
           return {
             hadChanges: result.hadChanges,
@@ -745,6 +748,7 @@ export async function dispatchCommand(
           llmApiKey: values["llm-api-key"] ?? config.llmApiKey,
           llmModel: values["llm-model"] ?? config.llmModel,
           customQueueFrameworks: config.customQueueFrameworks,
+          flagDefaults: config.flagDefaults,
         } as const;
 
         if (values.watch) {

@@ -14,6 +14,7 @@ import type {
   LogTemplateIndex,
   MethodPurposeMap,
   CustomQueueFramework,
+  FlagDefaults,
 } from "@mma/core";
 import type { KVStore, GraphStore, SearchStore } from "@mma/storage";
 import type { ArchitecturalRule } from "@mma/core";
@@ -41,6 +42,7 @@ export interface IndexOptions {
   readonly llmApiKey?: string;
   readonly llmModel?: string;
   readonly customQueueFrameworks?: readonly CustomQueueFramework[];
+  readonly flagDefaults?: FlagDefaults;
 }
 
 export interface IndexResult {

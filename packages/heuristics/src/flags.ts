@@ -15,6 +15,8 @@ import type { TreeSitterNode, TreeSitterTree } from "@mma/parsing";
 export interface FlagScannerOptions {
   readonly customPatterns?: readonly RegExp[];
   readonly sdkImports?: readonly string[];
+  readonly sdkMethods?: readonly string[];
+  readonly hookPatterns?: readonly string[];
   readonly registryFlags?: readonly FeatureFlag[];
   readonly rolloutCallMethods?: readonly string[];
   readonly flagPropertyName?: string;
@@ -72,7 +74,7 @@ export function scanForFlags(
     );
 
     if (usesSDK) {
-      const sdkFlags = findSdkFlagCalls(tree.rootNode, filePath, repo);
+      const sdkFlags = findSdkFlagCalls(tree.rootNode, filePath, repo, options.sdkMethods);
       for (const flag of sdkFlags) {
         mergeFlag(flagMap, flag);
       }
@@ -85,7 +87,7 @@ export function scanForFlags(
     }
 
     // Scan for hook-based flags (React)
-    const hookFlags = findHookFlags(tree.rootNode, filePath, repo);
+    const hookFlags = findHookFlags(tree.rootNode, filePath, repo, options.hookPatterns);
     for (const flag of hookFlags) {
       mergeFlag(flagMap, flag);
     }
@@ -147,13 +149,18 @@ function findImports(node: TreeSitterNode): string[] {
   return imports;
 }
 
+const DEFAULT_SDK_METHODS = ["variation", "useFlags", "getTreatment", "isEnabled", "getValue"];
+
 function findSdkFlagCalls(
   node: TreeSitterNode,
   filePath: string,
   repo: string,
+  extraSdkMethods?: readonly string[],
 ): FeatureFlag[] {
   const flags: FeatureFlag[] = [];
-  const sdkMethods = ["variation", "useFlags", "getTreatment", "isEnabled", "getValue"];
+  const sdkMethods = extraSdkMethods
+    ? [...DEFAULT_SDK_METHODS, ...extraSdkMethods.filter((m) => !DEFAULT_SDK_METHODS.includes(m))]
+    : DEFAULT_SDK_METHODS;
 
   visitAll(node, (n) => {
     if (n.type === "call_expression") {
@@ -203,14 +210,19 @@ function findEnvFlags(
   return flags;
 }
 
+const DEFAULT_HOOK_PATTERNS = ["useFeatureFlag", "useFeatureFlags", "useFlag", "useFlags", "useFeatureGate"];
+
 /** Detect feature flag access via React hooks and config objects. */
 function findHookFlags(
   node: TreeSitterNode,
   filePath: string,
   repo: string,
+  extraHookPatterns?: readonly string[],
 ): FeatureFlag[] {
   const flags: FeatureFlag[] = [];
-  const hookPatterns = ["useFeatureFlag", "useFeatureFlags", "useFlag", "useFlags", "useFeatureGate"];
+  const hookPatterns = extraHookPatterns
+    ? [...DEFAULT_HOOK_PATTERNS, ...extraHookPatterns.filter((h) => !DEFAULT_HOOK_PATTERNS.includes(h))]
+    : DEFAULT_HOOK_PATTERNS;
 
   visitAll(node, (n) => {
     if (n.type === "call_expression") {

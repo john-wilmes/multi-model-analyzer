@@ -34,6 +34,22 @@ export interface CustomQueueFramework {
   }[];
 }
 
+/** Global defaults for feature-flag detection, applied to all repos unless overridden per-repo. */
+export interface FlagDefaults {
+  /** Additional SDK package imports that trigger flag-method scanning (merged with built-in list). */
+  readonly sdkImports?: readonly string[];
+  /** Additional SDK method names that extract flag names from their first argument (merged with built-in list). */
+  readonly sdkMethods?: readonly string[];
+  /** Additional React hook names that extract flag names (merged with built-in list). */
+  readonly hookPatterns?: readonly string[];
+  /** Rollout/flag-check method names (overrides built-in default: isRolledOut, isUserRolledOut, addRollout, removeRollout). */
+  readonly rolloutCallMethods?: readonly string[];
+  /** Property name for array-includes flag checks (default: "featureFlags"). */
+  readonly flagPropertyName?: string;
+  /** Default enum name for flag registry extraction (default: "FeatureFlags"). */
+  readonly registryEnumName?: string;
+}
+
 export interface RepoConfig {
   readonly name: string;
   readonly url: string;
