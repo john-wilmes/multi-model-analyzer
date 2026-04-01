@@ -1,0 +1,273 @@
+import type {
+  ConfigSchema,
+  CredentialAccess,
+  FieldConstraint,
+  ConstraintSet,
+  ConstraintSetResult,
+  RequirementLevel,
+  GuardCondition,
+} from "./types.js";
+
+/**
+ * Extracts the integrator type from a file path.
+ * Matches `clients/{type}/` in the path.
+ * For vendor paths `clients/{type}/vendors/{vendor}/`, returns the vendor type.
+ */
+function extractIntegratorTypeFromPath(filePath: string): string | undefined {
+  // Match vendor path first: clients/{type}/vendors/{vendor}/
+  const vendorMatch = /(?:^|[/\\])clients[/\\]([^/\\]+)[/\\]vendors[/\\]([^/\\]+)[/\\]/.exec(filePath);
+  if (vendorMatch) {
+    return vendorMatch[2];
+  }
+  // Match base: clients/{type}/
+  const baseMatch = /(?:^|[/\\])clients[/\\]([^/\\]+)[/\\]/.exec(filePath);
+  if (baseMatch) {
+    return baseMatch[1];
+  }
+  return undefined;
+}
+
+/**
+ * Determines if an access is unconditional (no guard conditions, not a default-fallback, not a write).
+ */
+function isUnconditionalRead(access: CredentialAccess): boolean {
+  return (
+    access.guardConditions.length === 0 &&
+    access.accessKind !== 'default-fallback' &&
+    access.accessKind !== 'write'
+  );
+}
+
+/**
+ * Determines the requirement level for a field given its schema info and non-write accesses.
+ */
+function determineRequirementLevel(
+  schemaRequired: boolean | undefined,
+  schemaHasDefault: boolean,
+  nonWriteAccesses: readonly CredentialAccess[],
+): RequirementLevel {
+  // Priority 1: explicitly required in schema → always (unless it has a default)
+  if (schemaRequired === true) {
+    // A field marked required:true but with a default value is self-sufficient —
+    // the runtime framework fills the default, so callers never need to provide it.
+    if (schemaHasDefault) {
+      return 'never';
+    }
+    return 'always';
+  }
+
+  // Priority 5: explicitly not required in schema → never
+  if (schemaRequired === false) {
+    return 'never';
+  }
+
+  // No schema required info — determine from accesses and defaults
+  if (nonWriteAccesses.length > 0) {
+    // Priority 4: has schema default → never
+    if (schemaHasDefault) {
+      return 'never';
+    }
+
+    const allHaveDefaultFallback = nonWriteAccesses.every(
+      (a) => a.accessKind === 'default-fallback' || a.hasDefault,
+    );
+
+    // Priority 4: all accesses have default fallback → never
+    if (allHaveDefaultFallback) {
+      return 'never';
+    }
+
+    const hasUnconditionalAccess = nonWriteAccesses.some(isUnconditionalRead);
+
+    // Priority 2: no default AND accessed unconditionally → always
+    if (hasUnconditionalAccess) {
+      return 'always';
+    }
+
+    // Priority 3: all accesses are guarded → conditional
+    return 'conditional';
+  }
+
+  // Schema-only: no accesses
+  // Priority 4: schema has default → never
+  if (schemaHasDefault) {
+    return 'never';
+  }
+
+  // Default: never (assume optional)
+  return 'never';
+}
+
+/**
+ * Builds FieldConstraint objects for a given integrator type.
+ */
+function buildFieldConstraints(
+  schema: ConfigSchema | undefined,
+  nonWriteAccesses: readonly CredentialAccess[],
+): readonly FieldConstraint[] {
+  // Collect all field names
+  const fieldNames = new Set<string>();
+
+  if (schema) {
+    for (const f of schema.fields) {
+      fieldNames.add(f.name);
+    }
+  }
+
+  for (const access of nonWriteAccesses) {
+    fieldNames.add(access.field);
+  }
+
+  const constraints: FieldConstraint[] = [];
+
+  for (const fieldName of fieldNames) {
+    const schemaField = schema?.fields.find((f) => f.name === fieldName);
+    const fieldAccesses = nonWriteAccesses.filter((a) => a.field === fieldName);
+
+    const required = determineRequirementLevel(
+      schemaField?.required,
+      schemaField?.hasDefault ?? false,
+      fieldAccesses,
+    );
+
+    // Collect evidence: schema source + access sites
+    const evidence: { file: string; line: number }[] = [];
+    if (schemaField) {
+      evidence.push(schemaField.source);
+    }
+    for (const access of fieldAccesses) {
+      evidence.push({ file: access.file, line: access.line });
+    }
+
+    // Collect known values from guard conditions (== or !=)
+    const knownValuesSet = new Set<string>();
+    for (const access of fieldAccesses) {
+      for (const guard of access.guardConditions) {
+        if ((guard.operator === '==' || guard.operator === '!=') && guard.value !== undefined) {
+          knownValuesSet.add(guard.value);
+        }
+      }
+    }
+    const knownValues = knownValuesSet.size > 0 ? [...knownValuesSet] : undefined;
+
+    // Build conditions for conditional fields
+    let conditions:
+      | readonly {
+          readonly requiredWhen: readonly GuardCondition[];
+          readonly evidence: readonly { readonly file: string; readonly line: number }[];
+        }[]
+      | undefined;
+
+    if (required === 'conditional') {
+      // Group accesses by guard condition set (stringified for deduplication)
+      const conditionGroups = new Map<
+        string,
+        {
+          requiredWhen: readonly GuardCondition[];
+          evidence: { file: string; line: number }[];
+        }
+      >();
+
+      for (const access of fieldAccesses) {
+        if (access.guardConditions.length > 0) {
+          const key = JSON.stringify(access.guardConditions);
+          const existing = conditionGroups.get(key);
+          if (existing) {
+            existing.evidence.push({ file: access.file, line: access.line });
+          } else {
+            conditionGroups.set(key, {
+              requiredWhen: access.guardConditions,
+              evidence: [{ file: access.file, line: access.line }],
+            });
+          }
+        }
+      }
+
+      conditions = [...conditionGroups.values()];
+    }
+
+    const constraint: FieldConstraint = {
+      field: fieldName,
+      required,
+      ...(schemaField?.defaultValue !== undefined ? { defaultValue: schemaField.defaultValue } : {}),
+      ...(schemaField?.inferredType !== undefined ? { inferredType: schemaField.inferredType } : {}),
+      ...(schemaField?.description !== undefined ? { description: schemaField.description } : {}),
+      ...(schemaField?.metadata !== undefined ? { metadata: schemaField.metadata } : {}),
+      ...(conditions !== undefined ? { conditions } : {}),
+      ...(knownValues !== undefined ? { knownValues } : {}),
+      evidence,
+    };
+
+    constraints.push(constraint);
+  }
+
+  return constraints;
+}
+
+/**
+ * Merges ConfigSchema (Phase 1) and CredentialAccess[] (Phase 2) into ConstraintSets per integrator type.
+ */
+export function buildConstraintSets(
+  schemas: readonly ConfigSchema[],
+  accesses: readonly CredentialAccess[],
+): ConstraintSetResult {
+  const errors: { integratorType: string; error: string }[] = [];
+
+  // Index schemas by integrator type
+  const schemaByType = new Map<string, ConfigSchema>();
+  for (const schema of schemas) {
+    schemaByType.set(schema.integratorType, schema);
+  }
+
+  // Group non-write accesses by integrator type (extracted from file path)
+  const accessesByType = new Map<string, CredentialAccess[]>();
+  for (const access of accesses) {
+    if (access.accessKind === 'write') continue;
+    const integratorType = extractIntegratorTypeFromPath(access.file);
+    if (integratorType !== undefined) {
+      const list = accessesByType.get(integratorType) ?? [];
+      list.push(access);
+      accessesByType.set(integratorType, list);
+    }
+    // Accesses with no extractable type are dropped — can't assign to a type
+  }
+
+  // Collect all integrator types from both sources
+  const allTypes = new Set<string>([...schemaByType.keys(), ...accessesByType.keys()]);
+
+  const constraintSets: ConstraintSet[] = [];
+
+  for (const integratorType of allTypes) {
+    try {
+      const schema = schemaByType.get(integratorType);
+      const typeAccesses = accessesByType.get(integratorType) ?? [];
+
+      const totalAccesses = typeAccesses.length;
+      // Currently all accesses have field names (Phase 2 always extracts them)
+      const resolvedAccesses = typeAccesses.length;
+      const unresolvedAccesses = totalAccesses - resolvedAccesses;
+
+      const fields = buildFieldConstraints(schema, typeAccesses);
+
+      const constraintSet: ConstraintSet = {
+        integratorType,
+        fields,
+        dynamicAccesses: [],
+        coverage: {
+          totalAccesses,
+          resolvedAccesses,
+          unresolvedAccesses,
+        },
+      };
+
+      constraintSets.push(constraintSet);
+    } catch (err) {
+      errors.push({
+        integratorType,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  return { constraintSets, errors };
+}

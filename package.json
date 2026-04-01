@@ -55,6 +55,7 @@
     "packages/mcp",
     "packages/correlation",
     "packages/storage-kuzu",
+    "packages/constraints",
     "apps/cli",
     "apps/dashboard"
   ],

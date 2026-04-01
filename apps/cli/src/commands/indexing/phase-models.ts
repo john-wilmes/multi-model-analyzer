@@ -4,6 +4,7 @@
  */
 
 import type { RepoConfig, SarifResult, CallGraph } from "@mma/core";
+import { extractConfigSchemas, extractCredentialAccesses, buildConstraintSets } from "@mma/constraints";
 import { buildFeatureModel, extractConstraintsFromCode, validateFeatureModel } from "@mma/model-config";
 import { identifyLogRoots, traceBackwardFromLog, buildFaultTree, analyzeGaps, analyzeCascadingRisk } from "@mma/model-fault";
 import { buildControlFlowGraph, createCfgIdCounter } from "@mma/structural";
@@ -64,6 +65,34 @@ export async function runPhaseModels(
       log(`    dead=${validation.deadFlags.length} always-on=${validation.alwaysOnFlags.length} untested=${validation.inferredUntestedPairs.length} unused-registry=${validation.unusedRegistryFlags.length} unregistered=${validation.unregisteredFlags.length}`);
     } catch (error) {
       console.error(`  Failed to build feature model for ${repo.name}:`, error);
+    }
+  }
+
+  // --- ISC constraint extraction (runs independently of feature model) ---
+  // Uses tree-sitter trees for source text (works with both bare git mirrors and working trees)
+  if (trees && trees.size > 0) {
+    const configFiles: { path: string; content: string }[] = [];
+    const allFiles: { path: string; content: string }[] = [];
+    for (const [filePath, tree] of trees) {
+      const content = tree.rootNode.text;
+      allFiles.push({ path: filePath, content });
+      if (filePath.includes('/context/configuration.')) {
+        configFiles.push({ path: filePath, content });
+      }
+    }
+    if (configFiles.length > 0) {
+      try {
+        const schemaResult = await extractConfigSchemas(configFiles);
+        const accessResult = await extractCredentialAccesses(allFiles);
+        const { constraintSets } = buildConstraintSets(schemaResult.schemas, accessResult.accesses);
+
+        if (constraintSets.length > 0) {
+          await kvStore.set(`constraints:${repo.name}`, JSON.stringify(constraintSets));
+        }
+        log(`  [${repo.name}] [constraints] ${constraintSets.length} sets (${schemaResult.schemas.length} schemas, ${accessResult.stats.totalAccesses} accesses)`);
+      } catch (err) {
+        log(`  [${repo.name}] [constraints] extraction failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
   }
 
