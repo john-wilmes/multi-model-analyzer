@@ -6,7 +6,7 @@ Static analysis toolchain for large TypeScript/JavaScript codebases. Extracts sy
 
 ## Architecture
 
-Monorepo with npm workspaces — 15 `packages/*` workspaces + 2 apps (`apps/cli`, `apps/dashboard`):
+Monorepo with npm workspaces — 16 `packages/*` workspaces + 2 apps (`apps/cli`, `apps/dashboard`):
 
 | Package | Purpose |
 |---------|---------|
@@ -20,6 +20,7 @@ Monorepo with npm workspaces — 15 `packages/*` workspaces + 2 apps (`apps/cli`
 | `packages/storage-kuzu` | Kuzu-backed graph, search, and KV stores |
 | `packages/correlation` | Cross-repo correlation and service grouping |
 | `packages/mcp` | MCP server exposing analysis tools to LLM agents |
+| `packages/constraints` | ISC credential constraint extraction and config validation |
 | `packages/models/config` | Feature model (config flag inventory) |
 | `packages/models/fault` | Fault trees (fault detection rules) |
 | `packages/models/functional` | Service catalog (functional service inference) |

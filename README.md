@@ -64,6 +64,7 @@ That output is real — [Supabase](https://github.com/supabase) ecosystem (10 re
 |----------|------|---------|
 | **Structural** | Unstable dependencies, dead exports, pain zone modules | "Module A (stable) depends on module B (unstable) -- inverted dependency direction" |
 | **Fault** | Unhandled error paths, silent catch blocks, missing re-throws | "Catch block in `handler` has no logging or re-throw" |
+| **Configuration** | Dead flags, missing dependencies, credential constraints per integrator type | "Integrator ecw10e requires field baseUrl but it is absent from runtime config" |
 | **Blast radius** | High-PageRank modules where changes ripple widely | "Changes to this file affect many dependents" |
 
 All findings are SARIF v2.1.0 with logical locations only -- no source code leaves your machine.
@@ -301,6 +302,7 @@ Monorepo with npm workspaces:
 | `packages/storage` | Graph DB, search (FTS5/BM25), KV store (SQLite) |
 | `packages/storage-kuzu` | Graph DB backend (Kuzu, optional) |
 | `packages/correlation` | Cross-repo service correlation |
+| `packages/constraints` | ISC credential constraint extraction and config validation |
 | `packages/models/*` | Config model, fault model, functional model |
 | `packages/diagnostics` | SARIF emission, redaction, aggregation |
 | `packages/query` | Natural language query routing |

@@ -245,6 +245,48 @@ All scanner options go in the existing per-repo config (same pattern as flag sca
 - **Phase 3:** Optional `z3-solver` (WASM, ~8MB) for full SAT — heuristic fallback works without it
 - **Phase 4:** Zero new dependencies (IPOG is ~200 lines of code)
 
+## Phase 5: ISC Credential Constraint Extraction ✓ Complete
+
+**Goal:** Extract per-integrator-type credential constraints from integrator-service-clients (ISC) code by analyzing static `configuration` objects and credential access patterns.
+
+**Package:** `packages/constraints`
+
+This phase takes a different approach from Phases 1–4. Instead of scanning for generic config patterns, it targets the specific ISC convention where each integrator client declares a `configuration` object with credential field schemas and accesses credentials via `self.options.integrator.credentials.*` chains.
+
+### Pipeline stages
+
+1. **Config schema extraction** (`config-schema-extractor.ts`): Parses `configuration` objects to discover fields, types, defaults, required flags, descriptions, and enum values.
+2. **Credential access extraction** (`credential-access-extractor.ts`): Tree-sitter AST walk finds all credential access sites, guard conditions (`if (credentials.useOAuth2)`), default fallbacks (`credentials.x ?? default`), and access kinds (read/write/typeof).
+3. **Constraint building** (`constraint-builder.ts`): Merges schema and access data. Fields with `required: true` and no default → `always`. Fields accessed only under guards → `conditional` with `requiredWhen`. Fields with defaults or never accessed → `never`.
+4. **Config validation** (`config-validator.ts`): Validates runtime configs against constraint sets. Reports violations (`missing-required`, `missing-conditional`, `unexpected-type`, `unknown-field`) and suggests nearest valid config.
+
+### Coverage metrics
+
+Each constraint set tracks `resolvedAccesses` and `unresolvedAccesses` so consumers know confidence. On ecw10e calibration: 105/105/0 (100% resolved), 21 constraint sets extracted.
+
+### Known limitations
+
+- Alias resolution is file-scoped, not block-scoped (shadowed locals may cause over-reporting)
+- Guard condition parsing handles `&&`, `||`, `typeof`, equality, and truthy checks but not arbitrary expressions
+- Dynamic access patterns (`_.get()`, computed property names) are not tracked
+- `configuration` objects with whitespace-sensitive guard strings may not parse correctly
+
+### SARIF rule IDs
+
+| Rule ID | Severity | Trigger |
+|---------|----------|---------|
+| `isc/missing-required` | error | Required field absent from runtime config |
+| `isc/missing-conditional` | warning | Conditionally required field absent (guard met) |
+| `isc/unexpected-type` | warning | Field has wrong runtime type vs schema |
+| `isc/unknown-field` | note | Field not in constraint set (may be dynamic access) |
+
+### MCP tools
+
+| Tool | Purpose |
+|------|---------|
+| `get_config_constraints` | List constraint sets per integrator type |
+| `validate_config_constraints` | Validate runtime config against constraints |
+
 ## Implementation order
 
 1. **Phase 1** — Settings scanner. Natural extension of flag scanner. Immediate value: visibility into what settings exist and where they're used.
@@ -252,6 +294,7 @@ All scanner options go in the existing per-repo config (same pattern as flag sca
 3. **Phase 2** — Unified constraints. Requires Phase 1 output. High value: surfaces hidden dependencies.
 4. **Phase 3 full** — SAT validation. Requires Phase 2. The agent-facing payoff.
 5. **Phase 4** — CIT. Requires Phase 3. Generates actionable test plans.
+6. **Phase 5** — ISC credential constraints. Independent of Phases 1–4. Targets ISC-specific patterns.
 
 ## References
 
