@@ -155,7 +155,7 @@ describe("buildConstraintSets", () => {
     expect(field?.required).toBe("always");
   });
 
-  it("schema required:true + hasDefault:true → never (default makes it self-sufficient)", () => {
+  it("schema required:true + hasDefault:true → conditional (schema-required with placeholder default)", () => {
     const schemas = [
       makeSchema("typeG2", [
         { name: "baseUrl", required: true, hasDefault: true, defaultValue: "https://example.com" },
@@ -166,8 +166,8 @@ describe("buildConstraintSets", () => {
     const result = buildConstraintSets(schemas, []);
     const cs = getCS(result, 0);
     const byName = Object.fromEntries(cs.fields.map((f) => [f.field, f]));
-    expect(byName["baseUrl"]?.required).toBe("never");
-    expect(byName["subscriberKey"]?.required).toBe("never");
+    expect(byName["baseUrl"]?.required).toBe("conditional");
+    expect(byName["subscriberKey"]?.required).toBe("conditional");
     expect(byName["apiKey"]?.required).toBe("always");
   });
 
@@ -226,6 +226,64 @@ describe("buildConstraintSets", () => {
     const result = buildConstraintSets([], [access]);
     expect(result.constraintSets).toHaveLength(1);
     expect(result.constraintSets[0]!.integratorType).toBe("epic");
+  });
+
+  it("root-level client files (clients/type.js) are attributed correctly", () => {
+    // Legacy ISC clients are single files at clients/ root, not in subdirectories
+    const access: CredentialAccess = {
+      field: "twoFactorAuthSecret",
+      file: "clients/advancedmd.js",
+      line: 39,
+      accessKind: "read",
+      hasDefault: false,
+      guardConditions: [],
+    };
+    const result = buildConstraintSets([], [access]);
+    expect(result.constraintSets).toHaveLength(1);
+    expect(result.constraintSets[0]!.integratorType).toBe("advancedmd");
+  });
+
+  it("field with unguarded access + self-referential truthy guard → conditional (not always)", () => {
+    // Simulates: `const { useLastMatchingPatientId } = credentials;` (unguarded)
+    // plus: `if (credentials.useLastMatchingPatientId) { ... use it ... }` (self-truthy guard)
+    const selfGuard = { field: "useLastMatchingPatientId", operator: "truthy" as const, negated: false };
+    const accesses = [
+      // Destructuring — no guard (would normally make it "always")
+      makeAccess("typeJ", "useLastMatchingPatientId"),
+      // Guarded access inside `if (credentials.useLastMatchingPatientId)`
+      makeAccess("typeJ", "useLastMatchingPatientId", { guardConditions: [selfGuard] }),
+      makeAccess("typeJ", "useLastMatchingPatientId", { guardConditions: [selfGuard] }),
+    ];
+    const result = buildConstraintSets([], accesses);
+    const cs = getCS(result, 0);
+    const field = cs.fields.find((f) => f.field === "useLastMatchingPatientId");
+    expect(field?.required).toBe("conditional");
+  });
+
+  it("field with unguarded access + non-self truthy guard → still always", () => {
+    // Guard tests a DIFFERENT field, not the same one — should remain "always"
+    const otherGuard = { field: "enableFeatureX", operator: "truthy" as const, negated: false };
+    const accesses = [
+      makeAccess("typeK", "apiEndpoint"),
+      makeAccess("typeK", "apiEndpoint", { guardConditions: [otherGuard] }),
+    ];
+    const result = buildConstraintSets([], accesses);
+    const cs = getCS(result, 0);
+    const field = cs.fields.find((f) => f.field === "apiEndpoint");
+    expect(field?.required).toBe("always");
+  });
+
+  it("field with unguarded access + negated self-referential guard → still always", () => {
+    // Guard is `if (!credentials.field)` — negated, so it doesn't prove the code handles undefined gracefully
+    const negatedSelfGuard = { field: "optionalFlag", operator: "truthy" as const, negated: true };
+    const accesses = [
+      makeAccess("typeL", "optionalFlag"),
+      makeAccess("typeL", "optionalFlag", { guardConditions: [negatedSelfGuard] }),
+    ];
+    const result = buildConstraintSets([], accesses);
+    const cs = getCS(result, 0);
+    const field = cs.fields.find((f) => f.field === "optionalFlag");
+    expect(field?.required).toBe("always");
   });
 
   it("accesses with no extractable integrator type are dropped", () => {

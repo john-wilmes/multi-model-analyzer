@@ -17,10 +17,11 @@ const CREDENTIALS_CHAIN_PREFIXES = [
 
 /** Returns true if the text is a full credentials chain root (ends at .credentials) */
 function isCredentialsChainRoot(text: string): boolean {
+  const normalized = text.replace(/\?\./g, '.');
   return (
-    text === "self.options.integrator.credentials" ||
-    text === "this.options.integrator.credentials" ||
-    text === "this.credentials"
+    normalized === "self.options.integrator.credentials" ||
+    normalized === "this.options.integrator.credentials" ||
+    normalized === "this.credentials"
   );
 }
 
@@ -30,10 +31,15 @@ function extractCredentialField(
   nodeText: string,
   aliases: Set<string>,
 ): { field: string; pattern: string } | null {
+  // Normalize optional chaining before any prefix matching so that
+  // `self.options.integrator.credentials?.foo` matches the same as
+  // `self.options.integrator.credentials.foo`.
+  const normalizedText = nodeText.replace(/\?\./g, '.');
+
   // Pattern 1 & 2: self/this.options.integrator.credentials.fieldName
   for (const prefix of CREDENTIALS_CHAIN_PREFIXES) {
-    if (nodeText.startsWith(prefix)) {
-      const rest = nodeText.slice(prefix.length);
+    if (normalizedText.startsWith(prefix)) {
+      const rest = normalizedText.slice(prefix.length);
       // Avoid matching the chain root itself (no field after credentials)
       if (rest.length === 0) return null;
       // Preserve the full dotted path (e.g., "oauth.clientId" not just "oauth")
@@ -52,10 +58,10 @@ function extractCredentialField(
   // Pattern 6: this.credentials.fieldName (but not this.options.integrator.credentials)
   const thisCredPrefix = "this.credentials.";
   if (
-    nodeText.startsWith(thisCredPrefix) &&
-    !nodeText.startsWith("this.credentials.options")
+    normalizedText.startsWith(thisCredPrefix) &&
+    !normalizedText.startsWith("this.credentials.options")
   ) {
-    const rest = nodeText.slice(thisCredPrefix.length);
+    const rest = normalizedText.slice(thisCredPrefix.length);
     // Preserve the full dotted path
     if (rest.length > 0) {
       return { field: rest, pattern: "this.credentials" };
@@ -65,8 +71,8 @@ function extractCredentialField(
   // Alias pattern: aliasName.fieldName
   for (const alias of aliases) {
     const aliasPrefix = alias + ".";
-    if (nodeText.startsWith(aliasPrefix)) {
-      const rest = nodeText.slice(aliasPrefix.length);
+    if (normalizedText.startsWith(aliasPrefix)) {
+      const rest = normalizedText.slice(aliasPrefix.length);
       // Preserve the full dotted path; skip if it contains a call expression
       if (rest.length > 0 && !rest.includes("(")) {
         return { field: rest, pattern: "self.options.integrator.credentials" };
@@ -420,7 +426,15 @@ function walkNode(
 
   // Pattern 1, 2, 6, alias: member_expression
   if (node.type === "member_expression") {
-    const nodeText = node.text.trim();
+    let nodeText = node.text.trim();
+    // If parent is a call_expression, the last segment is a method name, not a field.
+    // e.g., credentials.jwtPrivateKey.replace(...) → strip ".replace"
+    if (node.parent?.type === "call_expression") {
+      const lastDot = nodeText.lastIndexOf('.');
+      if (lastDot > 0) {
+        nodeText = nodeText.slice(0, lastDot);
+      }
+    }
     const fieldInfo = extractCredentialField(nodeText, aliases);
 
     if (fieldInfo) {

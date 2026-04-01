@@ -3,6 +3,10 @@
     "mma": {
       "command": "node",
       "args": ["apps/cli/dist/index.js", "serve"]
+    },
+    "guru": {
+      "type": "url",
+      "url": "https://mcp.api.getguru.com/mcp"
     }
   }
 }

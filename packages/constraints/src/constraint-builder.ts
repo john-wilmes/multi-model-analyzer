@@ -19,10 +19,15 @@ function extractIntegratorTypeFromPath(filePath: string): string | undefined {
   if (vendorMatch) {
     return vendorMatch[2];
   }
-  // Match base: clients/{type}/
+  // Match base: clients/{type}/ (subdirectory clients)
   const baseMatch = /(?:^|[/\\])clients[/\\]([^/\\]+)[/\\]/.exec(filePath);
   if (baseMatch) {
     return baseMatch[1];
+  }
+  // Match root-level: clients/{type}.js or .ts (legacy single-file clients)
+  const rootFileMatch = /(?:^|[/\\])clients[/\\]([^/\\]+)\.[jt]sx?$/.exec(filePath);
+  if (rootFileMatch) {
+    return rootFileMatch[1];
   }
   return undefined;
 }
@@ -42,16 +47,18 @@ function isUnconditionalRead(access: CredentialAccess): boolean {
  * Determines the requirement level for a field given its schema info and non-write accesses.
  */
 function determineRequirementLevel(
+  fieldName: string,
   schemaRequired: boolean | undefined,
   schemaHasDefault: boolean,
   nonWriteAccesses: readonly CredentialAccess[],
 ): RequirementLevel {
   // Priority 1: explicitly required in schema → always (unless it has a default)
   if (schemaRequired === true) {
-    // A field marked required:true but with a default value is self-sufficient —
-    // the runtime framework fills the default, so callers never need to provide it.
+    // A field marked required:true with a default has a placeholder/fallback —
+    // the schema author explicitly marked it required, but the default means the
+    // runtime won't crash. Treat as conditional (important but has a fallback).
     if (schemaHasDefault) {
-      return 'never';
+      return 'conditional';
     }
     return 'always';
   }
@@ -80,7 +87,25 @@ function determineRequirementLevel(
     const hasUnconditionalAccess = nonWriteAccesses.some(isUnconditionalRead);
 
     // Priority 2: no default AND accessed unconditionally → always
+    // Exception: if any access of this field has a self-referential truthy guard
+    // (e.g., `if (credentials.fieldName)` guards usage of `fieldName`), the code
+    // explicitly handles the undefined case → downgrade to conditional.
     if (hasUnconditionalAccess) {
+      // We check across ALL accesses (not just the unconditional ones) because
+      // the common ISC pattern `if (creds.field) { use(creds.field) }` produces
+      // an unconditional read (the condition check itself has no guard) PLUS a
+      // guarded read with a self-truthy guard (the body). Checking all accesses
+      // ensures the self-truthy guard on the body correctly triggers a downgrade
+      // to 'conditional', reflecting that the developer explicitly handles the
+      // undefined case.
+      const hasSelfTruthyGuard = nonWriteAccesses.some((a) =>
+        a.guardConditions.some(
+          (g) => g.field === fieldName && g.operator === 'truthy' && !g.negated,
+        ),
+      );
+      if (hasSelfTruthyGuard) {
+        return 'conditional';
+      }
       return 'always';
     }
 
@@ -125,6 +150,7 @@ function buildFieldConstraints(
     const fieldAccesses = nonWriteAccesses.filter((a) => a.field === fieldName);
 
     const required = determineRequirementLevel(
+      fieldName,
       schemaField?.required,
       schemaField?.hasDefault ?? false,
       fieldAccesses,

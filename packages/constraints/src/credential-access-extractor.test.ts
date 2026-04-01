@@ -321,6 +321,48 @@ describe("extractCredentialAccesses", () => {
     }
   });
 
+  it("normalizes optional chaining ?. to . in extracted field names", async () => {
+    const result = await extractCredentialAccesses([
+      {
+        path: "clients/optchain/service.js",
+        content: `
+          function getMode() {
+            return self.options.integrator.credentials.internalLoginService?.mode;
+          }
+        `,
+      },
+    ]);
+    expect(result.errors).toHaveLength(0);
+    const a = access(result.accesses, "internalLoginService.mode");
+    expect(a).toBeDefined();
+    expect(a!.field).toBe("internalLoginService.mode");
+    // Should NOT contain the ?. characters
+    expect(a!.field).not.toContain("?.");
+  });
+
+  it("normalizes optional chaining in guard condition field names", async () => {
+    const result = await extractCredentialAccesses([
+      {
+        path: "clients/optguard/service.js",
+        content: `
+          function setup() {
+            if (self.options.integrator.credentials.internalLoginService?.mode) {
+              const x = self.options.integrator.credentials.token;
+              return x;
+            }
+          }
+        `,
+      },
+    ]);
+    expect(result.errors).toHaveLength(0);
+    const token = access(result.accesses, "token");
+    expect(token).toBeDefined();
+    expect(token!.guardConditions).toHaveLength(1);
+    const guard = token!.guardConditions[0]!;
+    expect(guard.field).toBe("internalLoginService.mode");
+    expect(guard.field).not.toContain("?.");
+  });
+
   it("skips template strings with interpolations in lodash get", async () => {
     const result = await extractCredentialAccesses([
       {
@@ -339,5 +381,27 @@ describe("extractCredentialAccesses", () => {
     expect(fields).toContain("staticField");
     expect(fields).toContain("normalField");
     expect(fields).not.toContain("${dynamicField}");
+  });
+
+  it("strips method call suffix from credential field access", async () => {
+    const result = await extractCredentialAccesses([
+      {
+        path: "clients/epic/context/get-jwt-private-key.js",
+        content: `
+          function getJwtPrivateKey() {
+            return self.options.integrator.credentials.jwtPrivateKey.replace(/\\\\n/g, '\\n');
+          }
+        `,
+      },
+    ]);
+    expect(result.errors).toHaveLength(0);
+    // Should extract "jwtPrivateKey", not "jwtPrivateKey.replace"
+    const a = access(result.accesses, "jwtPrivateKey");
+    expect(a).toBeDefined();
+    expect(a!.field).toBe("jwtPrivateKey");
+    expect(a!.accessKind).toBe("read");
+    // Must NOT produce a "jwtPrivateKey.replace" entry
+    const bad = access(result.accesses, "jwtPrivateKey.replace");
+    expect(bad).toBeUndefined();
   });
 });
