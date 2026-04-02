@@ -270,7 +270,7 @@ function walkNode(
 
 /** Returns a FieldExtractor for the integrator-settings domain (for use in cross-entity detection). */
 export function makeSettingsFieldExtractor(): FieldExtractor {
-  return (text: string) => extractSettingsField(text, new Set());
+  return (text: string) => extractSettingsField(text, new Set(["integratorSettings"]));
 }
 
 export async function extractSettingsAccesses(

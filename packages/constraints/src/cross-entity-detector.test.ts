@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { detectCrossEntityDependencies } from "./cross-entity-detector.js";
+import { makeCredentialFieldExtractor } from "./credential-access-extractor.js";
+import { makeSettingsFieldExtractor } from "./settings-access-extractor.js";
+import { makeAccountSettingsFieldExtractor } from "./account-settings-access-extractor.js";
 import type { CredentialAccess } from "./types.js";
 import type { FieldExtractor } from "./ast-utils.js";
 
@@ -270,5 +273,52 @@ describe("detectCrossEntityDependencies", () => {
       file: "clients/acme/vendors/acme-v2/client.js",
       line: 42,
     });
+  });
+});
+
+describe("factory field extractors include baseline aliases", () => {
+  it("makeCredentialFieldExtractor matches 'credentials.fieldName' alias pattern", () => {
+    const extractor = makeCredentialFieldExtractor();
+    const result = extractor("credentials.apiKey");
+    expect(result).not.toBeNull();
+    expect(result!.field).toBe("apiKey");
+  });
+
+  it("makeSettingsFieldExtractor matches 'integratorSettings.fieldName' alias pattern", () => {
+    const extractor = makeSettingsFieldExtractor();
+    const result = extractor("integratorSettings.useFoo");
+    expect(result).not.toBeNull();
+    expect(result!.field).toBe("useFoo");
+  });
+
+  it("makeCredentialFieldExtractor still matches full chain patterns", () => {
+    const extractor = makeCredentialFieldExtractor();
+    const result = extractor("self.options.integrator.credentials.apiKey");
+    expect(result).not.toBeNull();
+    expect(result!.field).toBe("apiKey");
+  });
+
+  it("makeSettingsFieldExtractor still matches full chain patterns", () => {
+    const extractor = makeSettingsFieldExtractor();
+    const result = extractor("self.options.integrator.settings.integrator.useFoo");
+    expect(result).not.toBeNull();
+    expect(result!.field).toBe("useFoo");
+  });
+
+  it("cross-entity detection works with real factory extractors and alias-form guards", () => {
+    const realExtractors = {
+      credentials: makeCredentialFieldExtractor(),
+      settings: makeSettingsFieldExtractor(),
+      accountSettings: makeAccountSettingsFieldExtractor(),
+    };
+    const credAccess = makeAccess({
+      field: "apiKey",
+      rawGuardTexts: ["integratorSettings.useFoo"],
+    });
+    const result = detectCrossEntityDependencies([credAccess], [], [], realExtractors);
+
+    expect(result.dependencies).toHaveLength(1);
+    expect(result.dependencies[0]!.guard.domain).toBe("integrator-settings");
+    expect(result.dependencies[0]!.guard.field).toBe("useFoo");
   });
 });

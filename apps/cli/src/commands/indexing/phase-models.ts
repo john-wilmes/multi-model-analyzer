@@ -105,21 +105,25 @@ export async function runPhaseModels(
     let settingsAccesses: readonly CredentialAccess[] = [];
     let accountSettingsAccesses: readonly CredentialAccess[] = [];
 
-    // --- ISC credential constraints ---
-    if (configFiles.length > 0) {
-      try {
+    // --- ISC credential access extraction (always runs for cross-entity detection) ---
+    try {
+      const accessResult = await extractCredentialAccesses(allFiles);
+      credentialAccesses = accessResult.accesses;
+
+      // Schema extraction + constraint building requires configuration files
+      if (configFiles.length > 0) {
         const schemaResult = await extractConfigSchemas(configFiles);
-        const accessResult = await extractCredentialAccesses(allFiles);
-        credentialAccesses = accessResult.accesses;
         const { constraintSets } = buildConstraintSets(schemaResult.schemas, accessResult.accesses);
 
         if (constraintSets.length > 0) {
           await kvStore.set(`constraints:${repo.name}`, JSON.stringify(constraintSets));
         }
         log(`  [${repo.name}] [constraints] ${constraintSets.length} sets (${schemaResult.schemas.length} schemas, ${accessResult.stats.totalAccesses} accesses)`);
-      } catch (err) {
-        log(`  [${repo.name}] [constraints] extraction failed: ${err instanceof Error ? err.message : String(err)}`);
+      } else if (accessResult.accesses.length > 0) {
+        log(`  [${repo.name}] [constraints] ${accessResult.stats.totalAccesses} credential accesses (no config schemas)`);
       }
+    } catch (err) {
+      log(`  [${repo.name}] [constraints] extraction failed: ${err instanceof Error ? err.message : String(err)}`);
     }
 
     // --- Mongoose settings schema extraction (runs on model-repository) ---

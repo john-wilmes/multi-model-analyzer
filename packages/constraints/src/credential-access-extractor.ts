@@ -317,7 +317,7 @@ function walkNode(
 
 /** Returns a FieldExtractor for the credentials domain (for use in cross-entity detection). */
 export function makeCredentialFieldExtractor(): FieldExtractor {
-  return (text: string) => extractCredentialField(text, new Set());
+  return (text: string) => extractCredentialField(text, new Set(["credentials"]));
 }
 
 export async function extractCredentialAccesses(
