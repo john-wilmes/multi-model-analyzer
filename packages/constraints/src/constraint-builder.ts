@@ -46,7 +46,7 @@ function isUnconditionalRead(access: CredentialAccess): boolean {
 /**
  * Determines the requirement level for a field given its schema info and non-write accesses.
  */
-function determineRequirementLevel(
+export function determineRequirementLevel(
   fieldName: string,
   schemaRequired: boolean | undefined,
   schemaHasDefault: boolean,
@@ -126,7 +126,7 @@ function determineRequirementLevel(
 /**
  * Builds FieldConstraint objects for a given integrator type.
  */
-function buildFieldConstraints(
+export function buildFieldConstraints(
   schema: ConfigSchema | undefined,
   nonWriteAccesses: readonly CredentialAccess[],
 ): readonly FieldConstraint[] {

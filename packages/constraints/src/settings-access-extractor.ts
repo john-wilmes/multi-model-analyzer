@@ -1,4 +1,5 @@
-// credential-access-extractor.ts — tree-sitter-based ISC credential access extractor
+// settings-access-extractor.ts — tree-sitter-based ISC integrator settings access extractor
+// Tests: settings-access-extractor.test.ts
 import { initTreeSitter, parseSource } from "@mma/parsing";
 import type { TreeSitterNode } from "@mma/parsing";
 import type {
@@ -12,63 +13,50 @@ import {
   isOnAssignmentLeft,
 } from "./ast-utils.js";
 
-// ─── Credential chain detection ───────────────────────────────────────────────
+// ─── Settings chain detection ─────────────────────────────────────────────────
 
-const CREDENTIALS_CHAIN_PREFIXES = [
-  "self.options.integrator.credentials.",
-  "this.options.integrator.credentials.",
+const SETTINGS_CHAIN_PREFIXES = [
+  "self.options.integrator.settings.integrator.",
+  "this.options.integrator.settings.integrator.",
+  "integratorObject.settings.integrator.",
 ];
 
-/** Returns true if the text is a full credentials chain root (ends at .credentials) */
-function isCredentialsChainRoot(text: string): boolean {
-  const normalized = text.replace(/\?\./g, '.');
+/** Returns true if the text is a full settings chain root (ends at .settings.integrator) */
+function isSettingsChainRoot(text: string): boolean {
+  const normalized = text.replace(/\?\./g, ".");
   return (
-    normalized === "self.options.integrator.credentials" ||
-    normalized === "this.options.integrator.credentials" ||
-    normalized === "this.credentials"
+    normalized === "self.options.integrator.settings.integrator" ||
+    normalized === "this.options.integrator.settings.integrator" ||
+    normalized === "integratorObject.settings.integrator"
   );
 }
 
-/** Extract the field name from a member expression that accesses a credential field.
- * Returns null if this node doesn't represent a credential access. */
-function extractCredentialField(
+/** Extract the field name from a member expression that accesses a settings field.
+ * Returns null if this node doesn't represent a settings access. */
+function extractSettingsField(
   nodeText: string,
   aliases: Set<string>,
 ): { field: string; pattern: string } | null {
   // Normalize optional chaining before any prefix matching so that
-  // `self.options.integrator.credentials?.foo` matches the same as
-  // `self.options.integrator.credentials.foo`.
-  const normalizedText = nodeText.replace(/\?\./g, '.');
+  // `self.options.integrator.settings?.integrator?.foo` matches the same as
+  // `self.options.integrator.settings.integrator.foo`.
+  const normalizedText = nodeText.replace(/\?\./g, ".");
 
-  // Pattern 1 & 2: self/this.options.integrator.credentials.fieldName
-  for (const prefix of CREDENTIALS_CHAIN_PREFIXES) {
+  // Pattern 1 & 2: self/this.options.integrator.settings.integrator.fieldName
+  // Pattern 3: integratorObject.settings.integrator.fieldName
+  for (const prefix of SETTINGS_CHAIN_PREFIXES) {
     if (normalizedText.startsWith(prefix)) {
       const rest = normalizedText.slice(prefix.length);
-      // Avoid matching the chain root itself (no field after credentials)
+      // Avoid matching the chain root itself (no field after settings.integrator)
       if (rest.length === 0) return null;
-      // Preserve the full dotted path (e.g., "oauth.clientId" not just "oauth")
-      if (rest.length > 0) {
-        return {
-          field: rest,
-          pattern:
-            prefix === "self.options.integrator.credentials."
-              ? "self.options.integrator.credentials"
-              : "this.options.integrator.credentials",
-        };
-      }
-    }
-  }
-
-  // Pattern 6: this.credentials.fieldName (but not this.options.integrator.credentials)
-  const thisCredPrefix = "this.credentials.";
-  if (
-    normalizedText.startsWith(thisCredPrefix) &&
-    !normalizedText.startsWith("this.credentials.options")
-  ) {
-    const rest = normalizedText.slice(thisCredPrefix.length);
-    // Preserve the full dotted path
-    if (rest.length > 0) {
-      return { field: rest, pattern: "this.credentials" };
+      return {
+        field: rest,
+        pattern: prefix.startsWith("integratorObject.")
+          ? "integratorObject.settings.integrator"
+          : prefix.includes("self.")
+            ? "self.options.integrator.settings.integrator"
+            : "this.options.integrator.settings.integrator",
+      };
     }
   }
 
@@ -79,15 +67,13 @@ function extractCredentialField(
       const rest = normalizedText.slice(aliasPrefix.length);
       // Preserve the full dotted path; skip if it contains a call expression
       if (rest.length > 0 && !rest.includes("(")) {
-        return { field: rest, pattern: "self.options.integrator.credentials" };
+        return { field: rest, pattern: "self.options.integrator.settings.integrator" };
       }
     }
   }
 
   return null;
 }
-
-// ─── Access kind detection ─────────────────────────────────────────────────────
 
 // ─── AST walker ───────────────────────────────────────────────────────────────
 
@@ -100,13 +86,13 @@ function processFile(filePath: string, root: TreeSitterNode): FileAccess {
   const accesses: CredentialAccess[] = [];
   const byPattern: Record<string, number> = {};
 
-  // Credential aliases found in this file (variable names that hold credentials object)
-  const aliases = new Set<string>(["credentials"]);
+  // Settings aliases found in this file (variable names that hold settings.integrator object)
+  const aliases = new Set<string>(["integratorSettings"]);
   const aliasPatterns = new Map<string, string>();
 
-  // First pass: collect variable aliases for credential objects.
+  // First pass: collect variable aliases for settings objects.
   // Known limitation: alias collection is file-scoped (not block-scoped), so a shadowed local
-  // variable that reuses a credential alias name will be incorrectly treated as a credential alias.
+  // variable that reuses a settings alias name will be incorrectly treated as a settings alias.
   // This causes over-reporting (false positives) rather than under-reporting, which is the safe
   // direction for static analysis — we'd rather flag too many fields than miss a required one.
   collectAliases(root, aliases, aliasPatterns);
@@ -117,7 +103,7 @@ function processFile(filePath: string, root: TreeSitterNode): FileAccess {
   return { accesses, byPattern };
 }
 
-/** Collect credential aliases from variable declarations */
+/** Collect settings aliases from variable declarations */
 function collectAliases(
   node: TreeSitterNode,
   aliases: Set<string>,
@@ -128,15 +114,15 @@ function collectAliases(
     const valueNode = node.childForFieldName("value");
     if (nameNode && valueNode) {
       const valueText = valueNode.text.trim();
-      if (isCredentialsChainRoot(valueText)) {
+      if (isSettingsChainRoot(valueText)) {
         const alias = nameNode.text.trim();
         if (alias && /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(alias)) {
           aliases.add(alias);
-          const pattern = valueText.startsWith("this.credentials")
-            ? "this.credentials"
+          const pattern = valueText.startsWith("integratorObject.")
+            ? "integratorObject.settings.integrator"
             : valueText.includes("self.")
-              ? "self.options.integrator.credentials"
-              : "this.options.integrator.credentials";
+              ? "self.options.integrator.settings.integrator"
+              : "this.options.integrator.settings.integrator";
           aliasPatterns.set(alias, pattern);
         }
       }
@@ -148,7 +134,7 @@ function collectAliases(
   }
 }
 
-/** Walk AST nodes to find credential accesses */
+/** Walk AST nodes to find settings accesses */
 function walkNode(
   node: TreeSitterNode,
   filePath: string,
@@ -157,9 +143,13 @@ function walkNode(
   accesses: CredentialAccess[],
   byPattern: Record<string, number>,
 ): void {
-  const fieldExtractor = (text: string) => extractCredentialField(text, aliases);
+  const fieldExtractor = (text: string) => extractSettingsField(text, aliases);
 
-  // Pattern 5: _.get(credentials, 'field', default) or _.get(creds, 'field')
+  // Lodash get: _.get(integrator, 'settings.integrator.X', default)
+  // The first arg can be `integrator` (bare name), `self.options.integrator`, or any alias
+  // that resolves to the integrator object.
+  // The second arg string path must start with 'settings.integrator.' — strip that prefix to
+  // get the field name.
   if (node.type === "call_expression") {
     const fn = node.namedChildren[0];
     if (fn && (fn.text === "_.get" || fn.text === "lodash.get")) {
@@ -172,40 +162,46 @@ function walkNode(
 
         if (firstArg && secondArg) {
           const firstText = firstArg.text.trim();
-          const isCredentials =
-            aliases.has(firstText) ||
-            isCredentialsChainRoot(firstText) ||
-            CREDENTIALS_CHAIN_PREFIXES.some((p) =>
-              firstText === p.slice(0, -1),
-            );
+          // Known first-arg identifiers that refer to the integrator object
+          const isIntegrator =
+            firstText === "integrator" ||
+            firstText === "self.options.integrator" ||
+            firstText === "this.options.integrator" ||
+            aliases.has(firstText);
 
-          if (isCredentials) {
-            let field: string | null = null;
+          if (isIntegrator) {
+            let rawPath: string | null = null;
             if (secondArg.type === "string") {
-              field = secondArg.text.slice(1, -1);
+              rawPath = secondArg.text.slice(1, -1);
             } else if (secondArg.type === "template_string") {
               const inner = secondArg.text.slice(1, -1);
               // Skip template strings with interpolations — they produce dynamic keys
               if (!inner.includes("${")) {
-                field = inner;
+                rawPath = inner;
               }
             }
 
-            if (field !== null && field.length > 0) {
-              const hasDefault = thirdArg !== undefined && thirdArg !== null;
-              const accessKind: AccessKind = hasDefault ? "default-fallback" : "read";
-              const guards = extractGuardConditions(node, fieldExtractor);
-              const line = node.startPosition.row + 1;
+            if (rawPath !== null) {
+              const settingsPrefix = "settings.integrator.";
+              if (rawPath.startsWith(settingsPrefix)) {
+                const field = rawPath.slice(settingsPrefix.length);
+                if (field.length > 0) {
+                  const hasDefault = thirdArg !== undefined && thirdArg !== null;
+                  const accessKind: AccessKind = hasDefault ? "default-fallback" : "read";
+                  const guards = extractGuardConditions(node, fieldExtractor);
+                  const line = node.startPosition.row + 1;
 
-              accesses.push({
-                field,
-                file: filePath,
-                line,
-                accessKind,
-                hasDefault,
-                guardConditions: guards,
-              });
-              byPattern["lodash-get"] = (byPattern["lodash-get"] ?? 0) + 1;
+                  accesses.push({
+                    field,
+                    file: filePath,
+                    line,
+                    accessKind,
+                    hasDefault,
+                    guardConditions: guards,
+                  });
+                  byPattern["lodash-get"] = (byPattern["lodash-get"] ?? 0) + 1;
+                }
+              }
             }
           }
         }
@@ -213,61 +209,18 @@ function walkNode(
     }
   }
 
-  // Pattern 4: Destructuring from credentials chain
-  if (node.type === "variable_declarator") {
-    const nameNode = node.childForFieldName("name");
-    const valueNode = node.childForFieldName("value");
-    if (nameNode && valueNode && nameNode.type === "object_pattern") {
-      const valueText = valueNode.text.trim();
-      const isCredentialsSource =
-        isCredentialsChainRoot(valueText) ||
-        aliases.has(valueText) ||
-        CREDENTIALS_CHAIN_PREFIXES.some((p) => valueText === p.slice(0, -1));
-
-      if (isCredentialsSource) {
-        for (const prop of nameNode.namedChildren) {
-          let fieldName: string | null = null;
-          if (prop.type === "shorthand_property_identifier_pattern") {
-            fieldName = prop.text;
-          } else if (prop.type === "pair_pattern") {
-            const keyNode = prop.children[0];
-            if (keyNode) {
-              fieldName = keyNode.text.replace(/^["']|["']$/g, "");
-            }
-          } else if (prop.type === "identifier") {
-            fieldName = prop.text;
-          }
-
-          if (fieldName && fieldName.length > 0) {
-            const guards = extractGuardConditions(node, fieldExtractor);
-            const line = node.startPosition.row + 1;
-            accesses.push({
-              field: fieldName,
-              file: filePath,
-              line,
-              accessKind: "read",
-              hasDefault: false,
-              guardConditions: guards,
-            });
-            byPattern["destructuring"] = (byPattern["destructuring"] ?? 0) + 1;
-          }
-        }
-      }
-    }
-  }
-
-  // Pattern 1, 2, 6, alias: member_expression
+  // member_expression: patterns 1, 2, 3, alias
   if (node.type === "member_expression") {
     let nodeText = node.text.trim();
     // If parent is a call_expression, the last segment is a method name, not a field.
-    // e.g., credentials.jwtPrivateKey.replace(...) → strip ".replace"
+    // e.g., integratorSettings.syncWindow.toString() → strip ".toString"
     if (node.parent?.type === "call_expression") {
-      const lastDot = nodeText.lastIndexOf('.');
+      const lastDot = nodeText.lastIndexOf(".");
       if (lastDot > 0) {
         nodeText = nodeText.slice(0, lastDot);
       }
     }
-    const fieldInfo = extractCredentialField(nodeText, aliases);
+    const fieldInfo = extractSettingsField(nodeText, aliases);
 
     if (fieldInfo) {
       // Avoid double-counting: only process the "deepest" matching expression
@@ -275,7 +228,7 @@ function walkNode(
       const parentText = node.parent?.text.trim() ?? "";
       const parentMatches =
         node.parent?.type === "member_expression" &&
-        extractCredentialField(parentText, aliases) !== null;
+        extractSettingsField(parentText, aliases) !== null;
 
       if (!parentMatches) {
         const line = node.startPosition.row + 1;
@@ -289,7 +242,8 @@ function walkNode(
 
         const hasDefault = accessKind === "default-fallback";
         const guards = extractGuardConditions(node, fieldExtractor);
-        const resolvedPattern = aliasPatterns.get(nodeText.split(".")[0] ?? "") ?? fieldInfo.pattern;
+        const resolvedPattern =
+          aliasPatterns.get(nodeText.split(".")[0] ?? "") ?? fieldInfo.pattern;
 
         accesses.push({
           field: fieldInfo.field,
@@ -311,7 +265,7 @@ function walkNode(
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
-export async function extractCredentialAccesses(
+export async function extractSettingsAccesses(
   files: { path: string; content: string }[],
 ): Promise<CredentialAccessResult> {
   await initTreeSitter();

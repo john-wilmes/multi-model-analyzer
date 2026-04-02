@@ -2,9 +2,9 @@ import { initTreeSitter, parseSource } from "@mma/parsing";
 import type { TreeSitterNode } from "@mma/parsing";
 import type { ConfigField, ConfigSchema, ConfigSchemaExtractionResult } from "./types.js";
 
-// ─── Type inference ───────────────────────────────────────────────────────────
+// ─── Shared descriptor-parsing utilities (exported for mongoose-schema-extractor) ──
 
-const TYPE_CONSTRUCTOR_MAP: Record<string, ConfigField["inferredType"]> = {
+export const TYPE_CONSTRUCTOR_MAP: Record<string, ConfigField["inferredType"]> = {
   String: "string",
   Number: "number",
   Boolean: "boolean",
@@ -12,17 +12,15 @@ const TYPE_CONSTRUCTOR_MAP: Record<string, ConfigField["inferredType"]> = {
   Object: "object",
 };
 
-function inferTypeFromConstructor(text: string): ConfigField["inferredType"] {
+export function inferTypeFromConstructor(text: string): ConfigField["inferredType"] {
   return TYPE_CONSTRUCTOR_MAP[text] ?? "unknown";
 }
 
-// ─── Default value extraction ─────────────────────────────────────────────────
-
-type DefaultResult =
+export type DefaultResult =
   | { hasDefault: false; defaultValue?: undefined }
   | { hasDefault: true; defaultValue: unknown };
 
-function extractDefaultValue(node: TreeSitterNode): DefaultResult {
+export function extractDefaultValue(node: TreeSitterNode): DefaultResult {
   switch (node.type) {
     case "string":
     case "template_string": {
@@ -55,33 +53,7 @@ function extractDefaultValue(node: TreeSitterNode): DefaultResult {
   }
 }
 
-// ─── Integrator type name from file path ─────────────────────────────────────
-
-function integratorTypeFromPath(filePath: string): string {
-  // clients/{type}/vendors/{vendor}/context/configuration.ts
-  const vendorMatch = filePath.match(
-    /clients\/([^/]+)\/vendors\/([^/]+)\/context\/configuration\.ts$/,
-  );
-  if (vendorMatch) {
-    return vendorMatch[2]!;
-  }
-  // clients/{type}/context/configuration.ts
-  const clientMatch = filePath.match(/clients\/([^/]+)\/context\/configuration\.ts$/);
-  if (clientMatch) {
-    return clientMatch[1]!;
-  }
-  // Fallback: parent directory name relative to context/
-  const parts = filePath.split("/");
-  const idx = parts.indexOf("context");
-  if (idx > 0) {
-    return parts[idx - 1] ?? "unknown";
-  }
-  return parts[parts.length - 2] ?? "unknown";
-}
-
-// ─── Descriptor object extraction ─────────────────────────────────────────────
-
-interface DescriptorResult {
+export interface DescriptorResult {
   inferredType: ConfigField["inferredType"];
   hasDefault: boolean;
   defaultValue?: unknown;
@@ -92,7 +64,7 @@ interface DescriptorResult {
 
 const KNOWN_DESCRIPTOR_KEYS = new Set(["type", "required", "default", "description"]);
 
-function extractDescriptor(objectNode: TreeSitterNode): DescriptorResult {
+export function extractDescriptor(objectNode: TreeSitterNode): DescriptorResult {
   let inferredType: ConfigField["inferredType"] = "unknown";
   let hasDefault = false;
   let defaultValue: unknown;
@@ -154,13 +126,7 @@ function extractDescriptor(objectNode: TreeSitterNode): DescriptorResult {
   return { inferredType, hasDefault, defaultValue, required, description, metadata };
 }
 
-// ─── Descriptor heuristic ─────────────────────────────────────────────────────
-
-/**
- * Returns true if this object node looks like a field descriptor
- * (has a "type" key whose value is a recognized type constructor identifier).
- */
-function looksLikeDescriptor(objectNode: TreeSitterNode): boolean {
+export function looksLikeDescriptor(objectNode: TreeSitterNode): boolean {
   for (const child of objectNode.namedChildren) {
     if (child.type !== "pair") continue;
     const keyNode = child.children[0];
@@ -176,6 +142,30 @@ function looksLikeDescriptor(objectNode: TreeSitterNode): boolean {
     }
   }
   return false;
+}
+
+// ─── Integrator type name from file path ─────────────────────────────────────
+
+function integratorTypeFromPath(filePath: string): string {
+  // clients/{type}/vendors/{vendor}/context/configuration.ts
+  const vendorMatch = filePath.match(
+    /clients\/([^/]+)\/vendors\/([^/]+)\/context\/configuration\.ts$/,
+  );
+  if (vendorMatch) {
+    return vendorMatch[2]!;
+  }
+  // clients/{type}/context/configuration.ts
+  const clientMatch = filePath.match(/clients\/([^/]+)\/context\/configuration\.ts$/);
+  if (clientMatch) {
+    return clientMatch[1]!;
+  }
+  // Fallback: parent directory name relative to context/
+  const parts = filePath.split("/");
+  const idx = parts.indexOf("context");
+  if (idx > 0) {
+    return parts[idx - 1] ?? "unknown";
+  }
+  return parts[parts.length - 2] ?? "unknown";
 }
 
 // ─── Recursive field extraction ───────────────────────────────────────────────

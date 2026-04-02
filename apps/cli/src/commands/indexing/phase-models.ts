@@ -4,7 +4,8 @@
  */
 
 import type { RepoConfig, SarifResult, CallGraph } from "@mma/core";
-import { extractConfigSchemas, extractCredentialAccesses, buildConstraintSets } from "@mma/constraints";
+import { extractConfigSchemas, extractCredentialAccesses, buildConstraintSets, extractMongooseSettingsSchema, extractSettingsAccesses, buildSettingsConstraintSet } from "@mma/constraints";
+import type { ConfigSchema } from "@mma/constraints";
 import { buildFeatureModel, extractConstraintsFromCode, validateFeatureModel } from "@mma/model-config";
 import { identifyLogRoots, traceBackwardFromLog, buildFaultTree, analyzeGaps, analyzeCascadingRisk } from "@mma/model-fault";
 import { buildControlFlowGraph, createCfgIdCounter } from "@mma/structural";
@@ -72,6 +73,7 @@ export async function runPhaseModels(
   // Uses tree-sitter trees for source text (works with both bare git mirrors and working trees)
   if (trees && trees.size > 0) {
     const configFiles: { path: string; content: string }[] = [];
+    const settingModelFiles: { path: string; content: string }[] = [];
     const allFiles: { path: string; content: string }[] = [];
     for (const [filePath, tree] of trees) {
       const content = tree.rootNode.text;
@@ -79,7 +81,12 @@ export async function runPhaseModels(
       if (filePath.includes('/context/configuration.')) {
         configFiles.push({ path: filePath, content });
       }
+      if (/models\/setting\.[jt]sx?$/.test(filePath)) {
+        settingModelFiles.push({ path: filePath, content });
+      }
     }
+
+    // --- ISC credential constraints ---
     if (configFiles.length > 0) {
       try {
         const schemaResult = await extractConfigSchemas(configFiles);
@@ -93,6 +100,37 @@ export async function runPhaseModels(
       } catch (err) {
         log(`  [${repo.name}] [constraints] extraction failed: ${err instanceof Error ? err.message : String(err)}`);
       }
+    }
+
+    // --- Mongoose settings schema extraction (runs on model-repository) ---
+    // Key is intentionally global (not repo-scoped): the Setting model lives in
+    // model-repository only, but other repos (integrator-service-clients) read it
+    // during the constraints step below. Repos are indexed sequentially.
+    if (settingModelFiles.length > 0) {
+      try {
+        const schemaResult = await extractMongooseSettingsSchema(settingModelFiles);
+        const settingsSchema = schemaResult.schemas[0];
+        if (settingsSchema) {
+          await kvStore.set('schema:settings:integrator', JSON.stringify(settingsSchema));
+          log(`  [${repo.name}] [settings-schema] ${settingsSchema.fields.length} fields extracted`);
+        }
+      } catch (err) {
+        log(`  [${repo.name}] [settings-schema] extraction failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    // --- Integrator settings constraints (runs on repos with settings accesses) ---
+    try {
+      const settingsAccessResult = await extractSettingsAccesses(allFiles);
+      if (settingsAccessResult.accesses.length > 0) {
+        const schemaJson = await kvStore.get('schema:settings:integrator');
+        const schema: ConfigSchema | undefined = schemaJson ? JSON.parse(schemaJson) : undefined;
+        const constraintSet = buildSettingsConstraintSet(schema, settingsAccessResult.accesses);
+        await kvStore.set(`constraints:settings:integrator:${repo.name}`, JSON.stringify(constraintSet));
+        log(`  [${repo.name}] [settings-constraints] ${constraintSet.fields.length} fields (${settingsAccessResult.stats.totalAccesses} accesses${schema ? ', schema merged' : ', no schema'})`);
+      }
+    } catch (err) {
+      log(`  [${repo.name}] [settings-constraints] extraction failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
