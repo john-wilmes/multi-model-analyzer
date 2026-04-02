@@ -38,6 +38,9 @@ export interface ConfigSchemaExtractionResult {
 
 // ─── Phase 2: Credential access types ────────────────────────────────────────
 
+/** Which config domain a field belongs to */
+export type ConfigDomain = "credentials" | "integrator-settings" | "account-settings";
+
 /** How a credential field is accessed */
 export type AccessKind = "read" | "write" | "default-fallback";
 
@@ -51,6 +54,8 @@ export interface GuardCondition {
   readonly value?: string;
   /** Whether the condition is negated (inside else branch or !condition) */
   readonly negated: boolean;
+  /** Which config domain this guard field belongs to */
+  readonly domain?: ConfigDomain;
 }
 
 /** A single credential field access site */
@@ -67,6 +72,8 @@ export interface CredentialAccess {
   readonly hasDefault: boolean;
   /** Guard conditions enclosing this access */
   readonly guardConditions: readonly GuardCondition[];
+  /** Raw text of guard conditions that could not be parsed into structured GuardCondition objects */
+  readonly rawGuardTexts?: readonly string[];
 }
 
 /** The access pattern that matched */
@@ -189,4 +196,23 @@ export interface ValidationResult {
   };
   /** Coverage from the ConstraintSet (pass-through so consumer knows confidence) */
   readonly coverage: ConstraintSet['coverage'];
+}
+
+// ─── Phase 2c: Cross-entity dependency types ─────────────────────────────────
+
+/** A cross-entity dependency: field in domain A is guarded by a condition on domain B */
+export interface CrossEntityDependency {
+  readonly accessedDomain: ConfigDomain;
+  readonly integratorType: string | null;
+  readonly accessedField: string;
+  readonly guard: GuardCondition & { readonly domain: ConfigDomain };
+  readonly evidence: readonly { readonly file: string; readonly line: number }[];
+}
+
+export interface CrossEntityDependencyResult {
+  readonly dependencies: readonly CrossEntityDependency[];
+  readonly stats: {
+    readonly totalAccesses: number;
+    readonly crossEntityAccesses: number;
+  };
 }

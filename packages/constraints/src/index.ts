@@ -3,7 +3,7 @@ export { extractConfigSchemas } from "./config-schema-extractor.js";
 // mongoose-schema-extractor.ts — tree-sitter-based Mongoose schema field extractor
 export { extractMongooseSettingsSchema, extractMongooseAccountSettingsSchema } from "./mongoose-schema-extractor.js";
 // credential-access-extractor.ts — tree-sitter-based ISC credential access extractor
-export { extractCredentialAccesses } from "./credential-access-extractor.js";
+export { extractCredentialAccesses, makeCredentialFieldExtractor } from "./credential-access-extractor.js";
 // constraint-builder.ts — merges ConfigSchema + CredentialAccess into ConstraintSet per integrator type
 export { buildConstraintSets, buildFieldConstraints, determineRequirementLevel } from "./constraint-builder.js";
 // settings-constraint-builder.ts — builds a single ConstraintSet for integrator settings (global, not per-type)
@@ -13,12 +13,13 @@ export { buildAccountSettingsConstraintSet } from "./account-settings-constraint
 // config-validator.ts — validates a runtime config document against a ConstraintSet
 export { validateConfig } from "./config-validator.js";
 // settings-access-extractor.ts — tree-sitter-based ISC integrator settings access extractor
-export { extractSettingsAccesses } from "./settings-access-extractor.js";
+export { extractSettingsAccesses, makeSettingsFieldExtractor } from "./settings-access-extractor.js";
 // account-settings-access-extractor.ts — tree-sitter-based account-level settings access extractor
-export { extractAccountSettingsAccesses } from "./account-settings-access-extractor.js";
+export { extractAccountSettingsAccesses, makeAccountSettingsFieldExtractor } from "./account-settings-access-extractor.js";
 // types.ts — core domain types (ConfigField, ConfigSchema, ConfigSchemaExtractionResult, CredentialAccess, ...)
 export type { ConfigField, ConfigSchema, ConfigSchemaExtractionResult } from "./types.js";
 export type {
+  ConfigDomain,
   AccessKind,
   GuardCondition,
   CredentialAccess,
@@ -32,3 +33,6 @@ export type {
   ConstraintSetResult,
 } from "./types.js";
 export type { ViolationKind, Violation, SuggestedChange, ValidationResult } from "./types.js";
+export type { CrossEntityDependency, CrossEntityDependencyResult } from "./types.js";
+// cross-entity-detector.ts — detects dependencies between config domains
+export { detectCrossEntityDependencies } from "./cross-entity-detector.js";

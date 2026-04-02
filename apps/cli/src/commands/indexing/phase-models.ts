@@ -14,8 +14,12 @@ import {
   buildSettingsConstraintSet,
   extractAccountSettingsAccesses,
   buildAccountSettingsConstraintSet,
+  detectCrossEntityDependencies,
+  makeCredentialFieldExtractor,
+  makeSettingsFieldExtractor,
+  makeAccountSettingsFieldExtractor,
 } from "@mma/constraints";
-import type { ConfigSchema } from "@mma/constraints";
+import type { ConfigSchema, CredentialAccess } from "@mma/constraints";
 import { buildFeatureModel, extractConstraintsFromCode, validateFeatureModel } from "@mma/model-config";
 import { identifyLogRoots, traceBackwardFromLog, buildFaultTree, analyzeGaps, analyzeCascadingRisk } from "@mma/model-fault";
 import { buildControlFlowGraph, createCfgIdCounter } from "@mma/structural";
@@ -96,11 +100,17 @@ export async function runPhaseModels(
       }
     }
 
+    // Hoisted access results for cross-entity detection (Step 2c)
+    let credentialAccesses: readonly CredentialAccess[] = [];
+    let settingsAccesses: readonly CredentialAccess[] = [];
+    let accountSettingsAccesses: readonly CredentialAccess[] = [];
+
     // --- ISC credential constraints ---
     if (configFiles.length > 0) {
       try {
         const schemaResult = await extractConfigSchemas(configFiles);
         const accessResult = await extractCredentialAccesses(allFiles);
+        credentialAccesses = accessResult.accesses;
         const { constraintSets } = buildConstraintSets(schemaResult.schemas, accessResult.accesses);
 
         if (constraintSets.length > 0) {
@@ -143,6 +153,7 @@ export async function runPhaseModels(
     // --- Integrator settings constraints (runs on repos with settings accesses) ---
     try {
       const settingsAccessResult = await extractSettingsAccesses(allFiles);
+      settingsAccesses = settingsAccessResult.accesses;
       if (settingsAccessResult.accesses.length > 0) {
         const schemaJson = await kvStore.get('schema:settings:integrator');
         const schema: ConfigSchema | undefined = schemaJson ? JSON.parse(schemaJson) : undefined;
@@ -157,6 +168,7 @@ export async function runPhaseModels(
     // --- Account settings constraints (runs on repos with account settings accesses) ---
     try {
       const accountAccessResult = await extractAccountSettingsAccesses(allFiles);
+      accountSettingsAccesses = accountAccessResult.accesses;
       if (accountAccessResult.accesses.length > 0) {
         const schemaJson = await kvStore.get('schema:settings:account');
         const schema: ConfigSchema | undefined = schemaJson ? JSON.parse(schemaJson) : undefined;
@@ -166,6 +178,26 @@ export async function runPhaseModels(
       }
     } catch (err) {
       log(`  [${repo.name}] [settings-constraints] account extraction failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    // --- Cross-entity constraint detection ---
+    try {
+      const crossEntityResult = detectCrossEntityDependencies(
+        credentialAccesses,
+        settingsAccesses,
+        accountSettingsAccesses,
+        {
+          credentials: makeCredentialFieldExtractor(),
+          settings: makeSettingsFieldExtractor(),
+          accountSettings: makeAccountSettingsFieldExtractor(),
+        },
+      );
+      if (crossEntityResult.dependencies.length > 0) {
+        await kvStore.set(`constraints:cross-entity:${repo.name}`, JSON.stringify(crossEntityResult));
+      }
+      log(`  [${repo.name}] [cross-entity] ${crossEntityResult.dependencies.length} dependencies (${crossEntityResult.stats.crossEntityAccesses}/${crossEntityResult.stats.totalAccesses} accesses)`);
+    } catch (err) {
+      log(`  [${repo.name}] [cross-entity] detection failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 

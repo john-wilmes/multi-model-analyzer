@@ -7,9 +7,10 @@ import type {
   CredentialAccessResult,
 } from "./types.js";
 import {
-  extractGuardConditions,
+  extractGuardConditionsExt,
   hasDefaultFallback,
   isOnAssignmentLeft,
+  type FieldExtractor,
 } from "./ast-utils.js";
 
 // ─── Credential chain detection ───────────────────────────────────────────────
@@ -194,7 +195,7 @@ function walkNode(
             if (field !== null && field.length > 0) {
               const hasDefault = thirdArg !== undefined && thirdArg !== null;
               const accessKind: AccessKind = hasDefault ? "default-fallback" : "read";
-              const guards = extractGuardConditions(node, fieldExtractor);
+              const { guards: guardConditions, rawUnmatched } = extractGuardConditionsExt(node, fieldExtractor);
               const line = node.startPosition.row + 1;
 
               accesses.push({
@@ -203,7 +204,8 @@ function walkNode(
                 line,
                 accessKind,
                 hasDefault,
-                guardConditions: guards,
+                guardConditions,
+                ...(rawUnmatched.length > 0 ? { rawGuardTexts: rawUnmatched } : {}),
               });
               byPattern["lodash-get"] = (byPattern["lodash-get"] ?? 0) + 1;
             }
@@ -239,7 +241,7 @@ function walkNode(
           }
 
           if (fieldName && fieldName.length > 0) {
-            const guards = extractGuardConditions(node, fieldExtractor);
+            const { guards: guardConditions, rawUnmatched } = extractGuardConditionsExt(node, fieldExtractor);
             const line = node.startPosition.row + 1;
             accesses.push({
               field: fieldName,
@@ -247,7 +249,8 @@ function walkNode(
               line,
               accessKind: "read",
               hasDefault: false,
-              guardConditions: guards,
+              guardConditions,
+              ...(rawUnmatched.length > 0 ? { rawGuardTexts: rawUnmatched } : {}),
             });
             byPattern["destructuring"] = (byPattern["destructuring"] ?? 0) + 1;
           }
@@ -288,7 +291,7 @@ function walkNode(
         }
 
         const hasDefault = accessKind === "default-fallback";
-        const guards = extractGuardConditions(node, fieldExtractor);
+        const { guards: guardConditions, rawUnmatched } = extractGuardConditionsExt(node, fieldExtractor);
         const resolvedPattern = aliasPatterns.get(nodeText.split(".")[0] ?? "") ?? fieldInfo.pattern;
 
         accesses.push({
@@ -297,7 +300,8 @@ function walkNode(
           line,
           accessKind,
           hasDefault,
-          guardConditions: guards,
+          guardConditions,
+          ...(rawUnmatched.length > 0 ? { rawGuardTexts: rawUnmatched } : {}),
         });
         byPattern[resolvedPattern] = (byPattern[resolvedPattern] ?? 0) + 1;
       }
@@ -310,6 +314,11 @@ function walkNode(
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
+
+/** Returns a FieldExtractor for the credentials domain (for use in cross-entity detection). */
+export function makeCredentialFieldExtractor(): FieldExtractor {
+  return (text: string) => extractCredentialField(text, new Set());
+}
 
 export async function extractCredentialAccesses(
   files: { path: string; content: string }[],

@@ -9,35 +9,12 @@ import { z } from "zod";
 import { jsonResult, deserializeGraph } from "./helpers.js";
 import type { Stores } from "./helpers.js";
 
-async function getSettingsConstraintSet(
+async function getSingleConstraintSet(
   kvStore: Stores["kvStore"],
+  keyPrefix: string,
   repo: string,
 ): Promise<ConstraintSet | null> {
-  const raw = await kvStore.get(`constraints:settings:integrator:${repo}`);
-  if (!raw) return null;
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    // Validate shape before casting: must be an object with integratorType (string)
-    // and fields (array). Corrupt payloads are discarded.
-    if (
-      parsed === null ||
-      typeof parsed !== "object" ||
-      typeof (parsed as Record<string, unknown>).integratorType !== "string" ||
-      !Array.isArray((parsed as Record<string, unknown>).fields)
-    ) {
-      return null;
-    }
-    return parsed as ConstraintSet;
-  } catch {
-    return null;
-  }
-}
-
-async function getAccountSettingsConstraintSet(
-  kvStore: Stores["kvStore"],
-  repo: string,
-): Promise<ConstraintSet | null> {
-  const raw = await kvStore.get(`constraints:settings:account:${repo}`);
+  const raw = await kvStore.get(`${keyPrefix}${repo}`);
   if (!raw) return null;
   try {
     const parsed: unknown = JSON.parse(raw);
@@ -45,7 +22,10 @@ async function getAccountSettingsConstraintSet(
       parsed === null ||
       typeof parsed !== "object" ||
       typeof (parsed as Record<string, unknown>).integratorType !== "string" ||
-      !Array.isArray((parsed as Record<string, unknown>).fields)
+      !Array.isArray((parsed as Record<string, unknown>).fields) ||
+      !Array.isArray((parsed as Record<string, unknown>).dynamicAccesses) ||
+      (parsed as Record<string, unknown>).coverage === null ||
+      typeof (parsed as Record<string, unknown>).coverage !== "object"
     ) {
       return null;
     }
@@ -81,6 +61,18 @@ async function getConstraintSets(
   } catch {
     return null;
   }
+}
+
+function buildConstraintSummary(set: ConstraintSet) {
+  return {
+    integratorType: set.integratorType,
+    fieldCount: set.fields.length,
+    alwaysRequired: set.fields.filter(f => f.required === 'always').map(f => f.field),
+    conditional: set.fields.filter(f => f.required === 'conditional').map(f => f.field),
+    never: set.fields.filter(f => f.required === 'never').map(f => f.field),
+    dynamicAccessCount: set.dynamicAccesses.length,
+    coverage: set.coverage,
+  };
 }
 
 export function registerPatternsTools(server: McpServer, stores: Stores): void {
@@ -317,42 +309,24 @@ export function registerPatternsTools(server: McpServer, stores: Stores): void {
     const effectiveDomain = domain ?? "credentials";
 
     if (effectiveDomain === "account-settings") {
-      const set = await getAccountSettingsConstraintSet(kvStore, repo);
+      const set = await getSingleConstraintSet(kvStore, "constraints:settings:account:", repo);
       if (!set) {
         return jsonResult({
           error: `No account settings constraints found for "${repo}". Run 'mma index' first. Account settings constraints are built when account settings access patterns are detected.`,
         });
       }
-      const summary = {
-        integratorType: set.integratorType,
-        fieldCount: set.fields.length,
-        alwaysRequired: set.fields.filter(f => f.required === 'always').map(f => f.field),
-        conditional: set.fields.filter(f => f.required === 'conditional').map(f => f.field),
-        never: set.fields.filter(f => f.required === 'never').map(f => f.field),
-        dynamicAccessCount: set.dynamicAccesses.length,
-        coverage: set.coverage,
-      };
-      return jsonResult({ repo, domain: effectiveDomain, total: 1, returned: 1, constraintSets: [summary] }, undefined,
+      return jsonResult({ repo, domain: effectiveDomain, total: 1, returned: 1, constraintSets: [buildConstraintSummary(set)] }, undefined,
         ["Call validate_config_constraints with domain='account-settings' to check a runtime config."]);
     }
 
     if (effectiveDomain === "integrator-settings") {
-      const set = await getSettingsConstraintSet(kvStore, repo);
+      const set = await getSingleConstraintSet(kvStore, "constraints:settings:integrator:", repo);
       if (!set) {
         return jsonResult({
           error: `No integrator settings constraints found for "${repo}". Run 'mma index' first. Settings constraints are built when integrator settings access patterns are detected.`,
         });
       }
-      const summary = {
-        integratorType: set.integratorType,
-        fieldCount: set.fields.length,
-        alwaysRequired: set.fields.filter(f => f.required === 'always').map(f => f.field),
-        conditional: set.fields.filter(f => f.required === 'conditional').map(f => f.field),
-        never: set.fields.filter(f => f.required === 'never').map(f => f.field),
-        dynamicAccessCount: set.dynamicAccesses.length,
-        coverage: set.coverage,
-      };
-      return jsonResult({ repo, domain: effectiveDomain, total: 1, returned: 1, constraintSets: [summary] }, undefined,
+      return jsonResult({ repo, domain: effectiveDomain, total: 1, returned: 1, constraintSets: [buildConstraintSummary(set)] }, undefined,
         ["Call validate_config_constraints with domain='integrator-settings' to check a runtime config."]);
     }
 
@@ -370,15 +344,7 @@ export function registerPatternsTools(server: McpServer, stores: Stores): void {
       filtered = sets.filter(s => s.integratorType.toLowerCase().includes(lower));
     }
 
-    const summary = filtered.map(s => ({
-      integratorType: s.integratorType,
-      fieldCount: s.fields.length,
-      alwaysRequired: s.fields.filter(f => f.required === 'always').map(f => f.field),
-      conditional: s.fields.filter(f => f.required === 'conditional').map(f => f.field),
-      never: s.fields.filter(f => f.required === 'never').map(f => f.field),
-      dynamicAccessCount: s.dynamicAccesses.length,
-      coverage: s.coverage,
-    }));
+    const summary = filtered.map(s => buildConstraintSummary(s));
 
     const hints = filtered.length > 0
       ? ["Call validate_config_constraints with a runtime config object to check for violations."]
@@ -400,7 +366,7 @@ export function registerPatternsTools(server: McpServer, stores: Stores): void {
     const effectiveDomain = domain ?? "credentials";
 
     if (effectiveDomain === "account-settings") {
-      const constraintSet = await getAccountSettingsConstraintSet(kvStore, repo);
+      const constraintSet = await getSingleConstraintSet(kvStore, "constraints:settings:account:", repo);
       if (!constraintSet) {
         return jsonResult({
           error: `No account settings constraints found for "${repo}". Run 'mma index' first.`,
@@ -423,7 +389,7 @@ export function registerPatternsTools(server: McpServer, stores: Stores): void {
     }
 
     if (effectiveDomain === "integrator-settings") {
-      const constraintSet = await getSettingsConstraintSet(kvStore, repo);
+      const constraintSet = await getSingleConstraintSet(kvStore, "constraints:settings:integrator:", repo);
       if (!constraintSet) {
         return jsonResult({
           error: `No integrator settings constraints found for "${repo}". Run 'mma index' first.`,

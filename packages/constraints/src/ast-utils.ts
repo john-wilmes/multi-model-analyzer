@@ -122,6 +122,60 @@ export function parseGuardCondition(
   return null;
 }
 
+/** Like extractGuardConditions but also returns raw text of unmatched conditions. */
+export function extractGuardConditionsExt(
+  node: TreeSitterNode,
+  fieldExtractor: FieldExtractor,
+): { guards: GuardCondition[]; rawUnmatched: string[] } {
+  const guards: GuardCondition[] = [];
+  const rawUnmatched: string[] = [];
+  let current: TreeSitterNode | null = node.parent;
+
+  while (current !== null) {
+    if (
+      current.type === "function_declaration" ||
+      current.type === "function" ||
+      current.type === "arrow_function" ||
+      current.type === "method_definition" ||
+      current.type === "class_body"
+    ) {
+      break;
+    }
+
+    if (current.type === "if_statement") {
+      const alternative = current.namedChildren.find((c) => c.type === "else_clause");
+      let inElse = false;
+      if (alternative) {
+        let ancestor: TreeSitterNode | null = node;
+        while (ancestor !== null && ancestor.id !== current.id) {
+          if (ancestor.id === alternative.id) {
+            inElse = true;
+            break;
+          }
+          ancestor = ancestor.parent;
+        }
+      }
+
+      let condition = current.childForFieldName("condition") ?? current.namedChildren[0];
+      if (condition && condition.type !== "statement_block") {
+        if (condition.type === "parenthesized_expression") {
+          condition = condition.namedChildren[0] ?? condition;
+        }
+        const guard = parseGuardCondition(condition.text, inElse, fieldExtractor);
+        if (guard) {
+          guards.push(guard);
+        } else {
+          rawUnmatched.push(condition.text);
+        }
+      }
+    }
+
+    current = current.parent;
+  }
+
+  return { guards, rawUnmatched };
+}
+
 /** Walk up the AST from a node, collecting enclosing if_statement conditions. */
 export function extractGuardConditions(
   node: TreeSitterNode,
