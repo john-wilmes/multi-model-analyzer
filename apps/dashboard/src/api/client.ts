@@ -336,3 +336,139 @@ export async function fetchBlastRadius(repo: string, file: string, depth?: numbe
   if (depth !== undefined) params.set('maxDepth', String(depth));
   return fetchJson(`${BASE}/api/blast-radius/${encodeURIComponent(repo)}?${params}`);
 }
+
+// -- Constraint Types --
+
+export interface ConstraintSetSummary {
+  integratorType: string;
+  fieldCount: number;
+  always: number;
+  conditional: number;
+  never: number;
+  coverage: {
+    totalAccesses: number;
+    resolvedAccesses: number;
+    unresolvedAccesses: number;
+  };
+}
+
+export interface FieldConstraintInfo {
+  field: string;
+  required: 'always' | 'conditional' | 'never';
+  defaultValue?: unknown;
+  inferredType?: string;
+  description?: string;
+  knownValues?: string[];
+  conditions?: Array<{
+    requiredWhen: Array<{
+      field: string;
+      operator: string;
+      value?: string;
+      negated: boolean;
+      domain?: string;
+    }>;
+    evidence: Array<{ file: string; line: number }>;
+  }>;
+  evidence: Array<{ file: string; line: number }>;
+}
+
+export interface ConstraintSetDetail {
+  integratorType: string;
+  fields: FieldConstraintInfo[];
+  dynamicAccesses: Array<{ file: string; line: number; pattern: string }>;
+  coverage: {
+    totalAccesses: number;
+    resolvedAccesses: number;
+    unresolvedAccesses: number;
+  };
+}
+
+export interface CrossEntityDep {
+  accessedDomain: string;
+  integratorType: string | null;
+  accessedField: string;
+  guard: {
+    field: string;
+    operator: string;
+    value?: string;
+    negated: boolean;
+    domain: string;
+  };
+  evidence: Array<{ file: string; line: number }>;
+}
+
+export interface ValidationViolation {
+  field: string;
+  kind: string;
+  detail: string;
+  evidence: Array<{ file: string; line: number }>;
+}
+
+export interface ValidationResultData {
+  valid: boolean;
+  violations: ValidationViolation[];
+  nearestValid?: {
+    changes: Array<{ field: string; action: string; suggestion?: unknown }>;
+    distance: number;
+  };
+  coverage: {
+    totalAccesses: number;
+    resolvedAccesses: number;
+    unresolvedAccesses: number;
+  };
+}
+
+export type ConfigDomain = 'credentials' | 'integrator-settings' | 'account-settings';
+
+export async function fetchConstraints(
+  domain?: ConfigDomain,
+  repo?: string,
+  integratorType?: string,
+): Promise<{ constraintSets: ConstraintSetSummary[]; total: number }> {
+  const params = new URLSearchParams();
+  if (domain) params.set('domain', domain);
+  if (repo) params.set('repo', repo);
+  if (integratorType) params.set('integratorType', integratorType);
+  const qs = params.toString();
+  return fetchJson(`${BASE}/api/constraints${qs ? `?${qs}` : ''}`);
+}
+
+export async function fetchConstraintDetail(
+  type: string,
+  domain?: ConfigDomain,
+  repo?: string,
+): Promise<ConstraintSetDetail> {
+  const params = new URLSearchParams();
+  if (domain) params.set('domain', domain);
+  if (repo) params.set('repo', repo);
+  const qs = params.toString();
+  return fetchJson(`${BASE}/api/constraints/${encodeURIComponent(type)}${qs ? `?${qs}` : ''}`);
+}
+
+export async function fetchCrossEntityDeps(
+  repo?: string,
+  accessedDomain?: string,
+  guardDomain?: string,
+): Promise<{ dependencies: CrossEntityDep[]; stats: { totalAccesses: number; crossEntityAccesses: number } }> {
+  const params = new URLSearchParams();
+  if (repo) params.set('repo', repo);
+  if (accessedDomain) params.set('accessedDomain', accessedDomain);
+  if (guardDomain) params.set('guardDomain', guardDomain);
+  const qs = params.toString();
+  return fetchJson(`${BASE}/api/cross-entity-deps${qs ? `?${qs}` : ''}`);
+}
+
+export async function validateConstraints(
+  config: Record<string, unknown>,
+  integratorType: string,
+  domain?: ConfigDomain,
+  repo?: string,
+): Promise<ValidationResultData> {
+  const res = await fetch(`${BASE}/api/validate-constraints`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ config, integratorType, domain, repo }),
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status} ${res.statusText}`);
+  return res.json() as Promise<ValidationResultData>;
+}

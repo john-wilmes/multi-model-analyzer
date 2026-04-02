@@ -36,6 +36,12 @@ import {
   handleCrossRepoCatalog,
   handleRepoFlags,
 } from "./routes/cross-repo.js";
+import {
+  handleConstraints,
+  handleConstraintDetail,
+  handleCrossEntityDeps,
+  handleValidateConstraints,
+} from "./routes/constraints.js";
 
 export interface DashboardOptions {
   readonly kvStore: KVStore;
@@ -111,6 +117,15 @@ export async function handleApi(
   if (path === "/api/repo-flags") return handleRepoFlags(req, res, kvStore, query, corsOrigin);
 
   if (path === "/api/repo-states") return handleRepoStates(req, res, kvStore, query, corsOrigin);
+
+  if (path === "/api/constraints") return handleConstraints(req, res, kvStore, query, corsOrigin);
+
+  const constraintDetailMatch = path.match(/^\/api\/constraints\/(.+)$/);
+  if (constraintDetailMatch) return handleConstraintDetail(req, res, kvStore, decodeURIComponent(constraintDetailMatch[1]!), query, corsOrigin);
+
+  if (path === "/api/cross-entity-deps") return handleCrossEntityDeps(req, res, kvStore, query, corsOrigin);
+
+  if (path === "/api/validate-constraints" && req.method === "POST") return handleValidateConstraints(req, res, kvStore, corsOrigin);
 
   const blastMatch = path.match(/^\/api\/blast-radius\/(.+)$/);
   if (blastMatch) return handleBlastRadius(req, res, kvStore, graphStore, decodeURIComponent(blastMatch[1]!), query, corsOrigin);

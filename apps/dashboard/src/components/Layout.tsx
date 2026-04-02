@@ -95,6 +95,17 @@ function IconTarget() {
   );
 }
 
+function IconConstraints() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+      <rect x="3" y="2" width="12" height="14" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
+      <line x1="6" y1="6" x2="12" y2="6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <line x1="6" y1="9" x2="12" y2="9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <line x1="6" y1="12" x2="9" y2="12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function IconFolder() {
   return (
     <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
@@ -193,6 +204,32 @@ function useBreadcrumbs(): BreadcrumbSegment[] {
   // /patterns
   if (pathname === '/patterns') {
     segments.push({ label: 'Design Patterns', to: null });
+    return segments;
+  }
+
+  // /constraints
+  if (pathname === '/constraints') {
+    segments.push({ label: 'Constraints', to: null });
+    return segments;
+  }
+
+  // /constraints/:type
+  const constraintMatch = pathname.match(/^\/constraints\/(.+)$/);
+  if (constraintMatch) {
+    segments.push({ label: 'Constraints', to: '/constraints' });
+    segments.push({ label: decodeURIComponent(constraintMatch[1]), to: null });
+    return segments;
+  }
+
+  // /cross-entity
+  if (pathname === '/cross-entity') {
+    segments.push({ label: 'Cross-Entity Deps', to: null });
+    return segments;
+  }
+
+  // /validate
+  if (pathname === '/validate') {
+    segments.push({ label: 'Config Validator', to: null });
     return segments;
   }
 
@@ -416,6 +453,15 @@ export default function Layout() {
           >
             <IconPatterns />
             {!collapsed && <span>Design Patterns</span>}
+          </Link>
+
+          <Link
+            to="/constraints"
+            className={navClass('/constraints', true)}
+            title={collapsed ? 'Constraints' : undefined}
+          >
+            <IconConstraints />
+            {!collapsed && <span>Constraints</span>}
           </Link>
 
           {repos[0] ? (
