@@ -4,7 +4,17 @@
  */
 
 import type { RepoConfig, SarifResult, CallGraph } from "@mma/core";
-import { extractConfigSchemas, extractCredentialAccesses, buildConstraintSets, extractMongooseSettingsSchema, extractMongooseAccountSettingsSchema, extractSettingsAccesses, buildSettingsConstraintSet, extractAccountSettingsAccesses, buildAccountSettingsConstraintSet } from "@mma/constraints";
+import {
+  extractConfigSchemas,
+  extractCredentialAccesses,
+  buildConstraintSets,
+  extractMongooseSettingsSchema,
+  extractMongooseAccountSettingsSchema,
+  extractSettingsAccesses,
+  buildSettingsConstraintSet,
+  extractAccountSettingsAccesses,
+  buildAccountSettingsConstraintSet,
+} from "@mma/constraints";
 import type { ConfigSchema } from "@mma/constraints";
 import { buildFeatureModel, extractConstraintsFromCode, validateFeatureModel } from "@mma/model-config";
 import { identifyLogRoots, traceBackwardFromLog, buildFaultTree, analyzeGaps, analyzeCascadingRisk } from "@mma/model-fault";
