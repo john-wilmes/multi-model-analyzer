@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { config } from "dotenv";
-config({ override: true });
+config({ override: true, quiet: true });
 
 /**
  * Multi-Model Analyzer CLI
