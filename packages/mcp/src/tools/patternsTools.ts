@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getFlagInventory, computeFlagImpact, getConfigInventory, getConfigModel, getIntegratorConfigMap } from "@mma/query";
 import { validateConfiguration, generateCoveringArray, computeInteractionStrength } from "@mma/model-config";
 import { validateConfig } from "@mma/constraints";
-import type { ConstraintSet } from "@mma/constraints";
+import type { ConstraintSet, CrossEntityDependencyResult } from "@mma/constraints";
 import type { CrossRepoGraph } from "@mma/correlation";
 import { computeCrossRepoImpact } from "@mma/correlation";
 import { z } from "zod";
@@ -507,5 +507,51 @@ export function registerPatternsTools(server: McpServer, stores: Stores): void {
         ]
       : ["No integrator types found. Ensure integrator-service-clients is indexed."];
     return jsonResult(result, undefined, hints);
+  });
+
+  server.registerTool("get_cross_entity_dependencies", {
+    description: "Get cross-entity dependencies for a repository — shows where config accesses in one domain (credentials, integrator-settings, account-settings) are guarded by conditions from another domain. Useful for understanding coupling between config domains.",
+    inputSchema: {
+      repo: z.string().describe("Repository name to get cross-entity dependencies for"),
+      domain: z.enum(["credentials", "integrator-settings", "account-settings"]).optional().describe("Filter dependencies by accessed domain"),
+      guard_domain: z.enum(["credentials", "integrator-settings", "account-settings"]).optional().describe("Filter dependencies by the domain of the guard condition"),
+    },
+  }, async ({ repo, domain, guard_domain }) => {
+    const raw = await kvStore.get(`constraints:cross-entity:${repo}`);
+    if (!raw) {
+      return jsonResult({ error: `No cross-entity dependency data found for repo '${repo}'. Run 'mma index' to generate it.` });
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return jsonResult({ error: "Stored cross-entity data is not valid JSON." });
+    }
+    if (
+      parsed === null ||
+      typeof parsed !== "object" ||
+      !Array.isArray((parsed as Record<string, unknown>).dependencies) ||
+      (parsed as Record<string, unknown>).stats === null ||
+      typeof (parsed as Record<string, unknown>).stats !== "object"
+    ) {
+      return jsonResult({ error: "Stored cross-entity data has unexpected shape." });
+    }
+    const result = parsed as CrossEntityDependencyResult;
+    let deps = result.dependencies;
+    if (domain) {
+      deps = deps.filter((d) => d.accessedDomain === domain);
+    }
+    if (guard_domain) {
+      deps = deps.filter((d) => d.guard.domain === guard_domain);
+    }
+    return jsonResult(
+      { repo, stats: result.stats, filtered: deps.length, dependencies: deps },
+      undefined,
+      [
+        "Call get_config_constraints for deeper analysis of a specific constraint set.",
+        "Use the 'domain' filter to focus on a single accessed config domain.",
+        "Use the 'guard_domain' filter to see which domains impose conditions on others.",
+      ],
+    );
   });
 }

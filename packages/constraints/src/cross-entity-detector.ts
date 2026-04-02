@@ -1,3 +1,4 @@
+// Tests: cross-entity-detector.test.ts
 import { parseGuardCondition } from "./ast-utils.js";
 import type { FieldExtractor } from "./ast-utils.js";
 import type {
@@ -7,17 +8,7 @@ import type {
   CrossEntityDependencyResult,
   GuardCondition,
 } from "./types.js";
-
-// Reuse the same integrator-type-from-path logic as constraint-builder.ts
-function extractIntegratorTypeFromPath(filePath: string): string | undefined {
-  const vendorMatch = /(?:^|[/\\])clients[/\\]([^/\\]+)[/\\]vendors[/\\]([^/\\]+)[/\\]/.exec(filePath);
-  if (vendorMatch) return vendorMatch[2];
-  const baseMatch = /(?:^|[/\\])clients[/\\]([^/\\]+)[/\\]/.exec(filePath);
-  if (baseMatch) return baseMatch[1];
-  const rootFileMatch = /(?:^|[/\\])clients[/\\]([^/\\]+)\.[jt]sx?$/.exec(filePath);
-  if (rootFileMatch) return rootFileMatch[1];
-  return undefined;
-}
+import { extractIntegratorTypeFromPath } from "./integrator-path-utils.js";
 
 interface DomainExtractor {
   domain: ConfigDomain;
@@ -84,6 +75,9 @@ export function detectCrossEntityDependencies(
     for (const access of accesses) {
       if (!access.rawGuardTexts || access.rawGuardTexts.length === 0) continue;
 
+      // Note: rawGuardTexts are plain condition strings without branch context,
+      // so we cannot determine if the access was in an else branch. Negation
+      // within the condition text itself (e.g., "!field") is still parsed correctly.
       for (const text of access.rawGuardTexts) {
         const guard = tryParseGuardWithDomains(text, false, otherDomains);
         if (!guard) continue;

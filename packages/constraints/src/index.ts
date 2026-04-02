@@ -36,3 +36,5 @@ export type { ViolationKind, Violation, SuggestedChange, ValidationResult } from
 export type { CrossEntityDependency, CrossEntityDependencyResult } from "./types.js";
 // cross-entity-detector.ts — detects dependencies between config domains
 export { detectCrossEntityDependencies } from "./cross-entity-detector.js";
+// integrator-path-utils.ts — shared helper for extracting integrator type from file path
+export { extractIntegratorTypeFromPath } from "./integrator-path-utils.js";

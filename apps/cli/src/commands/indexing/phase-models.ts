@@ -192,9 +192,8 @@ export async function runPhaseModels(
           accountSettings: makeAccountSettingsFieldExtractor(),
         },
       );
-      if (crossEntityResult.dependencies.length > 0) {
-        await kvStore.set(`constraints:cross-entity:${repo.name}`, JSON.stringify(crossEntityResult));
-      }
+      // Persist even when empty to distinguish "no dependencies" from "not indexed"
+      await kvStore.set(`constraints:cross-entity:${repo.name}`, JSON.stringify(crossEntityResult));
       log(`  [${repo.name}] [cross-entity] ${crossEntityResult.dependencies.length} dependencies (${crossEntityResult.stats.crossEntityAccesses}/${crossEntityResult.stats.totalAccesses} accesses)`);
     } catch (err) {
       log(`  [${repo.name}] [cross-entity] detection failed: ${err instanceof Error ? err.message : String(err)}`);

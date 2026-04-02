@@ -7,30 +7,7 @@ import type {
   RequirementLevel,
   GuardCondition,
 } from "./types.js";
-
-/**
- * Extracts the integrator type from a file path.
- * Matches `clients/{type}/` in the path.
- * For vendor paths `clients/{type}/vendors/{vendor}/`, returns the vendor type.
- */
-function extractIntegratorTypeFromPath(filePath: string): string | undefined {
-  // Match vendor path first: clients/{type}/vendors/{vendor}/
-  const vendorMatch = /(?:^|[/\\])clients[/\\]([^/\\]+)[/\\]vendors[/\\]([^/\\]+)[/\\]/.exec(filePath);
-  if (vendorMatch) {
-    return vendorMatch[2];
-  }
-  // Match base: clients/{type}/ (subdirectory clients)
-  const baseMatch = /(?:^|[/\\])clients[/\\]([^/\\]+)[/\\]/.exec(filePath);
-  if (baseMatch) {
-    return baseMatch[1];
-  }
-  // Match root-level: clients/{type}.js or .ts (legacy single-file clients)
-  const rootFileMatch = /(?:^|[/\\])clients[/\\]([^/\\]+)\.[jt]sx?$/.exec(filePath);
-  if (rootFileMatch) {
-    return rootFileMatch[1];
-  }
-  return undefined;
-}
+import { extractIntegratorTypeFromPath } from "./integrator-path-utils.js";
 
 /**
  * Determines if an access is unconditional (no guard conditions, not a default-fallback, not a write).

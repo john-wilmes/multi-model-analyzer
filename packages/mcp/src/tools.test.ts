@@ -104,6 +104,7 @@ describe("registerTools", () => {
       "get_config_constraints", "validate_config_constraints",
       "get_test_configurations", "get_interaction_strength",
       "get_integrator_config_map",
+      "get_cross_entity_dependencies",
     ];
 
     for (const tool of expectedTools) {
@@ -643,6 +644,7 @@ const ALL_TOOL_NAMES = [
   "get_config_constraints", "validate_config_constraints",
   "get_test_configurations", "get_interaction_strength",
   "get_integrator_config_map",
+  "get_cross_entity_dependencies",
 ] as const;
 
 /** Minimal valid args for every tool so we can invoke them without crashes. */
@@ -681,6 +683,7 @@ const MINIMAL_ARGS: Record<string, Record<string, unknown>> = {
   get_test_configurations: { repo: "test-repo" },
   get_interaction_strength: { repo: "test-repo", parameter: "flagA" },
   get_integrator_config_map: {},
+  get_cross_entity_dependencies: { repo: "test-repo" },
 };
 
 function makeSarifStoresWithRepoMetadata(count: number) {
@@ -712,7 +715,7 @@ function makeInvoker(server: ReturnType<typeof createMockServer>) {
 // ---------------------------------------------------------------------------
 
 describe("MCP tool sanity checks", () => {
-  it("all 31 tools return valid JSON content with text entry", async () => {
+  it("all 32 tools return valid JSON content with text entry", async () => {
     const server = createMockServer();
     register(server, makeStores());
     const invoker = makeInvoker(server);
@@ -1167,10 +1170,10 @@ describe("MCP tool sanity checks", () => {
 // ---------------------------------------------------------------------------
 
 describe("MCP meta-sanity checks", () => {
-  it("exactly 34 tools are registered", () => {
+  it("exactly 35 tools are registered", () => {
     const server = createMockServer();
     register(server, makeStores());
-    expect(server.tools.size).toBe(34);
+    expect(server.tools.size).toBe(35);
   });
 
   it("all registered tools have non-empty descriptions", () => {
