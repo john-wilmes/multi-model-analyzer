@@ -40,9 +40,10 @@ function buildConstMap(root: TreeSitterNode): Map<string, TreeSitterNode> {
   return map;
 }
 
-// ─── Find the integrator block inside `const settings = { ... }` ─────────────
+// ─── Find blocks inside `const settings = { ... }` ──────────────────────────
 
-function findIntegratorBlock(root: TreeSitterNode): TreeSitterNode | null {
+/** Find the `const settings = { ... }` object node in the AST root. */
+function findSettingsObject(root: TreeSitterNode): TreeSitterNode | null {
   for (const stmt of root.namedChildren) {
     if (stmt.type !== "lexical_declaration") continue;
 
@@ -53,25 +54,38 @@ function findIntegratorBlock(root: TreeSitterNode): TreeSitterNode | null {
       const valueNode = declarator.childForFieldName("value");
       if (!nameNode || !valueNode) continue;
       if (nameNode.text !== "settings") continue;
-      if (valueNode.type !== "object") continue;
-
-      // Found `const settings = { ... }` — look for the `integrator:` pair
-      for (const child of valueNode.namedChildren) {
-        if (child.type !== "pair") continue;
-
-        const keyNode = child.children[0];
-        const pairValue = child.children[2];
-        if (!keyNode || !pairValue) continue;
-
-        const key = keyNode.text.replace(/^["']|["']$/g, "");
-        if (key === "integrator" && pairValue.type === "object") {
-          return pairValue;
-        }
-      }
+      if (valueNode.type === "object") return valueNode;
     }
   }
 
   return null;
+}
+
+/** Find a named block (e.g., "integrator") inside the settings object. */
+function findBlockInSettings(
+  settingsObj: TreeSitterNode,
+  blockKey: string,
+): TreeSitterNode | null {
+  for (const child of settingsObj.namedChildren) {
+    if (child.type !== "pair") continue;
+
+    const keyNode = child.children[0];
+    const pairValue = child.children[2];
+    if (!keyNode || !pairValue) continue;
+
+    const key = keyNode.text.replace(/^["']|["']$/g, "");
+    if (key === blockKey && pairValue.type === "object") {
+      return pairValue;
+    }
+  }
+
+  return null;
+}
+
+function findIntegratorBlock(root: TreeSitterNode): TreeSitterNode | null {
+  const settingsObj = findSettingsObject(root);
+  if (!settingsObj) return null;
+  return findBlockInSettings(settingsObj, "integrator");
 }
 
 // ─── Recursive field extraction ───────────────────────────────────────────────
@@ -201,7 +215,6 @@ export async function extractMongooseSettingsSchema(
 
       const integratorBlock = findIntegratorBlock(root);
       if (!integratorBlock) {
-        // No `const settings = { integrator: ... }` found — skip silently
         continue;
       }
 
@@ -214,6 +227,125 @@ export async function extractMongooseSettingsSchema(
         sourceFiles: [path],
       };
       schemas.push(schema);
+    } catch (err) {
+      errors.push({
+        file: path,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  return { schemas, errors };
+}
+
+/**
+ * Extract the account-level settings schema from Mongoose model source files.
+ *
+ * Targets `const settings = { ... }` and extracts ALL top-level keys except
+ * `integrator` (which is handled by `extractMongooseSettingsSchema`). Each
+ * top-level key becomes a field prefix (e.g., `scheduler.appointmentDuration`,
+ * `timezone`, `cancellation.shadowAppointment`).
+ *
+ * @param files Array of source files to process (typically just `setting.ts`)
+ * @returns Extracted schemas and any per-file errors
+ */
+export async function extractMongooseAccountSettingsSchema(
+  files: { path: string; content: string }[],
+): Promise<ConfigSchemaExtractionResult> {
+  await initTreeSitter();
+
+  const schemas: ConfigSchema[] = [];
+  const errors: { file: string; error: string }[] = [];
+
+  for (const { path, content } of files) {
+    try {
+      const tree = parseSource(content, path);
+      const root = tree.rootNode;
+
+      const settingsObj = findSettingsObject(root);
+      if (!settingsObj) continue;
+
+      const constMap = buildConstMap(root);
+      const allFields: ConfigField[] = [];
+
+      for (const child of settingsObj.namedChildren) {
+        // Handle shorthand properties: `const scheduler = {...}; const settings = { scheduler, ... }`
+        if (child.type === "shorthand_property_identifier") {
+          const name = child.text;
+          if (name === "integrator") continue;
+          const resolved = constMap.get(name);
+          if (resolved) {
+            const nested = extractFieldsFromMongooseObject(resolved, path, name, constMap);
+            allFields.push(...nested);
+          }
+          continue;
+        }
+
+        if (child.type !== "pair") continue;
+
+        const keyNode = child.children[0];
+        const valueNode = child.children[2];
+        if (!keyNode || !valueNode) continue;
+
+        const key = keyNode.text.replace(/^["']|["']$/g, "");
+        if (key === "integrator") continue;
+
+        if (valueNode.type === "object") {
+          if (looksLikeDescriptor(valueNode)) {
+            // Top-level descriptor (e.g., `timezone: { type: String, default: 'US/Pacific' }`)
+            const desc = extractDescriptor(valueNode);
+            allFields.push({
+              name: key,
+              inferredType: desc.inferredType,
+              hasDefault: desc.hasDefault,
+              ...(desc.hasDefault ? { defaultValue: desc.defaultValue } : {}),
+              required: desc.required,
+              ...(desc.description !== undefined ? { description: desc.description } : {}),
+              ...(Object.keys(desc.metadata).length > 0 ? { metadata: desc.metadata } : {}),
+              source: { file: path, line: keyNode.startPosition.row + 1 },
+            });
+          } else {
+            // Nested section — recurse with the key as prefix
+            const nested = extractFieldsFromMongooseObject(valueNode, path, key, constMap);
+            allFields.push(...nested);
+          }
+        } else if (valueNode.type === "identifier") {
+          const identName = valueNode.text;
+          if (identName in TYPE_CONSTRUCTOR_MAP) {
+            allFields.push({
+              name: key,
+              inferredType: inferTypeFromConstructor(identName),
+              hasDefault: false,
+              required: undefined,
+              source: { file: path, line: keyNode.startPosition.row + 1 },
+            });
+          } else {
+            const resolved = constMap.get(identName);
+            if (resolved) {
+              const nested = extractFieldsFromMongooseObject(resolved, path, key, constMap);
+              allFields.push(...nested);
+            }
+          }
+        } else {
+          const dr = extractDefaultValue(valueNode);
+          allFields.push({
+            name: key,
+            inferredType: "unknown",
+            hasDefault: dr.hasDefault,
+            ...(dr.hasDefault ? { defaultValue: dr.defaultValue } : {}),
+            required: undefined,
+            source: { file: path, line: keyNode.startPosition.row + 1 },
+          });
+        }
+      }
+
+      if (allFields.length > 0) {
+        schemas.push({
+          integratorType: "__account_settings__",
+          fields: allFields,
+          sourceFiles: [path],
+        });
+      }
     } catch (err) {
       errors.push({
         file: path,

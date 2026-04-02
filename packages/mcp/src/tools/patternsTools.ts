@@ -33,6 +33,28 @@ async function getSettingsConstraintSet(
   }
 }
 
+async function getAccountSettingsConstraintSet(
+  kvStore: Stores["kvStore"],
+  repo: string,
+): Promise<ConstraintSet | null> {
+  const raw = await kvStore.get(`constraints:settings:account:${repo}`);
+  if (!raw) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      parsed === null ||
+      typeof parsed !== "object" ||
+      typeof (parsed as Record<string, unknown>).integratorType !== "string" ||
+      !Array.isArray((parsed as Record<string, unknown>).fields)
+    ) {
+      return null;
+    }
+    return parsed as ConstraintSet;
+  } catch {
+    return null;
+  }
+}
+
 async function getConstraintSets(
   kvStore: Stores["kvStore"],
   repo: string,
@@ -285,14 +307,34 @@ export function registerPatternsTools(server: McpServer, stores: Stores): void {
 
   // ISC constraint sets: required/conditional/never fields per integrator type
   server.registerTool("get_config_constraints", {
-    description: "List constraint sets for a repository — shows required, conditional, and never fields derived from static analysis. Use domain='credentials' (default) for per-integrator-type credential constraints, or domain='integrator-settings' for global integrator settings constraints. Call before validate_config_constraints to understand the constraint model.",
+    description: "List constraint sets for a repository — shows required, conditional, and never fields derived from static analysis. Use domain='credentials' (default) for per-integrator-type credential constraints, domain='integrator-settings' for global integrator settings constraints, or domain='account-settings' for account-level settings constraints. Call before validate_config_constraints to understand the constraint model.",
     inputSchema: {
       repo: z.string().describe("Repository name to get constraint sets for"),
       integratorType: z.string().optional().describe("Filter to a specific integrator type (case-insensitive substring match). Only applies to credentials domain."),
-      domain: z.enum(["credentials", "integrator-settings"]).optional().describe("Constraint domain: 'credentials' (default) for per-integrator-type credential constraints, 'integrator-settings' for global integrator settings constraints"),
+      domain: z.enum(["credentials", "integrator-settings", "account-settings"]).optional().describe("Constraint domain: 'credentials' (default) for per-integrator-type credential constraints, 'integrator-settings' for global integrator settings constraints, 'account-settings' for account-level settings constraints"),
     },
   }, async ({ repo, integratorType, domain }) => {
     const effectiveDomain = domain ?? "credentials";
+
+    if (effectiveDomain === "account-settings") {
+      const set = await getAccountSettingsConstraintSet(kvStore, repo);
+      if (!set) {
+        return jsonResult({
+          error: `No account settings constraints found for "${repo}". Run 'mma index' first. Account settings constraints are built when account settings access patterns are detected.`,
+        });
+      }
+      const summary = {
+        integratorType: set.integratorType,
+        fieldCount: set.fields.length,
+        alwaysRequired: set.fields.filter(f => f.required === 'always').map(f => f.field),
+        conditional: set.fields.filter(f => f.required === 'conditional').map(f => f.field),
+        never: set.fields.filter(f => f.required === 'never').map(f => f.field),
+        dynamicAccessCount: set.dynamicAccesses.length,
+        coverage: set.coverage,
+      };
+      return jsonResult({ repo, domain: effectiveDomain, total: 1, returned: 1, constraintSets: [summary] }, undefined,
+        ["Call validate_config_constraints with domain='account-settings' to check a runtime config."]);
+    }
 
     if (effectiveDomain === "integrator-settings") {
       const set = await getSettingsConstraintSet(kvStore, repo);
@@ -347,15 +389,38 @@ export function registerPatternsTools(server: McpServer, stores: Stores): void {
 
   // Validate a runtime config against ISC constraint sets
   server.registerTool("validate_config_constraints", {
-    description: "Validate a runtime config object against constraint sets for a repository. Returns violations (missing required fields, unexpected types, unknown fields) and a nearest-valid suggestion. Use domain='credentials' (default) for per-integrator-type credential validation, or domain='integrator-settings' for global integrator settings validation. Different from validate_config which checks the feature model.",
+    description: "Validate a runtime config object against constraint sets for a repository. Returns violations (missing required fields, unexpected types, unknown fields) and a nearest-valid suggestion. Use domain='credentials' (default) for per-integrator-type credential validation, domain='integrator-settings' for global integrator settings validation, or domain='account-settings' for account-level settings validation. Different from validate_config which checks the feature model.",
     inputSchema: {
       repo: z.string().describe("Repository name to validate against"),
-      integratorType: z.string().optional().describe("Integrator type to validate against (must match a constraint set exactly). Required for credentials domain, ignored for integrator-settings."),
+      integratorType: z.string().optional().describe("Integrator type to validate against (must match a constraint set exactly). Required for credentials domain, ignored for integrator-settings and account-settings."),
       config: z.record(z.unknown()).describe("Runtime config object to validate — keys are credential/config field names, values are their settings"),
-      domain: z.enum(["credentials", "integrator-settings"]).optional().describe("Constraint domain: 'credentials' (default) for per-integrator-type credential validation, 'integrator-settings' for global integrator settings validation"),
+      domain: z.enum(["credentials", "integrator-settings", "account-settings"]).optional().describe("Constraint domain: 'credentials' (default) for per-integrator-type credential validation, 'integrator-settings' for global integrator settings validation, 'account-settings' for account-level settings validation"),
     },
   }, async ({ repo, integratorType, config, domain }) => {
     const effectiveDomain = domain ?? "credentials";
+
+    if (effectiveDomain === "account-settings") {
+      const constraintSet = await getAccountSettingsConstraintSet(kvStore, repo);
+      if (!constraintSet) {
+        return jsonResult({
+          error: `No account settings constraints found for "${repo}". Run 'mma index' first.`,
+        });
+      }
+      const result = validateConfig(config, constraintSet);
+      const hints = result.violations.length > 0
+        ? ["Fix missing-required violations first.", "Call get_config_constraints with domain='account-settings' to see full field requirements."]
+        : ["Config satisfies all account settings constraints."];
+      return jsonResult({
+        repo,
+        domain: effectiveDomain,
+        integratorType: constraintSet.integratorType,
+        valid: result.valid,
+        violationCount: result.violations.length,
+        violations: result.violations,
+        nearestValid: result.nearestValid,
+        coverage: result.coverage,
+      }, undefined, hints);
+    }
 
     if (effectiveDomain === "integrator-settings") {
       const constraintSet = await getSettingsConstraintSet(kvStore, repo);

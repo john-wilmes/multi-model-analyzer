@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeAll } from "vitest";
-import { extractMongooseSettingsSchema } from "./mongoose-schema-extractor.js";
+import {
+  extractMongooseSettingsSchema,
+  extractMongooseAccountSettingsSchema,
+} from "./mongoose-schema-extractor.js";
 import { initTreeSitter } from "@mma/parsing";
 import type { ConfigField } from "./types.js";
 
@@ -346,5 +349,194 @@ const settings = {
     const schema = result.schemas[0]!;
     expect(schema.fields).toHaveLength(1);
     expect(schema.fields[0]!.name).toBe("lockExpiryInMinutes");
+  });
+});
+
+describe("extractMongooseAccountSettingsSchema", () => {
+  beforeAll(async () => {
+    await initTreeSitter();
+  }, 15_000);
+
+  it("returns empty result for empty input", async () => {
+    const result = await extractMongooseAccountSettingsSchema([]);
+    expect(result.schemas).toHaveLength(0);
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it("skips files with no settings object", async () => {
+    const result = await extractMongooseAccountSettingsSchema([
+      { path: "models/foo.ts", content: "export const something = {};" },
+    ]);
+    expect(result.schemas).toHaveLength(0);
+  });
+
+  it("extracts all top-level keys except integrator", async () => {
+    const result = await extractMongooseAccountSettingsSchema([
+      {
+        path: "models/setting.ts",
+        content: `
+const settings = {
+  session: {
+    logoutTimeout: {
+      type: Number,
+      default: 30,
+    },
+  },
+  integrator: {
+    lockExpiryInMinutes: {
+      type: Number,
+      required: false,
+      default: 10,
+    },
+  },
+  patients: {
+    maxTokenAge: {
+      type: Number,
+      required: false,
+    },
+  },
+};`,
+      },
+    ]);
+    expect(result.schemas).toHaveLength(1);
+    const schema = result.schemas[0]!;
+    expect(schema.integratorType).toBe("__account_settings__");
+    expect(schema.sourceFiles).toEqual(["models/setting.ts"]);
+
+    // Should have session.logoutTimeout and patients.maxTokenAge, NOT integrator fields
+    const names = schema.fields.map((f) => f.name);
+    expect(names).toContain("session.logoutTimeout");
+    expect(names).toContain("patients.maxTokenAge");
+    expect(names.some((n) => n.startsWith("integrator") || n === "lockExpiryInMinutes")).toBe(
+      false,
+    );
+  });
+
+  it("handles top-level descriptor fields (e.g., timezone)", async () => {
+    const result = await extractMongooseAccountSettingsSchema([
+      {
+        path: "models/setting.ts",
+        content: `
+const settings = {
+  timezone: {
+    type: String,
+    required: false,
+    default: 'US/Pacific',
+  },
+  integrator: {
+    enabled: { type: Boolean, default: true },
+  },
+};`,
+      },
+    ]);
+    const schema = result.schemas[0]!;
+    const tz = field(schema.fields, "timezone")!;
+    expect(tz).toBeDefined();
+    expect(tz.inferredType).toBe("string");
+    expect(tz.defaultValue).toBe("US/Pacific");
+  });
+
+  it("extracts nested sections with dotted paths", async () => {
+    const result = await extractMongooseAccountSettingsSchema([
+      {
+        path: "models/setting.ts",
+        content: `
+const settings = {
+  scheduler: {
+    appointmentDuration: {
+      type: Number,
+      required: false,
+      default: 30,
+    },
+    bufferTime: {
+      type: Number,
+      required: false,
+      default: 0,
+    },
+  },
+  cancellation: {
+    shadowAppointment: {
+      type: Boolean,
+      required: false,
+      default: false,
+    },
+  },
+  integrator: {
+    sync: { enabled: { type: Boolean, default: true } },
+  },
+};`,
+      },
+    ]);
+    const schema = result.schemas[0]!;
+    expect(field(schema.fields, "scheduler.appointmentDuration")!.defaultValue).toBe(30);
+    expect(field(schema.fields, "scheduler.bufferTime")!.defaultValue).toBe(0);
+    expect(field(schema.fields, "cancellation.shadowAppointment")!.defaultValue).toBe(false);
+  });
+
+  it("resolves shorthand property references", async () => {
+    const result = await extractMongooseAccountSettingsSchema([
+      {
+        path: "models/setting.ts",
+        content: `
+const communication = {
+  smsEnabled: {
+    type: Boolean,
+    required: false,
+    default: true,
+  },
+  emailEnabled: {
+    type: Boolean,
+    required: false,
+    default: true,
+  },
+};
+
+const settings = {
+  communication,
+  integrator: {
+    enabled: { type: Boolean, default: true },
+  },
+};`,
+      },
+    ]);
+    const schema = result.schemas[0]!;
+    expect(field(schema.fields, "communication.smsEnabled")!.inferredType).toBe("boolean");
+    expect(field(schema.fields, "communication.emailEnabled")!.defaultValue).toBe(true);
+  });
+
+  it("resolves identifier values referencing top-level consts", async () => {
+    const result = await extractMongooseAccountSettingsSchema([
+      {
+        path: "models/setting.ts",
+        content: `
+const reminderConfig = {
+  enabled: { type: Boolean, default: true },
+  maxRetries: { type: Number, default: 3 },
+};
+
+const settings = {
+  reminder: reminderConfig,
+  integrator: { enabled: { type: Boolean, default: true } },
+};`,
+      },
+    ]);
+    const schema = result.schemas[0]!;
+    expect(field(schema.fields, "reminder.enabled")!.inferredType).toBe("boolean");
+    expect(field(schema.fields, "reminder.maxRetries")!.defaultValue).toBe(3);
+  });
+
+  it("returns empty schema when only integrator block exists", async () => {
+    const result = await extractMongooseAccountSettingsSchema([
+      {
+        path: "models/setting.ts",
+        content: `
+const settings = {
+  integrator: {
+    lockExpiryInMinutes: { type: Number, default: 10 },
+  },
+};`,
+      },
+    ]);
+    expect(result.schemas).toHaveLength(0);
   });
 });

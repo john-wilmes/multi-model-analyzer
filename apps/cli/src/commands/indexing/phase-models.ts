@@ -4,7 +4,7 @@
  */
 
 import type { RepoConfig, SarifResult, CallGraph } from "@mma/core";
-import { extractConfigSchemas, extractCredentialAccesses, buildConstraintSets, extractMongooseSettingsSchema, extractSettingsAccesses, buildSettingsConstraintSet } from "@mma/constraints";
+import { extractConfigSchemas, extractCredentialAccesses, buildConstraintSets, extractMongooseSettingsSchema, extractMongooseAccountSettingsSchema, extractSettingsAccesses, buildSettingsConstraintSet, extractAccountSettingsAccesses, buildAccountSettingsConstraintSet } from "@mma/constraints";
 import type { ConfigSchema } from "@mma/constraints";
 import { buildFeatureModel, extractConstraintsFromCode, validateFeatureModel } from "@mma/model-config";
 import { identifyLogRoots, traceBackwardFromLog, buildFaultTree, analyzeGaps, analyzeCascadingRisk } from "@mma/model-fault";
@@ -112,10 +112,21 @@ export async function runPhaseModels(
         const settingsSchema = schemaResult.schemas[0];
         if (settingsSchema) {
           await kvStore.set('schema:settings:integrator', JSON.stringify(settingsSchema));
-          log(`  [${repo.name}] [settings-schema] ${settingsSchema.fields.length} fields extracted`);
+          log(`  [${repo.name}] [settings-schema] integrator: ${settingsSchema.fields.length} fields extracted`);
         }
       } catch (err) {
-        log(`  [${repo.name}] [settings-schema] extraction failed: ${err instanceof Error ? err.message : String(err)}`);
+        log(`  [${repo.name}] [settings-schema] integrator extraction failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+
+      try {
+        const accountSchemaResult = await extractMongooseAccountSettingsSchema(settingModelFiles);
+        const accountSchema = accountSchemaResult.schemas[0];
+        if (accountSchema) {
+          await kvStore.set('schema:settings:account', JSON.stringify(accountSchema));
+          log(`  [${repo.name}] [settings-schema] account: ${accountSchema.fields.length} fields extracted`);
+        }
+      } catch (err) {
+        log(`  [${repo.name}] [settings-schema] account extraction failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
 
@@ -127,10 +138,24 @@ export async function runPhaseModels(
         const schema: ConfigSchema | undefined = schemaJson ? JSON.parse(schemaJson) : undefined;
         const constraintSet = buildSettingsConstraintSet(schema, settingsAccessResult.accesses);
         await kvStore.set(`constraints:settings:integrator:${repo.name}`, JSON.stringify(constraintSet));
-        log(`  [${repo.name}] [settings-constraints] ${constraintSet.fields.length} fields (${settingsAccessResult.stats.totalAccesses} accesses${schema ? ', schema merged' : ', no schema'})`);
+        log(`  [${repo.name}] [settings-constraints] integrator: ${constraintSet.fields.length} fields (${settingsAccessResult.stats.totalAccesses} accesses${schema ? ', schema merged' : ', no schema'})`);
       }
     } catch (err) {
-      log(`  [${repo.name}] [settings-constraints] extraction failed: ${err instanceof Error ? err.message : String(err)}`);
+      log(`  [${repo.name}] [settings-constraints] integrator extraction failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    // --- Account settings constraints (runs on repos with account settings accesses) ---
+    try {
+      const accountAccessResult = await extractAccountSettingsAccesses(allFiles);
+      if (accountAccessResult.accesses.length > 0) {
+        const schemaJson = await kvStore.get('schema:settings:account');
+        const schema: ConfigSchema | undefined = schemaJson ? JSON.parse(schemaJson) : undefined;
+        const constraintSet = buildAccountSettingsConstraintSet(schema, accountAccessResult.accesses);
+        await kvStore.set(`constraints:settings:account:${repo.name}`, JSON.stringify(constraintSet));
+        log(`  [${repo.name}] [settings-constraints] account: ${constraintSet.fields.length} fields (${accountAccessResult.stats.totalAccesses} accesses${schema ? ', schema merged' : ', no schema'})`);
+      }
+    } catch (err) {
+      log(`  [${repo.name}] [settings-constraints] account extraction failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
