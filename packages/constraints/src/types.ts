@@ -72,6 +72,8 @@ export interface CredentialAccess {
   readonly hasDefault: boolean;
   /** Whether this access came from a destructuring pattern (not a member_expression) */
   readonly isDestructured?: boolean;
+  /** Name of the enclosing function/method, if the access is inside one (undefined = module scope) */
+  readonly enclosingFunction?: string;
   /** Guard conditions enclosing this access */
   readonly guardConditions: readonly GuardCondition[];
   /** Raw text of guard conditions that could not be parsed into structured GuardCondition objects */

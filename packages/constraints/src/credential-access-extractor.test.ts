@@ -503,4 +503,51 @@ describe("extractCredentialAccesses", () => {
     const bad = access(result.accesses, "jwtPrivateKey.replace");
     expect(bad).toBeUndefined();
   });
+
+  it("populates enclosingFunction for access inside a named function declaration", async () => {
+    const result = await extractCredentialAccesses([
+      {
+        path: "clients/enc/service.js",
+        content: `
+          function connect() {
+            return self.options.integrator.credentials.apiKey;
+          }
+        `,
+      },
+    ]);
+    expect(result.errors).toHaveLength(0);
+    const a = access(result.accesses, "apiKey");
+    expect(a).toBeDefined();
+    expect(a!.enclosingFunction).toBe("connect");
+  });
+
+  it("populates enclosingFunction for access inside a prototype method assignment", async () => {
+    const result = await extractCredentialAccesses([
+      {
+        path: "clients/proto/service.js",
+        content: `
+          MyClient.prototype.authenticate = function() {
+            return self.options.integrator.credentials.secret;
+          };
+        `,
+      },
+    ]);
+    expect(result.errors).toHaveLength(0);
+    const a = access(result.accesses, "secret");
+    expect(a).toBeDefined();
+    expect(a!.enclosingFunction).toBe("MyClient.prototype.authenticate");
+  });
+
+  it("enclosingFunction is undefined for module-scope access", async () => {
+    const result = await extractCredentialAccesses([
+      {
+        path: "clients/modscope/service.js",
+        content: `const token = self.options.integrator.credentials.token;`,
+      },
+    ]);
+    expect(result.errors).toHaveLength(0);
+    const a = access(result.accesses, "token");
+    expect(a).toBeDefined();
+    expect(a!.enclosingFunction).toBeUndefined();
+  });
 });

@@ -94,6 +94,17 @@ export function determineRequirementLevel(
         return 'conditional';
       }
 
+      // If all unconditional accesses are inside named functions (not at module scope),
+      // the field is only required when those functions are called. Without inter-procedural
+      // analysis we can't prove those functions are always invoked, so downgrade to conditional.
+      const unconditionalAccesses = nonWriteAccesses.filter(isUnconditionalRead);
+      const allInsideFunctions = unconditionalAccesses.every(
+        (a) => a.enclosingFunction !== undefined,
+      );
+      if (allInsideFunctions) {
+        return 'conditional';
+      }
+
       return 'always';
     }
 

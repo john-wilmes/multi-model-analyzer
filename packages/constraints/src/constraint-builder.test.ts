@@ -30,7 +30,7 @@ function makeSchema(
 function makeAccess(
   integratorType: string,
   field: string,
-  opts: Partial<Pick<CredentialAccess, "accessKind" | "hasDefault" | "guardConditions" | "isDestructured">> = {},
+  opts: Partial<Pick<CredentialAccess, "accessKind" | "hasDefault" | "guardConditions" | "isDestructured" | "enclosingFunction">> = {},
 ): CredentialAccess {
   return {
     field,
@@ -40,6 +40,7 @@ function makeAccess(
     hasDefault: opts.hasDefault ?? false,
     guardConditions: opts.guardConditions ?? [],
     ...(opts.isDestructured !== undefined ? { isDestructured: opts.isDestructured } : {}),
+    ...(opts.enclosingFunction !== undefined ? { enclosingFunction: opts.enclosingFunction } : {}),
   };
 }
 
@@ -395,5 +396,39 @@ describe("buildConstraintSets", () => {
     };
     const result = buildConstraintSets([], [access]);
     expect(result.constraintSets).toHaveLength(0);
+  });
+
+  it("all accesses inside named functions → conditional (function-scope downgrade)", () => {
+    const accesses = [
+      makeAccess("typeS", "apiKey", { enclosingFunction: "connect" }),
+      makeAccess("typeS", "apiKey", { enclosingFunction: "authenticate" }),
+    ];
+    const result = buildConstraintSets([], accesses);
+    const cs = getCS(result, 0);
+    const field = cs.fields.find((f) => f.field === "apiKey");
+    expect(field?.required).toBe("conditional");
+  });
+
+  it("at least one module-scope access → always (not downgraded)", () => {
+    const accesses = [
+      makeAccess("typeT", "apiKey", { enclosingFunction: "connect" }),
+      makeAccess("typeT", "apiKey"), // module scope: enclosingFunction is undefined
+    ];
+    const result = buildConstraintSets([], accesses);
+    const cs = getCS(result, 0);
+    const field = cs.fields.find((f) => f.field === "apiKey");
+    expect(field?.required).toBe("always");
+  });
+
+  it("mix of function-scoped and module-scope unconditional accesses → always", () => {
+    const accesses = [
+      makeAccess("typeU", "token", { enclosingFunction: "getToken" }),
+      makeAccess("typeU", "token"), // module scope
+      makeAccess("typeU", "token", { enclosingFunction: "refreshToken" }),
+    ];
+    const result = buildConstraintSets([], accesses);
+    const cs = getCS(result, 0);
+    const field = cs.fields.find((f) => f.field === "token");
+    expect(field?.required).toBe("always");
   });
 });
