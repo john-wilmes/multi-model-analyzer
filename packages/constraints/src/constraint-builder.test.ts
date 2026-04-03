@@ -185,6 +185,72 @@ describe("buildConstraintSets", () => {
     expect(cs.coverage.totalAccesses).toBe(0);
   });
 
+  it("bare-constructor schema fields with function-scoped accesses → always (schema overrides function-scope downgrade)", () => {
+    // Simulates oncoemrfilepickup: host/username/password are bare-constructor schema fields
+    // accessed inside named functions. Without the schema inference, function-scoped access
+    // downgrades them to conditional. The schema declaration is authoritative evidence that
+    // the field is expected, overriding the function-scope uncertainty.
+    const schemas = [
+      makeSchema("typeH2", [
+        { name: "host" },     // bare constructor: required undefined, no default
+        { name: "username" }, // same
+        { name: "password" }, // same
+        { name: "path" },    // same — but accessed with self-truthy guard
+      ]),
+    ];
+    const accesses = [
+      makeAccess("typeH2", "host", { enclosingFunction: "login" }),
+      makeAccess("typeH2", "username", { enclosingFunction: "login" }),
+      makeAccess("typeH2", "password", { enclosingFunction: "login" }),
+      // path is accessed with a self-truthy guard: if (creds.path) { use(creds.path) }
+      makeAccess("typeH2", "path", { enclosingFunction: "login" }),
+      makeAccess("typeH2", "path", {
+        enclosingFunction: "login",
+        guardConditions: [{ field: "path", operator: "truthy" as const, negated: false }],
+      }),
+    ];
+    const result = buildConstraintSets(schemas, accesses);
+    const cs = getCS(result, 0);
+    const byName = Object.fromEntries(cs.fields.map((f) => [f.field, f]));
+    // Schema bare-constructor overrides function-scope downgrade → always
+    expect(byName["host"]?.required).toBe("always");
+    expect(byName["username"]?.required).toBe("always");
+    expect(byName["password"]?.required).toBe("always");
+    // Self-truthy guard is developer intent to handle undefined → still conditional
+    expect(byName["path"]?.required).toBe("conditional");
+  });
+
+  it("schema-implied-required fields with destructuring-only accesses → always", () => {
+    const schemas = [makeSchema("typeH4", [{ name: "host" }])];
+    const accesses = [
+      makeAccess("typeH4", "host", { isDestructured: true }),
+      makeAccess("typeH4", "host", { isDestructured: true }),
+    ];
+    const result = buildConstraintSets(schemas, accesses);
+    const cs = getCS(result, 0);
+    const field = cs.fields.find((f) => f.field === "host");
+    expect(field?.required).toBe("always");
+  });
+
+  it("bare-constructor schema-only fields (no accesses) → never (unused schema fields)", () => {
+    // Fields declared in schema with bare constructors but NO accesses — unused/dead fields
+    const schemas = [
+      makeSchema("typeH3", [
+        { name: "host" },
+        { name: "apiKey" },
+        { name: "mode", required: false },
+        { name: "timeout", hasDefault: true, defaultValue: 30 },
+      ]),
+    ];
+    const result = buildConstraintSets(schemas, []);
+    const cs = getCS(result, 0);
+    const byName = Object.fromEntries(cs.fields.map((f) => [f.field, f]));
+    expect(byName["host"]?.required).toBe("never");
+    expect(byName["apiKey"]?.required).toBe("never");
+    expect(byName["mode"]?.required).toBe("never");
+    expect(byName["timeout"]?.required).toBe("never");
+  });
+
   it("coverage stats are correct", () => {
     const schemas = [makeSchema("typeI", [{ name: "apiKey" }, { name: "secret" }])];
     const accesses = [

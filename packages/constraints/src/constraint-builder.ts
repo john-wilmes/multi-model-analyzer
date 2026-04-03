@@ -28,6 +28,7 @@ export function determineRequirementLevel(
   schemaRequired: boolean | undefined,
   schemaHasDefault: boolean,
   nonWriteAccesses: readonly CredentialAccess[],
+  inSchema = false,
 ): RequirementLevel {
   // Priority 1: explicitly required in schema → always (unless it has a default)
   if (schemaRequired === true) {
@@ -84,25 +85,35 @@ export function determineRequirementLevel(
         return 'conditional';
       }
 
+      // Schema-implied required: field declared in schema without `required: false`
+      // or a default value. The schema declaration is authoritative evidence that
+      // the field is expected, so skip the destructuring and function-scope downgrades
+      // (which exist due to analysis uncertainty, not developer intent).
+      const schemaImpliedRequired = inSchema && schemaRequired === undefined && !schemaHasDefault;
+
       // If all non-write accesses come exclusively from destructuring patterns
       // (no member_expression accesses exist), we lack downstream usage context.
       // Destructuring never throws on undefined — we can't prove the field is
       // required without seeing how the local variable is used. Downgrade to
       // 'conditional' to avoid false missing-required violations.
-      const allDestructured = nonWriteAccesses.every((a) => a.isDestructured === true);
-      if (allDestructured) {
-        return 'conditional';
+      if (!schemaImpliedRequired) {
+        const allDestructured = nonWriteAccesses.every((a) => a.isDestructured === true);
+        if (allDestructured) {
+          return 'conditional';
+        }
       }
 
       // If all unconditional accesses are inside named functions (not at module scope),
       // the field is only required when those functions are called. Without inter-procedural
       // analysis we can't prove those functions are always invoked, so downgrade to conditional.
-      const unconditionalAccesses = nonWriteAccesses.filter(isUnconditionalRead);
-      const allInsideFunctions = unconditionalAccesses.every(
-        (a) => a.enclosingFunction !== undefined,
-      );
-      if (allInsideFunctions) {
-        return 'conditional';
+      if (!schemaImpliedRequired) {
+        const unconditionalAccesses = nonWriteAccesses.filter(isUnconditionalRead);
+        const allInsideFunctions = unconditionalAccesses.every(
+          (a) => a.enclosingFunction !== undefined,
+        );
+        if (allInsideFunctions) {
+          return 'conditional';
+        }
       }
 
       return 'always';
@@ -118,7 +129,7 @@ export function determineRequirementLevel(
     return 'never';
   }
 
-  // Default: never (assume optional)
+  // Default: never (assume optional — either no schema or an unused schema field)
   return 'never';
 }
 
@@ -153,6 +164,7 @@ export function buildFieldConstraints(
       schemaField?.required,
       schemaField?.hasDefault ?? false,
       fieldAccesses,
+      schemaField !== undefined,
     );
 
     // Collect evidence: schema source + access sites
