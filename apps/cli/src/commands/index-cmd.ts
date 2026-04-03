@@ -390,7 +390,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
   await Promise.all(repos.map(async (repo) => {
     const repoResults: import("@mma/core").SarifResult[] = [];
     const counts: Record<string, number> = {};
-    for (const key of ["config", "fault", "deadExports", "arch", "instability", "blastRadius", "hotspot", "temporal-coupling", "vuln"] as const) {
+    for (const key of ["config", "fault", "deadExports", "arch", "instability", "blastRadius", "hotspot", "temporal-coupling", "vuln", "hardcoded-creds"] as const) {
       const json = await kvStore.get(`sarif:${key}:${repo.name}`);
       if (json) {
         try {

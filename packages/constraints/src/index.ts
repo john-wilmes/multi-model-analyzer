@@ -38,3 +38,5 @@ export type { CrossEntityDependency, CrossEntityDependencyResult } from "./types
 export { detectCrossEntityDependencies } from "./cross-entity-detector.js";
 // integrator-path-utils.ts — shared helper for extracting integrator type from file path
 export { extractIntegratorTypeFromPath } from "./integrator-path-utils.js";
+// hardcoded-credential-detector.ts — SARIF rule for credential fields with real default values
+export { detectHardcodedCredentialDefaults, HARDCODED_CREDENTIAL_RULES } from "./hardcoded-credential-detector.js";

@@ -17,6 +17,7 @@ Reference for all diagnostics produced by Multi-Model Analyzer. Each finding app
 | `config/missing-dependency` | warning | Configuration | Setting depends on another setting that is absent |
 | `config/conflicting-settings` | error | Configuration | Two settings have contradictory values |
 | `config/high-interaction-strength` | note | Configuration | Parameter pair has high interaction strength |
+| `config/hardcoded-credential-default` | warning | Configuration | Credential field has a hardcoded default that appears to be a real secret |
 | `isc/missing-required` | error | ISC Constraints | Required credential field absent from runtime config |
 | `isc/missing-conditional` | warning | ISC Constraints | Conditionally required field absent (guard condition met) |
 | `isc/unexpected-type` | warning | ISC Constraints | Credential field has wrong runtime type |
@@ -195,6 +196,20 @@ These rules validate feature flag models built from code scanning. Constraint ch
 **Action:** Add pairwise or higher-order combinatorial tests (e.g., using t-way testing tools) that cover the parameter's interactions. Consider whether the parameter can be decomposed into simpler, more independent units.
 
 **When to ignore:** Parameters that are central to the system architecture will naturally have many interactions. This finding is informational — it highlights which parameters need the most thorough test coverage.
+
+### `config/hardcoded-credential-default`
+
+**Severity:** warning
+
+**What it means:** A credential-like field in the ISC configuration schema has a non-placeholder string default value. Any account that does not explicitly override this field will silently use the hardcoded value, which may be a real secret committed to source code.
+
+**Trigger:** A `FieldConstraint` with a credential-like field name (`password`, `apiKey`, `api_key`, `clientSecret`, `client_secret`, `secret`, `token`, `accessToken`, `access_token`, `refreshToken`, `refresh_token`, `privateKey`, `private_key`, or `username`) has a `defaultValue` that is a non-empty string of length ≥ 3 (≥ 4 for `username`) and is not a known placeholder (`changeme`, `TODO`, `REPLACE_ME`, `your-api-key`, `xxx`, `test`, `default`, etc.). Boolean, numeric, array, and object defaults are not flagged.
+
+**Example:** A configuration schema with `password: { default: 'realPassword123' }` produces this finding for each integrator type that defines that schema.
+
+**Action:** Remove the hardcoded default from the configuration schema, or replace it with a well-known placeholder string (e.g., `"REPLACE_ME"`). Ensure accounts that previously relied on the default are updated with explicit values.
+
+**When to ignore:** If the value is intentionally a non-secret string that happens to match a credential field name (e.g., a `token` field that holds a fixed protocol token rather than an auth secret), add the value to the placeholder list or rename the field to something non-credential-like.
 
 ---
 

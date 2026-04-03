@@ -15,6 +15,7 @@ import {
   extractAccountSettingsAccesses,
   buildAccountSettingsConstraintSet,
   detectCrossEntityDependencies,
+  detectHardcodedCredentialDefaults,
   makeCredentialFieldExtractor,
   makeSettingsFieldExtractor,
   makeAccountSettingsFieldExtractor,
@@ -118,6 +119,11 @@ export async function runPhaseModels(
 
         if (constraintSets.length > 0) {
           await kvStore.set(`constraints:${repo.name}`, JSON.stringify(constraintSets));
+          const hardcodedCredResults = detectHardcodedCredentialDefaults(constraintSets);
+          if (hardcodedCredResults.length > 0) {
+            await kvStore.set(`sarif:hardcoded-creds:${repo.name}`, JSON.stringify(hardcodedCredResults));
+            log(`  [${repo.name}] [constraints] ${hardcodedCredResults.length} hardcoded credential defaults`);
+          }
         }
         log(`  [${repo.name}] [constraints] ${constraintSets.length} sets (${schemaResult.schemas.length} schemas, ${accessResult.stats.totalAccesses} accesses)`);
       } else if (accessResult.accesses.length > 0) {
