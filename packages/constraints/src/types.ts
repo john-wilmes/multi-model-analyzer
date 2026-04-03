@@ -70,6 +70,8 @@ export interface CredentialAccess {
   readonly accessKind: AccessKind;
   /** Whether this access has a default fallback (|| config.default or _.get with default) */
   readonly hasDefault: boolean;
+  /** Whether this access came from a destructuring pattern (not a member_expression) */
+  readonly isDestructured?: boolean;
   /** Guard conditions enclosing this access */
   readonly guardConditions: readonly GuardCondition[];
   /** Raw text of guard conditions that could not be parsed into structured GuardCondition objects */

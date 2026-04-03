@@ -30,7 +30,7 @@ function makeSchema(
 function makeAccess(
   integratorType: string,
   field: string,
-  opts: Partial<Pick<CredentialAccess, "accessKind" | "hasDefault" | "guardConditions">> = {},
+  opts: Partial<Pick<CredentialAccess, "accessKind" | "hasDefault" | "guardConditions" | "isDestructured">> = {},
 ): CredentialAccess {
   return {
     field,
@@ -39,6 +39,7 @@ function makeAccess(
     accessKind: opts.accessKind ?? "read",
     hasDefault: opts.hasDefault ?? false,
     guardConditions: opts.guardConditions ?? [],
+    ...(opts.isDestructured !== undefined ? { isDestructured: opts.isDestructured } : {}),
   };
 }
 
@@ -284,6 +285,103 @@ describe("buildConstraintSets", () => {
     const cs = getCS(result, 0);
     const field = cs.fields.find((f) => f.field === "optionalFlag");
     expect(field?.required).toBe("always");
+  });
+
+  it("destructuring-only field without self-truthy guard → conditional (not always)", () => {
+    const accesses = [
+      makeAccess("typeM", "useToggle", { isDestructured: true }),
+      makeAccess("typeM", "useToggle", { isDestructured: true }),
+    ];
+    const result = buildConstraintSets([], accesses);
+    const cs = getCS(result, 0);
+    const field = cs.fields.find((f) => f.field === "useToggle");
+    expect(field?.required).toBe("conditional");
+  });
+
+  it("mixed destructuring + member_expression access → always (not downgraded)", () => {
+    const accesses = [
+      makeAccess("typeN", "url", { isDestructured: true }),
+      makeAccess("typeN", "url"), // member_expression (isDestructured not set)
+    ];
+    const result = buildConstraintSets([], accesses);
+    const cs = getCS(result, 0);
+    const field = cs.fields.find((f) => f.field === "url");
+    expect(field?.required).toBe("always");
+  });
+
+  it("nested field with 'always' parent → child stays always", () => {
+    // If epicVendorMap is always required, epicVendorMap.createReferral can be always too
+    const accesses = [
+      makeAccess("typeO", "epicVendorMap"),
+      makeAccess("typeO", "epicVendorMap.createReferral"),
+    ];
+    const result = buildConstraintSets([], accesses);
+    const cs = getCS(result, 0);
+    const byName = Object.fromEntries(cs.fields.map((f) => [f.field, f]));
+    expect(byName["epicVendorMap"]?.required).toBe("always");
+    expect(byName["epicVendorMap.createReferral"]?.required).toBe("always");
+  });
+
+  it("nested field with 'never' parent → child downgraded from always to conditional", () => {
+    // Parent epicVendorMap is guarded (never), so child cannot be always required
+    const parentGuard = { field: "epicVendorMap", operator: "truthy" as const, negated: false };
+    const accesses = [
+      makeAccess("typeP", "epicVendorMap", { guardConditions: [parentGuard] }),
+      // child accessed unconditionally — would be 'always' without parent check
+      makeAccess("typeP", "epicVendorMap.createReferral"),
+      makeAccess("typeP", "epicVendorMap.createPatientDocument"),
+    ];
+    const result = buildConstraintSets([], accesses);
+    const cs = getCS(result, 0);
+    const byName = Object.fromEntries(cs.fields.map((f) => [f.field, f]));
+    // Parent is conditional (self-truthy guard)
+    expect(byName["epicVendorMap"]?.required).toBe("conditional");
+    // Children must be downgraded
+    expect(byName["epicVendorMap.createReferral"]?.required).toBe("conditional");
+    expect(byName["epicVendorMap.createPatientDocument"]?.required).toBe("conditional");
+    // Conditions should reference parent field
+    const cond = byName["epicVendorMap.createReferral"]?.conditions?.[0];
+    expect(cond?.requiredWhen[0]?.field).toBe("epicVendorMap");
+    expect(cond?.requiredWhen[0]?.operator).toBe("truthy");
+  });
+
+  it("nested field with schema 'never' parent → child downgraded from always to conditional", () => {
+    // Schema marks parent as required:false → never; child accessed unconditionally
+    const schemas = [
+      makeSchema("typeQ", [
+        { name: "useFhirVersion", required: false },
+        { name: "useFhirVersion.getPatient" }, // no schema info for child
+      ]),
+    ];
+    const accesses = [
+      makeAccess("typeQ", "useFhirVersion.getPatient"),
+    ];
+    const result = buildConstraintSets(schemas, accesses);
+    const cs = getCS(result, 0);
+    const byName = Object.fromEntries(cs.fields.map((f) => [f.field, f]));
+    expect(byName["useFhirVersion"]?.required).toBe("never");
+    // Child unconditionally accessed but parent is never → must be conditional
+    expect(byName["useFhirVersion.getPatient"]?.required).toBe("conditional");
+    const cond = byName["useFhirVersion.getPatient"]?.conditions?.[0];
+    expect(cond?.requiredWhen[0]?.field).toBe("useFhirVersion");
+  });
+
+  it("deeply nested field: grandparent never → child downgraded", () => {
+    // a.b.c where a is never — c would be always but should be downgraded
+    const parentGuard = { field: "a", operator: "truthy" as const, negated: false };
+    const accesses = [
+      makeAccess("typeR", "a", { guardConditions: [parentGuard] }), // a is conditional
+      makeAccess("typeR", "a.b"),           // b would be always
+      makeAccess("typeR", "a.b.c"),         // c would be always
+    ];
+    const result = buildConstraintSets([], accesses);
+    const cs = getCS(result, 0);
+    const byName = Object.fromEntries(cs.fields.map((f) => [f.field, f]));
+    expect(byName["a"]?.required).toBe("conditional");
+    // a.b parent is a (conditional) → downgraded
+    expect(byName["a.b"]?.required).toBe("conditional");
+    // a.b.c parent is a.b (now conditional) → also downgraded
+    expect(byName["a.b.c"]?.required).toBe("conditional");
   });
 
   it("accesses with no extractable integrator type are dropped", () => {

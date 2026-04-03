@@ -16,16 +16,50 @@ export function isOnAssignmentLeft(node: TreeSitterNode): boolean {
   return false;
 }
 
-/** Detect if a node has a default fallback (|| or ??) parent on its left side */
+/**
+ * Detect if a node has a default fallback (|| or ??) in its ancestor chain.
+ *
+ * Returns true when:
+ * 1. The node (or an ancestor binary_expression containing it) is on the LEFT
+ *    side of ?? or || — meaning there is a fallback value on the right.
+ *    Example: `credentials.field ?? defaultValue` → field has a default.
+ *    Also handles chains: `A ?? credentials.field ?? C` → the middle node's
+ *    parent `A ?? credentials.field` is the left child of the outer ??, so
+ *    credentials.field ultimately has a fallback (C).
+ * 2. The node is on the RIGHT side of ?? or || — meaning the node itself is
+ *    a fallback for some other expression, so this access is conditional on
+ *    the primary value being nullish/falsy.
+ *    Example: `primaryValue ?? credentials.field` → field only accessed when
+ *    primaryValue is nullish.
+ */
 export function hasDefaultFallback(node: TreeSitterNode): boolean {
-  const parent = node.parent;
-  if (!parent) return false;
-  if (parent.type === "binary_expression") {
-    const op = parent.children[1];
-    if (op && (op.text === "||" || op.text === "??")) {
-      const left = parent.children[0];
-      if (left !== null && left !== undefined && left.id === node.id) return true;
+  let current: TreeSitterNode | null = node;
+  while (current) {
+    const parent: TreeSitterNode | null = current.parent;
+    if (!parent) return false;
+    if (parent.type === "binary_expression") {
+      const op = parent.children[1];
+      if (op && (op.text === "||" || op.text === "??")) {
+        const left = parent.children[0];
+        const right = parent.children[2];
+        // Case 1: node is on the left side → it has a fallback on the right
+        if (left !== null && left !== undefined && left.id === current.id) return true;
+        // Case 2: node is on the right side → it IS a fallback (conditional access)
+        if (right !== null && right !== undefined && right.id === current.id) return true;
+      }
     }
+    // Stop walking at statements — don't cross expression boundaries
+    if (
+      parent.type === "variable_declarator" ||
+      parent.type === "expression_statement" ||
+      parent.type === "return_statement" ||
+      parent.type === "assignment_expression" ||
+      parent.type === "argument_list" ||
+      parent.type === "arguments"
+    ) {
+      return false;
+    }
+    current = parent;
   }
   return false;
 }

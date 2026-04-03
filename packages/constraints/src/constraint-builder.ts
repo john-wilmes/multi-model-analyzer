@@ -83,6 +83,17 @@ export function determineRequirementLevel(
       if (hasSelfTruthyGuard) {
         return 'conditional';
       }
+
+      // If all non-write accesses come exclusively from destructuring patterns
+      // (no member_expression accesses exist), we lack downstream usage context.
+      // Destructuring never throws on undefined — we can't prove the field is
+      // required without seeing how the local variable is used. Downgrade to
+      // 'conditional' to avoid false missing-required violations.
+      const allDestructured = nonWriteAccesses.every((a) => a.isDestructured === true);
+      if (allDestructured) {
+        return 'conditional';
+      }
+
       return 'always';
     }
 
@@ -202,6 +213,53 @@ export function buildFieldConstraints(
     };
 
     constraints.push(constraint);
+  }
+
+  // Post-process: downgrade nested `always` fields whose parent is not `always`.
+  // If a parent field is `conditional` or `never`, any child field cannot be
+  // unconditionally required — it should be conditional on the parent being present.
+  //
+  // Sort by field depth (ascending) so that shallow parents are processed before
+  // their children. This ensures that when `a.b` is downgraded to conditional,
+  // its child `a.b.c` will see the updated parent status.
+  const sortedIndices = constraints
+    .map((_, i) => i)
+    .sort((a, b) => {
+      const depthA = (constraints[a]!.field.match(/\./g) ?? []).length;
+      const depthB = (constraints[b]!.field.match(/\./g) ?? []).length;
+      return depthA - depthB;
+    });
+
+  // Live lookup map — updated as we downgrade fields, so children see updated parents.
+  const requirementByField = new Map(constraints.map((c) => [c.field, c.required]));
+
+  for (const idx of sortedIndices) {
+    const constraint = constraints[idx]!;
+    if (constraint.required !== 'always') continue;
+    const dotIndex = constraint.field.lastIndexOf('.');
+    if (dotIndex === -1) continue; // not a nested field
+    const parentField = constraint.field.slice(0, dotIndex);
+    const parentRequired = requirementByField.get(parentField);
+    if (parentRequired === undefined) continue; // parent unknown, leave as-is
+    if (parentRequired === 'always') continue; // parent is always present, child can be always
+    // Parent is `conditional` or `never` — child cannot be `always`
+    const parentRequiredWhen: GuardCondition = {
+      field: parentField,
+      operator: 'truthy',
+      negated: false,
+    };
+    const downgraded = {
+      ...constraint,
+      required: 'conditional' as const,
+      conditions: [
+        {
+          requiredWhen: [parentRequiredWhen],
+          evidence: constraint.evidence,
+        },
+      ],
+    };
+    constraints[idx] = downgraded;
+    requirementByField.set(constraint.field, 'conditional');
   }
 
   return constraints;

@@ -181,6 +181,47 @@ describe("extractCredentialAccesses", () => {
     expect(a!.hasDefault).toBe(true);
   });
 
+  it("marks default-fallback when credential is in middle of ?? chain", async () => {
+    const result = await extractCredentialAccesses([
+      {
+        path: "clients/chain/service.ts",
+        content: `
+          function getRelationship() {
+            const mapping = this.options.integrator.credentials.insurance?.relationshipMapping;
+            const code = mapping[relationshipId]
+              ?? credentials?.insurance?.relationshipDefault
+              ?? clientConfiguration.insurance.default.relationshipDefault;
+            return code;
+          }
+        `,
+      },
+    ]);
+    expect(result.errors).toHaveLength(0);
+    const a = access(result.accesses, "insurance.relationshipDefault");
+    expect(a).toBeDefined();
+    expect(a!.accessKind).toBe("default-fallback");
+    expect(a!.hasDefault).toBe(true);
+  });
+
+  it("marks default-fallback when credential is right side of ?? (is a fallback)", async () => {
+    const result = await extractCredentialAccesses([
+      {
+        path: "clients/rightfallback/service.ts",
+        content: `
+          function getValue() {
+            const val = primarySource.field ?? self.options.integrator.credentials.fallbackField;
+            return val;
+          }
+        `,
+      },
+    ]);
+    expect(result.errors).toHaveLength(0);
+    const a = access(result.accesses, "fallbackField");
+    expect(a).toBeDefined();
+    expect(a!.accessKind).toBe("default-fallback");
+    expect(a!.hasDefault).toBe(true);
+  });
+
   it("populates guardConditions when credential field is in enclosing if condition", async () => {
     const result = await extractCredentialAccesses([
       {
@@ -381,6 +422,64 @@ describe("extractCredentialAccesses", () => {
     expect(fields).toContain("staticField");
     expect(fields).toContain("normalField");
     expect(fields).not.toContain("${dynamicField}");
+  });
+
+  it("sets isDestructured flag for destructuring pattern", async () => {
+    const result = await extractCredentialAccesses([
+      {
+        path: "clients/destflag/service.ts",
+        content: `
+          function doStuff() {
+            const { useLastMatchingPatientId } = self.options.integrator.credentials;
+            return !useLastMatchingPatientId;
+          }
+        `,
+      },
+    ]);
+    expect(result.errors).toHaveLength(0);
+    const a = access(result.accesses, "useLastMatchingPatientId");
+    expect(a).toBeDefined();
+    expect(a!.isDestructured).toBe(true);
+  });
+
+  it("detects destructuring with default initializer as default-fallback", async () => {
+    const result = await extractCredentialAccesses([
+      {
+        path: "clients/destructdefault/service.ts",
+        content: `
+          function doStuff() {
+            const { syncRange = 30 } = self.options.integrator.credentials;
+            return syncRange;
+          }
+        `,
+      },
+    ]);
+    expect(result.errors).toHaveLength(0);
+    const a = access(result.accesses, "syncRange");
+    expect(a).toBeDefined();
+    expect(a!.accessKind).toBe("default-fallback");
+    expect(a!.hasDefault).toBe(true);
+    expect(a!.isDestructured).toBe(true);
+  });
+
+  it("detects aliased destructuring with default as default-fallback", async () => {
+    const result = await extractCredentialAccesses([
+      {
+        path: "clients/aliasdefault/service.ts",
+        content: `
+          function doStuff() {
+            const { syncRange: range = 30 } = self.options.integrator.credentials;
+            return range;
+          }
+        `,
+      },
+    ]);
+    expect(result.errors).toHaveLength(0);
+    const a = access(result.accesses, "syncRange");
+    expect(a).toBeDefined();
+    expect(a!.accessKind).toBe("default-fallback");
+    expect(a!.hasDefault).toBe(true);
+    expect(a!.isDestructured).toBe(true);
   });
 
   it("strips method call suffix from credential field access", async () => {

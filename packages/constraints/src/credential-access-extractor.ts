@@ -229,6 +229,8 @@ function walkNode(
       if (isCredentialsSource) {
         for (const prop of nameNode.namedChildren) {
           let fieldName: string | null = null;
+          let hasDestructuringDefault = false;
+
           if (prop.type === "shorthand_property_identifier_pattern") {
             fieldName = prop.text;
           } else if (prop.type === "pair_pattern") {
@@ -236,8 +238,25 @@ function walkNode(
             if (keyNode) {
               fieldName = keyNode.text.replace(/^["']|["']$/g, "");
             }
+            // Aliased destructuring with default: `{ foo: bar = 1 } = obj`
+            // The pair_pattern contains an assignment_pattern as value child
+            if (prop.namedChildren.some((c: TreeSitterNode) => c.type === "assignment_pattern")) {
+              hasDestructuringDefault = true;
+            }
           } else if (prop.type === "identifier") {
             fieldName = prop.text;
+          } else if (prop.type === "object_assignment_pattern") {
+            // Destructuring with default: `{ field = defaultValue } = obj`
+            const left = prop.children[0];
+            if (left) {
+              if (
+                left.type === "shorthand_property_identifier_pattern" ||
+                left.type === "identifier"
+              ) {
+                fieldName = left.text;
+              }
+              hasDestructuringDefault = true;
+            }
           }
 
           if (fieldName && fieldName.length > 0) {
@@ -247,8 +266,9 @@ function walkNode(
               field: fieldName,
               file: filePath,
               line,
-              accessKind: "read",
-              hasDefault: false,
+              accessKind: hasDestructuringDefault ? "default-fallback" : "read",
+              hasDefault: hasDestructuringDefault,
+              isDestructured: true,
               guardConditions,
               ...(rawUnmatched.length > 0 ? { rawGuardTexts: rawUnmatched } : {}),
             });
