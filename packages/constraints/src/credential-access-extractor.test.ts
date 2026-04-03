@@ -538,6 +538,52 @@ describe("extractCredentialAccesses", () => {
     expect(a!.enclosingFunction).toBe("MyClient.prototype.authenticate");
   });
 
+  it("resolves two-hop credential alias (integrator → creds)", async () => {
+    const result = await extractCredentialAccesses([
+      {
+        path: "clients/adspm/service.js",
+        content: `
+          function login() {
+            var self = this;
+            var integrator = self.options.integrator;
+            var creds = integrator.credentials;
+            var url = creds.dbURL;
+            var user = creds.username;
+            var pass = creds.password;
+          }
+        `,
+      },
+    ]);
+    expect(result.errors).toHaveLength(0);
+    const dbURL = access(result.accesses, "dbURL");
+    const username = access(result.accesses, "username");
+    const password = access(result.accesses, "password");
+    expect(dbURL).toBeDefined();
+    expect(username).toBeDefined();
+    expect(password).toBeDefined();
+    expect(dbURL!.accessKind).toBe("read");
+    expect(username!.accessKind).toBe("read");
+    expect(password!.accessKind).toBe("read");
+  });
+
+  it("resolves two-hop alias with destructuring", async () => {
+    const result = await extractCredentialAccesses([
+      {
+        path: "clients/twohop/service.js",
+        content: `
+          function login() {
+            var integrator = self.options.integrator;
+            var creds = integrator.credentials;
+            var { dbURL, username, password } = creds;
+          }
+        `,
+      },
+    ]);
+    expect(result.errors).toHaveLength(0);
+    expect(result.accesses).toHaveLength(3);
+    expect(result.accesses.map((a) => a.field).sort()).toEqual(["dbURL", "password", "username"]);
+  });
+
   it("enclosingFunction is undefined for module-scope access", async () => {
     const result = await extractCredentialAccesses([
       {

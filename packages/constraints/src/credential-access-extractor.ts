@@ -154,17 +154,47 @@ function processFile(filePath: string, root: TreeSitterNode): FileAccess {
   return { accesses, byPattern };
 }
 
-/** Collect credential aliases from variable declarations */
+/** Returns true if the text is an integrator object reference (one hop before .credentials) */
+function isIntegratorRoot(text: string): boolean {
+  const normalized = text.replace(/\?\./g, '.');
+  return (
+    normalized === "self.options.integrator" ||
+    normalized === "this.options.integrator"
+  );
+}
+
+/** Collect credential aliases from variable declarations.
+ *  Supports two-hop chains like:
+ *    var integrator = self.options.integrator;
+ *    var creds = integrator.credentials;
+ *  The first assignment creates an "integrator alias", and the second resolves
+ *  `integrator.credentials` as a credentials chain root. */
 function collectAliases(
   node: TreeSitterNode,
   aliases: Set<string>,
   aliasPatterns: Map<string, string>,
+): void {
+  // Intermediate aliases for the integrator object (one hop before .credentials)
+  // Maps alias name → originating pattern (self vs this)
+  const integratorAliases = new Map<string, string>();
+
+  collectAliasesPass(node, aliases, aliasPatterns, integratorAliases);
+}
+
+function collectAliasesPass(
+  node: TreeSitterNode,
+  aliases: Set<string>,
+  aliasPatterns: Map<string, string>,
+  integratorAliases: Map<string, string>,
 ): void {
   if (node.type === "variable_declarator") {
     const nameNode = node.childForFieldName("name");
     const valueNode = node.childForFieldName("value");
     if (nameNode && valueNode) {
       const valueText = valueNode.text.trim();
+      const normalizedValue = valueText.replace(/\?\./g, '.');
+
+      // Direct credentials alias: var creds = self.options.integrator.credentials
       if (isCredentialsChainRoot(valueText)) {
         const alias = nameNode.text.trim();
         if (alias && /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(alias)) {
@@ -177,11 +207,36 @@ function collectAliases(
           aliasPatterns.set(alias, pattern);
         }
       }
+      // Integrator alias: var integrator = self.options.integrator
+      else if (isIntegratorRoot(valueText)) {
+        const alias = nameNode.text.trim();
+        if (alias && /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(alias)) {
+          const pattern = normalizedValue.startsWith("self.")
+            ? "self.options.integrator.credentials"
+            : "this.options.integrator.credentials";
+          integratorAliases.set(alias, pattern);
+        }
+      }
+      // Two-hop resolution: var creds = integrator.credentials (where integrator is an alias)
+      else {
+        for (const [intAlias, pattern] of integratorAliases) {
+          if (
+            normalizedValue === `${intAlias}.credentials`
+          ) {
+            const alias = nameNode.text.trim();
+            if (alias && /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(alias)) {
+              aliases.add(alias);
+              aliasPatterns.set(alias, pattern);
+            }
+            break;
+          }
+        }
+      }
     }
   }
 
   for (const child of node.children) {
-    collectAliases(child, aliases, aliasPatterns);
+    collectAliasesPass(child, aliases, aliasPatterns, integratorAliases);
   }
 }
 
