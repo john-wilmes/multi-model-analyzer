@@ -92,7 +92,8 @@ export async function runPhaseModels(
     for (const [filePath, tree] of trees) {
       const content = tree.rootNode.text;
       allFiles.push({ path: filePath, content });
-      if (filePath.includes('/context/configuration.')) {
+      if (filePath.includes('/context/configuration.') ||
+          (/clients\/[^/]+\.[jt]sx?$/.test(filePath) && content.includes('.configuration'))) {
         configFiles.push({ path: filePath, content });
       }
       if (/models\/setting\.[jt]sx?$/.test(filePath)) {

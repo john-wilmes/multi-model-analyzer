@@ -159,6 +159,11 @@ function integratorTypeFromPath(filePath: string): string {
   if (clientMatch) {
     return clientMatch[1]!;
   }
+  // clients/{type}.js (flat CJS pattern — simple integrators)
+  const flatMatch = filePath.match(/clients\/([^/]+)\.[jt]sx?$/);
+  if (flatMatch) {
+    return flatMatch[1]!;
+  }
   // Fallback: parent directory name relative to context/
   const parts = filePath.split("/");
   const idx = parts.indexOf("context");
@@ -256,23 +261,38 @@ const CONFIG_VAR_NAMES = new Set(["configuration", "clientConfiguration"]);
 
 function findConfigObject(root: TreeSitterNode): TreeSitterNode | null {
   for (const stmt of root.namedChildren) {
-    if (stmt.type !== "export_statement") continue;
-    const decl = stmt.namedChildren.find(
-      (c) => c.type === "lexical_declaration" || c.type === "variable_declaration",
-    );
-    if (!decl) continue;
-    for (const declarator of decl.namedChildren) {
-      if (declarator.type !== "variable_declarator") continue;
-      const nameNode = declarator.childForFieldName("name");
-      const valueNode = declarator.childForFieldName("value");
-      if (nameNode && CONFIG_VAR_NAMES.has(nameNode.text) && valueNode) {
-        // Direct object literal
-        if (valueNode.type === "object") return valueNode;
-        // `{ ... } satisfies Type` — unwrap satisfies_expression
-        if (valueNode.type === "satisfies_expression") {
-          const inner = valueNode.namedChildren.find((c) => c.type === "object");
-          if (inner) return inner;
+    // Pattern A: ESM — `export const configuration = { ... }`
+    if (stmt.type === "export_statement") {
+      const decl = stmt.namedChildren.find(
+        (c) => c.type === "lexical_declaration" || c.type === "variable_declaration",
+      );
+      if (!decl) continue;
+      for (const declarator of decl.namedChildren) {
+        if (declarator.type !== "variable_declarator") continue;
+        const nameNode = declarator.childForFieldName("name");
+        const valueNode = declarator.childForFieldName("value");
+        if (nameNode && CONFIG_VAR_NAMES.has(nameNode.text) && valueNode) {
+          // Direct object literal
+          if (valueNode.type === "object") return valueNode;
+          // `{ ... } satisfies Type` — unwrap satisfies_expression
+          if (valueNode.type === "satisfies_expression") {
+            const inner = valueNode.namedChildren.find((c) => c.type === "object");
+            if (inner) return inner;
+          }
         }
+      }
+    }
+
+    // Pattern B: CJS — `Foo.configuration = { ... }` (static property assignment)
+    if (stmt.type === "expression_statement") {
+      const expr = stmt.namedChildren[0];
+      if (expr?.type !== "assignment_expression") continue;
+      const left = expr.childForFieldName("left");
+      const right = expr.childForFieldName("right");
+      if (left?.type !== "member_expression" || !right) continue;
+      const prop = left.childForFieldName("property");
+      if (prop && CONFIG_VAR_NAMES.has(prop.text) && right.type === "object") {
+        return right;
       }
     }
   }

@@ -256,4 +256,53 @@ describe("extractConfigSchemas", () => {
     expect(field(schema.fields, "username")!.inferredType).toBe("string");
     expect(field(schema.fields, "syncRange")!.defaultValue).toBe(4);
   });
+
+  it("extracts CJS static property assignment (Foo.configuration = {...})", async () => {
+    const result = await extractConfigSchemas([
+      {
+        path: "clients/oncoemrfilepickup.js",
+        content: `function OncoEMRFilePickup() {}
+        OncoEMRFilePickup.configuration = {
+          host: String,
+          username: String,
+          password: String,
+          port: String,
+          path: String,
+          respectPatientConsentPreferences: {
+            type: Boolean,
+            default: false,
+            required: false,
+            description: 'If enabled, uses Consent columns'
+          }
+        };`,
+      },
+    ]);
+    expect(result.schemas).toHaveLength(1);
+    const schema = result.schemas[0]!;
+    expect(schema.integratorType).toBe("oncoemrfilepickup");
+    expect(schema.fields).toHaveLength(6);
+
+    const host = field(schema.fields, "host")!;
+    expect(host.inferredType).toBe("string");
+    expect(host.hasDefault).toBe(false);
+    expect(host.required).toBeUndefined();
+
+    const consent = field(schema.fields, "respectPatientConsentPreferences")!;
+    expect(consent.inferredType).toBe("boolean");
+    expect(consent.hasDefault).toBe(true);
+    expect(consent.defaultValue).toBe(false);
+    expect(consent.required).toBe(false);
+  });
+
+  it("extracts integrator type from flat CJS file path", async () => {
+    const result = await extractConfigSchemas([
+      {
+        path: "clients/carecloud.js",
+        content: `function CareCloud() {}
+        CareCloud.configuration = { apiKey: String };`,
+      },
+    ]);
+    expect(result.schemas).toHaveLength(1);
+    expect(result.schemas[0]!.integratorType).toBe("carecloud");
+  });
 });
