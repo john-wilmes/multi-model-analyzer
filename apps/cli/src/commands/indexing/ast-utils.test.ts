@@ -117,6 +117,34 @@ describe("detectMissingErrorBoundaries", () => {
     expect(results).toHaveLength(0);
   });
 
+  it("does not flag anonymous functions (callbacks propagate to caller)", () => {
+    const cfgs = new Map([
+      ["test.ts#anon_42", makeCfg("test.ts#anon_42", [
+        node("entry", "entry", "e"),
+        stmt("const result = await fetch(url)"),
+        node("exit", "exit", "x"),
+      ])],
+    ]);
+
+    const results = detectMissingErrorBoundaries(cfgs, "test-repo");
+    expect(results).toHaveLength(0);
+  });
+
+  it("flags named async function with await and no error handling at note level", () => {
+    const cfgs = new Map([
+      ["test.ts#processData", makeCfg("test.ts#processData", [
+        node("entry", "entry", "e"),
+        stmt("const result = await db.query(sql)"),
+        node("exit", "exit", "x"),
+      ])],
+    ]);
+
+    const results = detectMissingErrorBoundaries(cfgs, "test-repo");
+    expect(results).toHaveLength(1);
+    expect(results[0]!.ruleId).toBe("fault/missing-error-boundary");
+    expect(results[0]!.message.text).toContain("processData");
+  });
+
   it("does not flag functions without await", () => {
     const cfgs = new Map([
       ["test.ts#syncWork", makeCfg("test.ts#syncWork", [

@@ -43,7 +43,7 @@ export const FAULT_RULES: readonly SarifReportingDescriptor[] = [
     shortDescription: {
       text: "Async operation with no error handler",
     },
-    defaultConfiguration: { level: "warning", enabled: true },
+    defaultConfiguration: { level: "note", enabled: true },
   },
   {
     id: "fault/cascading-failure-risk",
@@ -276,6 +276,13 @@ export function analyzeGaps(
         (n) => errorForwardPattern.test(n.label),
       );
 
+      // Sentinel returns (return false, return { error }, return fallbackValue)
+      // are a valid error-handling strategy — control flow exits the handler
+      // with a meaningful value rather than propagating the exception.
+      const hasReturnValue = reachable.some(
+        (n) => /\breturn\b/.test(n.label),
+      );
+
       // Empty catch block = silent failure (swallowed error)
       if (reachable.length === 0) {
         results.push(
@@ -295,7 +302,7 @@ export function analyzeGaps(
         continue;
       }
 
-      if (!hasLogging && !hasRethrow && !hasErrorForwarding) {
+      if (!hasLogging && !hasRethrow && !hasErrorForwarding && !hasReturnValue) {
         results.push(
           createSarifResult(
             "fault/unhandled-error-path",

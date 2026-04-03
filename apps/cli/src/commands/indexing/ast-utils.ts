@@ -76,6 +76,10 @@ export function detectMissingErrorBoundaries(
   const errorCallbackPattern = /\b(catchError|onrejected|handleError|onError)\s*\(/;
 
   for (const [functionId, cfg] of cfgs) {
+    // Anonymous functions (callbacks, lambdas) propagate errors to their callers;
+    // the caller owns the error boundary, so skip them to avoid false positives.
+    if (functionId.includes("#anon_")) continue;
+
     const hasAwait = cfg.nodes.some(n => n.kind === "statement" && /\bawait\b/.test(n.label));
     if (!hasAwait) continue;
 
@@ -91,7 +95,7 @@ export function detectMissingErrorBoundaries(
     results.push(
       createSarifResult(
         "fault/missing-error-boundary",
-        "warning",
+        "note",
         `Async function ${functionId} uses await but has no try/catch error boundary`,
         {
           locations: [{
