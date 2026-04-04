@@ -23,7 +23,7 @@ import {
 } from "@mma/constraints";
 import type { ConfigSchema, CredentialAccess } from "@mma/constraints";
 import { buildFeatureModel, extractConstraintsFromCode, validateFeatureModel } from "@mma/model-config";
-import { identifyLogRoots, traceBackwardFromLog, buildFaultTree, faultTreeToCodeFlow, analyzeGaps, analyzeCascadingRisk, analyzeLogCoOccurrence } from "@mma/model-fault";
+import { identifyLogRoots, traceBackwardFromLog, buildFaultTree, faultTreeToCodeFlow, analyzeGaps, analyzeCascadingRisk, analyzeTimeoutMissing, analyzeRetryWithoutBackoff, analyzeUncheckedNullReturn, analyzeLogCoOccurrence } from "@mma/model-fault";
 import { buildControlFlowGraph, createCfgIdCounter } from "@mma/structural";
 import { findFunctionNodes, detectMissingErrorBoundaries } from "./ast-utils.js";
 import type { PipelineContext } from "./types.js";
@@ -341,6 +341,15 @@ export async function runPhaseModels(
 
       // Missing error boundaries (async functions without try/catch)
       faultResults.push(...detectMissingErrorBoundaries(cfgs, repo.name));
+
+      // Outbound HTTP calls without timeout
+      faultResults.push(...analyzeTimeoutMissing(cfgs, repo.name));
+
+      // Retry loops with fixed delay (no backoff)
+      faultResults.push(...analyzeRetryWithoutBackoff(cfgs, repo.name));
+
+      // Database queries without null guard
+      faultResults.push(...analyzeUncheckedNullReturn(cfgs, repo.name));
 
       // Log co-occurrence analysis
       const coOccurrence = analyzeLogCoOccurrence(logIndex, callGraph, allTraces);

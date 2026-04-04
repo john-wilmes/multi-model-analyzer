@@ -1,6 +1,13 @@
 import { describe, it, expect } from "vitest";
 import type { ControlFlowGraph, LogicalLocation } from "@mma/core";
-import { buildFaultTree, analyzeGaps, analyzeCascadingRisk } from "./fault-tree.js";
+import {
+  buildFaultTree,
+  analyzeGaps,
+  analyzeCascadingRisk,
+  analyzeTimeoutMissing,
+  analyzeRetryWithoutBackoff,
+  analyzeUncheckedNullReturn,
+} from "./fault-tree.js";
 import type { BackwardTrace, TraceStep } from "./backward-trace.js";
 import type { LogRoot } from "./log-roots.js";
 
@@ -453,5 +460,254 @@ describe("analyzeCascadingRisk", () => {
 
     const results = analyzeCascadingRisk(traces, "test-repo");
     expect(results).toHaveLength(1);
+  });
+});
+
+describe("analyzeTimeoutMissing", () => {
+  it("flags axios call with no timeout", () => {
+    const cfg: ControlFlowGraph = {
+      functionId: "src/client.ts#fetchData",
+      nodes: [
+        { id: "n1", kind: "statement", label: "const res = await axios.get(url)", location: loc },
+        { id: "n2", kind: "statement", label: "return res.data", location: loc },
+      ],
+      edges: [{ from: "n1", to: "n2" }],
+    };
+
+    const results = analyzeTimeoutMissing(new Map([["src/client.ts#fetchData", cfg]]), "test-repo");
+    expect(results).toHaveLength(1);
+    expect(results[0]!.ruleId).toBe("fault/timeout-missing");
+  });
+
+  it("does not flag axios call when timeout is configured", () => {
+    const cfg: ControlFlowGraph = {
+      functionId: "src/client.ts#fetchData",
+      nodes: [
+        { id: "n1", kind: "statement", label: "const res = await axios.get(url, { timeout: 5000 })", location: loc },
+        { id: "n2", kind: "statement", label: "return res.data", location: loc },
+      ],
+      edges: [{ from: "n1", to: "n2" }],
+    };
+
+    const results = analyzeTimeoutMissing(new Map([["src/client.ts#fetchData", cfg]]), "test-repo");
+    expect(results).toHaveLength(0);
+  });
+
+  it("flags fetch() call with no timeout", () => {
+    const cfg: ControlFlowGraph = {
+      functionId: "src/client.ts#loadResource",
+      nodes: [
+        { id: "n1", kind: "statement", label: "const res = await fetch(endpoint)", location: loc },
+      ],
+      edges: [],
+    };
+
+    const results = analyzeTimeoutMissing(new Map([["src/client.ts#loadResource", cfg]]), "test-repo");
+    expect(results).toHaveLength(1);
+    expect(results[0]!.ruleId).toBe("fault/timeout-missing");
+  });
+
+  it("does not flag functions without any HTTP call", () => {
+    const cfg: ControlFlowGraph = {
+      functionId: "src/utils.ts#formatDate",
+      nodes: [
+        { id: "n1", kind: "statement", label: "return new Date(ts).toISOString()", location: loc },
+      ],
+      edges: [],
+    };
+
+    const results = analyzeTimeoutMissing(new Map([["src/utils.ts#formatDate", cfg]]), "test-repo");
+    expect(results).toHaveLength(0);
+  });
+
+  it("does not flag files in test/ paths", () => {
+    const cfg: ControlFlowGraph = {
+      functionId: "tests/client.test.ts#fetchData",
+      nodes: [
+        { id: "n1", kind: "statement", label: "const res = await axios.get(url)", location: loc },
+      ],
+      edges: [],
+    };
+
+    const results = analyzeTimeoutMissing(new Map([["tests/client.test.ts#fetchData", cfg]]), "test-repo");
+    expect(results).toHaveLength(0);
+  });
+});
+
+describe("analyzeRetryWithoutBackoff", () => {
+  it("flags retry branch with fixed setTimeout and no backoff", () => {
+    const cfg: ControlFlowGraph = {
+      functionId: "src/retry.ts#retryOperation",
+      nodes: [
+        { id: "n1", kind: "branch", label: "if (attempt < maxAttempts)", location: loc },
+        { id: "n2", kind: "statement", label: "await setTimeout(1000)", location: loc },
+        { id: "n3", kind: "statement", label: "attempt++", location: loc },
+      ],
+      edges: [
+        { from: "n1", to: "n2" },
+        { from: "n2", to: "n3" },
+      ],
+    };
+
+    const results = analyzeRetryWithoutBackoff(new Map([["src/retry.ts#retryOperation", cfg]]), "test-repo");
+    expect(results).toHaveLength(1);
+    expect(results[0]!.ruleId).toBe("fault/retry-without-backoff");
+  });
+
+  it("does not flag retry loop with exponential backoff", () => {
+    const cfg: ControlFlowGraph = {
+      functionId: "src/retry.ts#retryOperation",
+      nodes: [
+        { id: "n1", kind: "branch", label: "if (retries < maxRetry)", location: loc },
+        { id: "n2", kind: "statement", label: "const delay = baseDelay * Math.pow(2, retries)", location: loc },
+        { id: "n3", kind: "statement", label: "await setTimeout(delay)", location: loc },
+      ],
+      edges: [
+        { from: "n1", to: "n2" },
+        { from: "n2", to: "n3" },
+      ],
+    };
+
+    const results = analyzeRetryWithoutBackoff(new Map([["src/retry.ts#retryOperation", cfg]]), "test-repo");
+    expect(results).toHaveLength(0);
+  });
+
+  it("does not flag retry loop with backoff multiplier pattern", () => {
+    const cfg: ControlFlowGraph = {
+      functionId: "src/retry.ts#withRetry",
+      nodes: [
+        { id: "n1", kind: "branch", label: "if (attempt < maxAttempts)", location: loc },
+        { id: "n2", kind: "statement", label: "const delay = baseDelay * 2", location: loc },
+        { id: "n3", kind: "statement", label: "setTimeout(fn, delay)", location: loc },
+      ],
+      edges: [
+        { from: "n1", to: "n2" },
+        { from: "n2", to: "n3" },
+      ],
+    };
+
+    const results = analyzeRetryWithoutBackoff(new Map([["src/retry.ts#withRetry", cfg]]), "test-repo");
+    expect(results).toHaveLength(0);
+  });
+
+  it("does not flag functions with no retry branch", () => {
+    const cfg: ControlFlowGraph = {
+      functionId: "src/worker.ts#processJob",
+      nodes: [
+        { id: "n1", kind: "statement", label: "const result = await doWork()", location: loc },
+        { id: "n2", kind: "statement", label: "setTimeout(cleanup, 1000)", location: loc },
+      ],
+      edges: [{ from: "n1", to: "n2" }],
+    };
+
+    const results = analyzeRetryWithoutBackoff(new Map([["src/worker.ts#processJob", cfg]]), "test-repo");
+    expect(results).toHaveLength(0);
+  });
+
+  it("does not flag retry branch that has no setTimeout", () => {
+    const cfg: ControlFlowGraph = {
+      functionId: "src/retry.ts#syncRetry",
+      nodes: [
+        { id: "n1", kind: "branch", label: "if (retries < maxRetry)", location: loc },
+        { id: "n2", kind: "statement", label: "retries++", location: loc },
+      ],
+      edges: [{ from: "n1", to: "n2" }],
+    };
+
+    const results = analyzeRetryWithoutBackoff(new Map([["src/retry.ts#syncRetry", cfg]]), "test-repo");
+    expect(results).toHaveLength(0);
+  });
+});
+
+describe("analyzeUncheckedNullReturn", () => {
+  it("flags findOne() call with no null guard", () => {
+    const cfg: ControlFlowGraph = {
+      functionId: "src/users.ts#getUser",
+      nodes: [
+        { id: "n1", kind: "statement", label: "const user = await User.findOne({ email })", location: loc },
+        { id: "n2", kind: "statement", label: "return user.profile", location: loc },
+      ],
+      edges: [{ from: "n1", to: "n2" }],
+    };
+
+    const results = analyzeUncheckedNullReturn(new Map([["src/users.ts#getUser", cfg]]), "test-repo");
+    expect(results).toHaveLength(1);
+    expect(results[0]!.ruleId).toBe("fault/unchecked-null-return");
+  });
+
+  it("does not flag findOne() when null guard is present", () => {
+    const cfg: ControlFlowGraph = {
+      functionId: "src/users.ts#getUser",
+      nodes: [
+        { id: "n1", kind: "statement", label: "const user = await User.findOne({ email })", location: loc },
+        { id: "n2", kind: "branch", label: "if (!user)", location: loc },
+        { id: "n3", kind: "statement", label: "throw new Error('User not found')", location: loc },
+        { id: "n4", kind: "statement", label: "return user.profile", location: loc },
+      ],
+      edges: [
+        { from: "n1", to: "n2" },
+        { from: "n2", to: "n3" },
+        { from: "n2", to: "n4" },
+      ],
+    };
+
+    const results = analyzeUncheckedNullReturn(new Map([["src/users.ts#getUser", cfg]]), "test-repo");
+    expect(results).toHaveLength(0);
+  });
+
+  it("does not flag findOne() when optional chaining is used", () => {
+    const cfg: ControlFlowGraph = {
+      functionId: "src/users.ts#getUserName",
+      nodes: [
+        { id: "n1", kind: "statement", label: "const user = await User.findOne({ id })", location: loc },
+        { id: "n2", kind: "statement", label: "return user?.name", location: loc },
+      ],
+      edges: [{ from: "n1", to: "n2" }],
+    };
+
+    const results = analyzeUncheckedNullReturn(new Map([["src/users.ts#getUserName", cfg]]), "test-repo");
+    expect(results).toHaveLength(0);
+  });
+
+  it("flags findById() call with no null guard", () => {
+    const cfg: ControlFlowGraph = {
+      functionId: "src/orders.ts#getOrder",
+      nodes: [
+        { id: "n1", kind: "statement", label: "const order = await Order.findById(id)", location: loc },
+        { id: "n2", kind: "statement", label: "processOrder(order)", location: loc },
+      ],
+      edges: [{ from: "n1", to: "n2" }],
+    };
+
+    const results = analyzeUncheckedNullReturn(new Map([["src/orders.ts#getOrder", cfg]]), "test-repo");
+    expect(results).toHaveLength(1);
+    expect(results[0]!.ruleId).toBe("fault/unchecked-null-return");
+  });
+
+  it("does not flag functions that have no nullable query", () => {
+    const cfg: ControlFlowGraph = {
+      functionId: "src/orders.ts#listOrders",
+      nodes: [
+        { id: "n1", kind: "statement", label: "const orders = await Order.find({ status: 'active' })", location: loc },
+        { id: "n2", kind: "statement", label: "return orders", location: loc },
+      ],
+      edges: [{ from: "n1", to: "n2" }],
+    };
+
+    const results = analyzeUncheckedNullReturn(new Map([["src/orders.ts#listOrders", cfg]]), "test-repo");
+    expect(results).toHaveLength(0);
+  });
+
+  it("does not flag files in scripts/ paths", () => {
+    const cfg: ControlFlowGraph = {
+      functionId: "scripts/migrate.ts#getRecord",
+      nodes: [
+        { id: "n1", kind: "statement", label: "const rec = await Model.findOne({ legacy: true })", location: loc },
+      ],
+      edges: [],
+    };
+
+    const results = analyzeUncheckedNullReturn(new Map([["scripts/migrate.ts#getRecord", cfg]]), "test-repo");
+    expect(results).toHaveLength(0);
   });
 });

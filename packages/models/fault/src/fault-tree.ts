@@ -59,6 +59,27 @@ export const FAULT_RULES: readonly SarifReportingDescriptor[] = [
     },
     defaultConfiguration: { level: "note", enabled: true },
   },
+  {
+    id: "fault/timeout-missing",
+    shortDescription: {
+      text: "Outbound HTTP call with no timeout configured",
+    },
+    defaultConfiguration: { level: "warning", enabled: true },
+  },
+  {
+    id: "fault/retry-without-backoff",
+    shortDescription: {
+      text: "Retry loop with fixed delay (no exponential backoff)",
+    },
+    defaultConfiguration: { level: "note", enabled: true },
+  },
+  {
+    id: "fault/unchecked-null-return",
+    shortDescription: {
+      text: "Database query result used without null/undefined guard",
+    },
+    defaultConfiguration: { level: "note", enabled: true },
+  },
 ];
 
 export function buildFaultTree(
@@ -363,6 +384,170 @@ export function analyzeCascadingRisk(
         );
       }
     }
+  }
+
+  return results;
+}
+
+// Non-production path pattern — same exclusion as detectMissingErrorBoundaries
+const NON_PROD_PATH_RE = /^(scripts|test|tests|__tests__|spec|fixtures|tools|bin)\//;
+
+/**
+ * Detect outbound HTTP calls without a timeout setting.
+ *
+ * Heuristic: a function contains an HTTP call pattern (axios, fetch, node http/https)
+ * but no statement in the function mentions "timeout".
+ */
+export function analyzeTimeoutMissing(
+  cfgs: ReadonlyMap<string, ControlFlowGraph>,
+  repo: string,
+): SarifResult[] {
+  const results: SarifResult[] = [];
+
+  // Patterns that indicate an outbound HTTP call
+  const httpCallPattern =
+    /\b(axios\.(get|post|put|delete|patch|head|request)|fetch\s*\(|https?\.(get|post|request)\s*\(|superagent\.(get|post|put|delete|patch)|nodeFetch\s*\(|got\s*\(|needle\.(get|post|put|delete))\b/i;
+
+  for (const [functionId, cfg] of cfgs) {
+    const filePath = functionId.split("#")[0] ?? "";
+    if (NON_PROD_PATH_RE.test(filePath)) continue;
+
+    const hasHttpCall = cfg.nodes.some(
+      (n) => n.kind === "statement" && httpCallPattern.test(n.label),
+    );
+    if (!hasHttpCall) continue;
+
+    const hasTimeout = cfg.nodes.some(
+      (n) => /\btimeout\b/i.test(n.label),
+    );
+    if (hasTimeout) continue;
+
+    const httpNode = cfg.nodes.find(
+      (n) => n.kind === "statement" && httpCallPattern.test(n.label),
+    )!;
+
+    results.push(
+      createSarifResult(
+        "fault/timeout-missing",
+        "warning",
+        `Outbound HTTP call in ${functionId} has no timeout configured`,
+        {
+          locations: [{
+            logicalLocations: [
+              createLogicalLocation(repo, filePath, functionId),
+            ],
+          }],
+          properties: { line: httpNode.line },
+        },
+      ),
+    );
+  }
+
+  return results;
+}
+
+/**
+ * Detect retry loops that use fixed delays instead of exponential backoff.
+ *
+ * Heuristic: a function has a loop/branch referencing retry/attempt counts
+ * and a setTimeout call, but no backoff-indicating pattern.
+ */
+export function analyzeRetryWithoutBackoff(
+  cfgs: ReadonlyMap<string, ControlFlowGraph>,
+  repo: string,
+): SarifResult[] {
+  const results: SarifResult[] = [];
+
+  const retryBranchPattern = /\b(retry|retries|attempt[s]?|maxRetry|maxAttempt[s]?)\b/i;
+  const setTimeoutPattern = /\bsetTimeout\s*\(/;
+  const backoffPattern = /\b(backoff|exponential|jitter|Math\.pow)\b|\bdelay\s*\*|\*\s*2\b|\bdelay\s*<<|\bdelay\s*\*\s*\d/i;
+
+  for (const [functionId, cfg] of cfgs) {
+    const filePath = functionId.split("#")[0] ?? "";
+    if (NON_PROD_PATH_RE.test(filePath)) continue;
+
+    const hasRetryBranch = cfg.nodes.some(
+      (n) => (n.kind === "branch" || n.kind === "statement") && retryBranchPattern.test(n.label),
+    );
+    if (!hasRetryBranch) continue;
+
+    const hasSetTimeout = cfg.nodes.some(
+      (n) => n.kind === "statement" && setTimeoutPattern.test(n.label),
+    );
+    if (!hasSetTimeout) continue;
+
+    const hasBackoff = cfg.nodes.some(
+      (n) => backoffPattern.test(n.label),
+    );
+    if (hasBackoff) continue;
+
+    results.push(
+      createSarifResult(
+        "fault/retry-without-backoff",
+        "note",
+        `Retry loop in ${functionId} uses fixed delay — consider exponential backoff`,
+        {
+          locations: [{
+            logicalLocations: [
+              createLogicalLocation(repo, filePath, functionId),
+            ],
+          }],
+        },
+      ),
+    );
+  }
+
+  return results;
+}
+
+/**
+ * Detect database query results used without a null/undefined guard.
+ *
+ * Heuristic: a function calls a query method that may return null (findOne,
+ * findById, etc.) but has no null-guard branch or optional-chaining anywhere
+ * in the function body.
+ */
+export function analyzeUncheckedNullReturn(
+  cfgs: ReadonlyMap<string, ControlFlowGraph>,
+  repo: string,
+): SarifResult[] {
+  const results: SarifResult[] = [];
+
+  const nullableQueryPattern =
+    /\.(findOne|findById|findByIdAndUpdate|findOneAndUpdate|findOneAndDelete|findOneAndReplace|findByPk|findFirst)\s*\(/;
+  const nullGuardPattern =
+    /(\s*!|\s*===?\s*null|\s*!==?\s*null|\s*===?\s*undefined|\s*!==?\s*undefined|\?\.\w|\?\s*\[|\bnullish\b|\bnull\b\s*\?)/;
+
+  for (const [functionId, cfg] of cfgs) {
+    const filePath = functionId.split("#")[0] ?? "";
+    if (NON_PROD_PATH_RE.test(filePath)) continue;
+
+    const queryNode = cfg.nodes.find(
+      (n) => n.kind === "statement" && nullableQueryPattern.test(n.label),
+    );
+    if (!queryNode) continue;
+
+    // Check whether any node in the function has a null guard
+    const hasNullGuard = cfg.nodes.some(
+      (n) => nullGuardPattern.test(n.label),
+    );
+    if (hasNullGuard) continue;
+
+    results.push(
+      createSarifResult(
+        "fault/unchecked-null-return",
+        "note",
+        `${functionId} queries a nullable record (${queryNode.label.match(nullableQueryPattern)?.[1] ?? "findOne"}) without a null guard`,
+        {
+          locations: [{
+            logicalLocations: [
+              createLogicalLocation(repo, filePath, functionId),
+            ],
+          }],
+          properties: { line: queryNode.line },
+        },
+      ),
+    );
   }
 
   return results;
