@@ -253,14 +253,24 @@ export async function runPhaseModels(
         buildCfgsForFile(filePath);
       }
 
+      // Fetch call edges once and strip the "repo:" prefix so source/target
+      // match bare CFG function IDs ("filePath#fn" not "repo:filePath#fn").
+      const repoPrefix = `${repo.name}:`;
+      const stripRepo = (id: string) => (id.startsWith(repoPrefix) ? id.slice(repoPrefix.length) : id);
+      const rawCallEdges = await graphStore.getEdgesByKind("calls", repo.name);
+      const normalizedCallEdges = rawCallEdges.map((e) => ({
+        ...e,
+        source: stripRepo(e.source),
+        target: stripRepo(e.target),
+      }));
+
       // Expand CFG frontier to caller files so inter-procedural tracing works
       // across file boundaries (up to MAX_INTERPROCEDURAL_DEPTH = 3 hops)
-      const repoCallEdgesForFrontier = await graphStore.getEdgesByKind("calls", repo.name);
       const builtFiles = new Set(logFiles);
       for (let hop = 0; hop < 3; hop++) {
         const currentFunctions = new Set(cfgs.keys());
         const newFiles = new Set<string>();
-        for (const edge of repoCallEdgesForFrontier) {
+        for (const edge of normalizedCallEdges) {
           if (currentFunctions.has(edge.target)) {
             const callerFile = edge.source.split("#")[0] ?? "";
             if (callerFile && !builtFiles.has(callerFile) && trees.has(callerFile)) {
@@ -275,12 +285,10 @@ export async function runPhaseModels(
         }
       }
 
-      // Use real call edges from graph store if available
-      const repoCallEdges = await graphStore.getEdgesByKind("calls", repo.name);
       const callGraph: CallGraph = {
         repo: repo.name,
-        edges: repoCallEdges,
-        nodeCount: new Set(repoCallEdges.flatMap(e => [e.source, e.target])).size,
+        edges: normalizedCallEdges,
+        nodeCount: new Set(normalizedCallEdges.flatMap((e) => [e.source, e.target])).size,
       };
 
       const faultTrees = [];

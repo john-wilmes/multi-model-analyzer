@@ -16,7 +16,18 @@ export interface FunctionNodeInfo {
 export function findFunctionNodes(rootNode: TreeSitterNode): FunctionNodeInfo[] {
   const results: FunctionNodeInfo[] = [];
 
-  function walk(node: TreeSitterNode): void {
+  // Track the enclosing class name so method CFG IDs match call graph edge IDs.
+  // Call graph builder emits "ClassName.methodName"; CFGs must use the same format.
+  function walk(node: TreeSitterNode, enclosingClass: string | null): void {
+    if (node.type === "class_declaration" || node.type === "class_expression") {
+      const classNameNode = node.namedChildren.find((c) => c.type === "identifier" || c.type === "type_identifier");
+      const className = classNameNode?.text ?? null;
+      for (const child of node.namedChildren) {
+        walk(child, className);
+      }
+      return;
+    }
+
     if (
       node.type === "function_declaration" ||
       node.type === "function_expression" ||
@@ -25,7 +36,11 @@ export function findFunctionNodes(rootNode: TreeSitterNode): FunctionNodeInfo[] 
       const nameNode = node.namedChildren.find(
         (c) => c.type === "identifier" || c.type === "property_identifier",
       );
-      const name = nameNode?.text ?? `anon_${node.startPosition.row}`;
+      const baseName = nameNode?.text ?? `anon_${node.startPosition.row}`;
+      // Prefix with class name when inside a class to match call graph edge format
+      const name = enclosingClass && node.type === "method_definition"
+        ? `${enclosingClass}.${baseName}`
+        : baseName;
       results.push({ name, node });
     } else if (node.type === "public_field_definition") {
       // Class arrow property: handler = async (req) => {}
@@ -34,7 +49,8 @@ export function findFunctionNodes(rootNode: TreeSitterNode): FunctionNodeInfo[] 
         const nameNode = node.namedChildren.find(
           (c) => c.type === "property_identifier" || c.type === "identifier",
         );
-        const name = nameNode?.text ?? `anon_${node.startPosition.row}`;
+        const baseName = nameNode?.text ?? `anon_${node.startPosition.row}`;
+        const name = enclosingClass ? `${enclosingClass}.${baseName}` : baseName;
         results.push({ name, node: arrowChild });
       }
     } else if (node.type === "arrow_function") {
@@ -56,11 +72,11 @@ export function findFunctionNodes(rootNode: TreeSitterNode): FunctionNodeInfo[] 
     }
 
     for (const child of node.namedChildren) {
-      walk(child);
+      walk(child, enclosingClass);
     }
   }
 
-  walk(rootNode);
+  walk(rootNode, null);
   return results;
 }
 
