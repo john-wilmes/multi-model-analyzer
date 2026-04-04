@@ -70,7 +70,7 @@ describe("runPhaseCleanup", () => {
     expect(entries.has("summary:t3:repo-a:src/utils.ts#helper")).toBe(true);
   });
 
-  it("invalidates T3 summaries for modified files", async () => {
+  it("retains T3 summaries for modified files (content-hash handles staleness)", async () => {
     const entries = new Map<string, string>([
       ["summary:t3:repo-a:src/auth.ts#AuthService.login", '{"text":"stale"}'],
       ["summary:t3:repo-a:src/auth.ts#AuthService.logout", '{"text":"also stale"}'],
@@ -95,8 +95,10 @@ describe("runPhaseCleanup", () => {
       log: vi.fn(),
     });
 
-    expect(entries.has("summary:t3:repo-a:src/auth.ts#AuthService.login")).toBe(false);
-    expect(entries.has("summary:t3:repo-a:src/auth.ts#AuthService.logout")).toBe(false);
+    // Modified-file T3 entries are no longer deleted — content-hash-addressed
+    // keys in phase-summarization handle cache invalidation automatically.
+    expect(entries.has("summary:t3:repo-a:src/auth.ts#AuthService.login")).toBe(true);
+    expect(entries.has("summary:t3:repo-a:src/auth.ts#AuthService.logout")).toBe(true);
     expect(entries.has("summary:t3:repo-a:src/utils.ts#helper")).toBe(true);
   });
 

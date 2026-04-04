@@ -145,13 +145,28 @@ export async function runPhaseSummarization(
     }
 
     // Tier 3: LLM (cloud API or Ollama) for low-confidence method summaries (lazy snippet loading)
+    // Build file→contentHash index for content-addressed tier-3 caching
+    const fileHashIndex = new Map<string, string>();
+    if (parsedFiles) {
+      for (const pf of parsedFiles) {
+        fileHashIndex.set(pf.path, pf.contentHash);
+      }
+    }
     let tier3Count = 0;
+    let tier3CacheHits = 0;
     if (options.enrich && (!sharedApiBudget || sharedApiBudget.remaining > 0)) {
       const tier3Raw = [...summaryMap.entries()]
         .filter(([, s]) => shouldEscalateToTier3(s, undefined));
       const tier3CacheChecks = await Promise.all(
         tier3Raw.map(async ([entityId, s]) => {
-          const cached = await kvStore.has(`summary:t3:${repo.name}:${entityId}`);
+          const filePath = entityId.split("#")[0];
+          const hash = filePath ? fileHashIndex.get(filePath) : undefined;
+          // Content-addressed cache: skip LLM call if file content hasn't changed
+          const cacheKey = hash
+            ? `summary:t3:${repo.name}:${entityId}:${hash}`
+            : `summary:t3:${repo.name}:${entityId}`;
+          const cached = await kvStore.has(cacheKey);
+          if (cached) tier3CacheHits++;
           return cached ? null : [entityId, s] as [string, typeof s];
         })
       );
@@ -270,7 +285,12 @@ export async function runPhaseSummarization(
             if (s.confidence > 0) {
               summaryMap.set(s.entityId, s);
               tier3Count++;
-              await kvStore.set(`summary:t3:${repo.name}:${s.entityId}`, JSON.stringify(s));
+              const filePath = s.entityId.split("#")[0];
+              const hash = filePath ? fileHashIndex.get(filePath) : undefined;
+              const cacheKey = hash
+                ? `summary:t3:${repo.name}:${s.entityId}:${hash}`
+                : `summary:t3:${repo.name}:${s.entityId}`;
+              await kvStore.set(cacheKey, JSON.stringify(s));
             }
           }
           tier3Progress.tick(chunk.length);
@@ -279,6 +299,10 @@ export async function runPhaseSummarization(
           }
         }
       }
+    }
+
+    if (tier3CacheHits > 0) {
+      log(`    [tier-3] ${tier3CacheHits} entities served from cache`);
     }
 
     // Index summaries in search store for query support (batched to limit memory)

@@ -156,20 +156,28 @@ export async function enrichCommand(options: EnrichOptions): Promise<EnrichResul
       } catch { /* skip corrupted */ }
     }
 
+    // Build a set of entity IDs that have tier-3 cache entries (any hash variant)
+    const t3CachedEntities = new Set<string>();
+    for (const key of repoT3Keys) {
+      // Key format: summary:t3:<repo>:<entityId> or summary:t3:<repo>:<entityId>:<hash>
+      const withoutPrefix = key.slice(`${T3_PREFIX}${repoName}:`.length);
+      // entityId is path#symbol — strip optional trailing :hash
+      const lastColon = withoutPrefix.lastIndexOf(":");
+      const hashPart = lastColon > 0 ? withoutPrefix.slice(lastColon + 1) : "";
+      // Content hashes are 64-char hex SHA-256 strings
+      const entityId = hashPart.length === 64 && /^[0-9a-f]+$/.test(hashPart)
+        ? withoutPrefix.slice(0, lastColon)
+        : withoutPrefix;
+      t3CachedEntities.add(entityId);
+    }
+
     // Tier 3: Ollama for low-confidence entities not already t3-cached
     let tier3Count = 0;
     if (budgetRemaining === undefined || budgetRemaining > 0) {
-      const tier3Candidates = (
-        await Promise.all(
-          [...summaryMap.entries()]
-            .filter(([, s]) => shouldEscalateToTier3(s, undefined))
-            .map(async ([entityId, s]) => {
-              const alreadyCached = await options.kvStore.has(`${T3_PREFIX}${repoName}:${entityId}`);
-              if (alreadyCached) return null;
-              return { entityId, description: s.description, context: entityId };
-            }),
-        )
-      ).filter((c): c is NonNullable<typeof c> => c !== null);
+      const tier3Candidates = [...summaryMap.entries()]
+        .filter(([, s]) => shouldEscalateToTier3(s, undefined))
+        .filter(([entityId]) => !t3CachedEntities.has(entityId))
+        .map(([entityId, s]) => ({ entityId, description: s.description, context: entityId }));
 
       const capped =
         budgetRemaining !== undefined
