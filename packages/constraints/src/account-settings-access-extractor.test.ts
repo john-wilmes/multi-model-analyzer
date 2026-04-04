@@ -244,6 +244,36 @@ describe("extractAccountSettingsAccesses", () => {
     expect(access(result.accesses, "timezone")).toBeDefined();
   });
 
+  it("populates enclosingFunction for access inside a named function", async () => {
+    const result = await extractAccountSettingsAccesses([
+      {
+        path: "routes/scheduling.js",
+        content: `
+          function getTimezone(user) {
+            return user.settings.timezone;
+          }
+        `,
+      },
+    ]);
+    expect(result.errors).toHaveLength(0);
+    const a = access(result.accesses, "timezone");
+    expect(a).toBeDefined();
+    expect(a!.enclosingFunction).toBe("getTimezone");
+  });
+
+  it("enclosingFunction is undefined for module-scope account settings access", async () => {
+    const result = await extractAccountSettingsAccesses([
+      {
+        path: "routes/config.js",
+        content: `const tz = user.settings.timezone;`,
+      },
+    ]);
+    expect(result.errors).toHaveLength(0);
+    const a = access(result.accesses, "timezone");
+    expect(a).toBeDefined();
+    expect(a!.enclosingFunction).toBeUndefined();
+  });
+
   it("counts patterns correctly across files", async () => {
     const result = await extractAccountSettingsAccesses([
       {

@@ -8,46 +8,11 @@ import type {
 } from "./types.js";
 import {
   extractGuardConditionsExt,
+  findEnclosingFunction,
   hasDefaultFallback,
   isOnAssignmentLeft,
   type FieldExtractor,
 } from "./ast-utils.js";
-
-// ─── Enclosing function detection ─────────────────────────────────────────────
-
-/** Walk up from a node to find the nearest enclosing named function/method.
- *  Returns the function name, or undefined if the access is at module scope. */
-function findEnclosingFunction(node: TreeSitterNode): string | undefined {
-  let current = node.parent;
-  while (current) {
-    if (
-      current.type === 'function_declaration' ||
-      current.type === 'method_definition'
-    ) {
-      const nameNode = current.childForFieldName('name');
-      if (nameNode) return nameNode.text;
-    }
-    if (
-      current.type === 'function_expression' ||
-      current.type === 'arrow_function'
-    ) {
-      // Check if assigned to a variable: `const foo = function() {}`
-      if (current.parent?.type === 'variable_declarator') {
-        const varName = current.parent.childForFieldName('name');
-        if (varName) return varName.text;
-      }
-      // Check if assigned to a property: `Foo.prototype.bar = function() {}`
-      if (current.parent?.type === 'assignment_expression') {
-        const left = current.parent.childForFieldName('left');
-        if (left) return left.text;
-      }
-      // Anonymous function — still not module scope
-      return '<anonymous>';
-    }
-    current = current.parent;
-  }
-  return undefined; // module scope
-}
 
 // ─── Credential chain detection ───────────────────────────────────────────────
 

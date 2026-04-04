@@ -352,14 +352,16 @@ describe("extractCredentialAccesses", () => {
     expect(result.errors).toHaveLength(0);
     const oauthToken = access(result.accesses, "oauthToken");
     expect(oauthToken).toBeDefined();
-    expect(oauthToken!.guardConditions).toHaveLength(1);
-    const guard = oauthToken!.guardConditions[0]!;
-    // Should have parsed either the equality or truthy check cleanly, without the && tail in the value
-    expect(guard.field).toBeDefined();
-    if (guard.operator === "==") {
-      // Value should be "oauth", not "oauth && ..."
-      expect(guard.value).toBe("oauth");
-    }
+    // Both sub-expressions in the && should be extracted as separate guards
+    expect(oauthToken!.guardConditions).toHaveLength(2);
+    const eqGuard = oauthToken!.guardConditions.find((g) => g.operator === "==");
+    expect(eqGuard).toBeDefined();
+    // Value should be "oauth", not "oauth && ..." (no rhs corruption)
+    expect(eqGuard!.value).toBe("oauth");
+    expect(eqGuard!.field).toBe("mode");
+    const truthyGuard = oauthToken!.guardConditions.find((g) => g.operator === "truthy");
+    expect(truthyGuard).toBeDefined();
+    expect(truthyGuard!.field).toBe("enabled");
   });
 
   it("normalizes optional chaining ?. to . in extracted field names", async () => {

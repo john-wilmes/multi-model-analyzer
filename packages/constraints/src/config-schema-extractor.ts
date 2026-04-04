@@ -310,8 +310,9 @@ export async function extractConfigSchemas(
   const errors: { file: string; error: string }[] = [];
 
   for (const { path, content } of files) {
+    let tree;
     try {
-      const tree = parseSource(content, path);
+      tree = parseSource(content, path);
       const configObject = findConfigObject(tree.rootNode);
 
       if (!configObject) {
@@ -334,6 +335,8 @@ export async function extractConfigSchemas(
         file: path,
         error: err instanceof Error ? err.message : String(err),
       });
+    } finally {
+      tree?.delete();
     }
   }
 

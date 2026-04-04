@@ -15,18 +15,19 @@ interface DomainExtractor {
   extractor: FieldExtractor;
 }
 
-function tryParseGuardWithDomains(
+function tryParseGuardsWithDomains(
   text: string,
   negated: boolean,
   otherDomains: readonly DomainExtractor[],
-): (GuardCondition & { readonly domain: ConfigDomain }) | null {
+): (GuardCondition & { readonly domain: ConfigDomain })[] {
+  const result: (GuardCondition & { readonly domain: ConfigDomain })[] = [];
   for (const { domain, extractor } of otherDomains) {
-    const guard = parseGuardCondition(text, negated, extractor);
-    if (guard) {
-      return { ...guard, domain };
+    const guards = parseGuardCondition(text, negated, extractor);
+    for (const g of guards) {
+      result.push({ ...g, domain });
     }
   }
-  return null;
+  return result;
 }
 
 function makeDedupKey(dep: Omit<CrossEntityDependency, "evidence">): string {
@@ -79,32 +80,34 @@ export function detectCrossEntityDependencies(
       // so we cannot determine if the access was in an else branch. Negation
       // within the condition text itself (e.g., "!field") is still parsed correctly.
       for (const text of access.rawGuardTexts) {
-        const guard = tryParseGuardWithDomains(text, false, otherDomains);
-        if (!guard) continue;
+        const guards = tryParseGuardsWithDomains(text, false, otherDomains);
+        if (guards.length === 0) continue;
 
-        crossEntityAccesses++;
-        const integratorType = getIntegratorType(access.file);
-        const key = makeDedupKey({
-          accessedDomain,
-          integratorType,
-          accessedField: access.field,
-          guard,
-        });
-
-        const existing = dedupMap.get(key);
-        if (existing) {
-          (existing.evidence as { file: string; line: number }[]).push({
-            file: access.file,
-            line: access.line,
-          });
-        } else {
-          dedupMap.set(key, {
+        for (const guard of guards) {
+          crossEntityAccesses++;
+          const integratorType = getIntegratorType(access.file);
+          const key = makeDedupKey({
             accessedDomain,
             integratorType,
             accessedField: access.field,
             guard,
-            evidence: [{ file: access.file, line: access.line }],
           });
+
+          const existing = dedupMap.get(key);
+          if (existing) {
+            (existing.evidence as { file: string; line: number }[]).push({
+              file: access.file,
+              line: access.line,
+            });
+          } else {
+            dedupMap.set(key, {
+              accessedDomain,
+              integratorType,
+              accessedField: access.field,
+              guard,
+              evidence: [{ file: access.file, line: access.line }],
+            });
+          }
         }
       }
     }

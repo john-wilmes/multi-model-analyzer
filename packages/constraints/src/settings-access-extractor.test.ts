@@ -172,6 +172,36 @@ describe("extractSettingsAccesses", () => {
     expect(a!.hasDefault).toBe(true);
   });
 
+  it("populates enclosingFunction for access inside a named function", async () => {
+    const result = await extractSettingsAccesses([
+      {
+        path: "integrator-service/handler.js",
+        content: `
+          function syncRecords(integratorObject) {
+            return integratorObject.settings.integrator.syncBatchSize;
+          }
+        `,
+      },
+    ]);
+    expect(result.errors).toHaveLength(0);
+    const a = access(result.accesses, "syncBatchSize");
+    expect(a).toBeDefined();
+    expect(a!.enclosingFunction).toBe("syncRecords");
+  });
+
+  it("enclosingFunction is undefined for module-scope settings access", async () => {
+    const result = await extractSettingsAccesses([
+      {
+        path: "integrator-service/config.js",
+        content: `const batchSize = self.options.integrator.settings.integrator.syncBatchSize;`,
+      },
+    ]);
+    expect(result.errors).toHaveLength(0);
+    const a = access(result.accesses, "syncBatchSize");
+    expect(a).toBeDefined();
+    expect(a!.enclosingFunction).toBeUndefined();
+  });
+
   it("correctly extracts guard conditions when access is inside an if block", async () => {
     const result = await extractSettingsAccesses([
       {

@@ -9,6 +9,7 @@ import type {
 } from "./types.js";
 import {
   extractGuardConditionsExt,
+  findEnclosingFunction,
   hasDefaultFallback,
   isOnAssignmentLeft,
   type FieldExtractor,
@@ -199,6 +200,7 @@ function walkNode(
                     accessKind,
                     hasDefault,
                     guardConditions,
+                    enclosingFunction: findEnclosingFunction(node),
                     ...(rawUnmatched.length > 0 ? { rawGuardTexts: rawUnmatched } : {}),
                   });
                   byPattern["lodash-get"] = (byPattern["lodash-get"] ?? 0) + 1;
@@ -254,6 +256,7 @@ function walkNode(
           accessKind,
           hasDefault,
           guardConditions,
+          enclosingFunction: findEnclosingFunction(node),
           ...(rawUnmatched.length > 0 ? { rawGuardTexts: rawUnmatched } : {}),
         });
         byPattern[resolvedPattern] = (byPattern[resolvedPattern] ?? 0) + 1;

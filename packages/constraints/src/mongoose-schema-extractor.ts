@@ -209,8 +209,9 @@ export async function extractMongooseSettingsSchema(
   const errors: { file: string; error: string }[] = [];
 
   for (const { path, content } of files) {
+    let tree;
     try {
-      const tree = parseSource(content, path);
+      tree = parseSource(content, path);
       const root = tree.rootNode;
 
       const integratorBlock = findIntegratorBlock(root);
@@ -232,6 +233,8 @@ export async function extractMongooseSettingsSchema(
         file: path,
         error: err instanceof Error ? err.message : String(err),
       });
+    } finally {
+      tree?.delete();
     }
   }
 
@@ -258,8 +261,9 @@ export async function extractMongooseAccountSettingsSchema(
   const errors: { file: string; error: string }[] = [];
 
   for (const { path, content } of files) {
+    let tree;
     try {
-      const tree = parseSource(content, path);
+      tree = parseSource(content, path);
       const root = tree.rootNode;
 
       const settingsObj = findSettingsObject(root);
@@ -351,6 +355,8 @@ export async function extractMongooseAccountSettingsSchema(
         file: path,
         error: err instanceof Error ? err.message : String(err),
       });
+    } finally {
+      tree?.delete();
     }
   }
 

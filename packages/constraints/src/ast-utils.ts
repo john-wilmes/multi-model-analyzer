@@ -5,6 +5,40 @@ import type { GuardCondition } from "./types.js";
 /** Callback that extracts a field name from a member expression text */
 export type FieldExtractor = (text: string) => { field: string } | null;
 
+/** Walk up from a node to find the nearest enclosing named function/method.
+ *  Returns the function name, or undefined if the access is at module scope. */
+export function findEnclosingFunction(node: TreeSitterNode): string | undefined {
+  let current = node.parent;
+  while (current) {
+    if (
+      current.type === 'function_declaration' ||
+      current.type === 'method_definition'
+    ) {
+      const nameNode = current.childForFieldName('name');
+      if (nameNode) return nameNode.text;
+    }
+    if (
+      current.type === 'function_expression' ||
+      current.type === 'arrow_function'
+    ) {
+      // Check if assigned to a variable: `const foo = function() {}`
+      if (current.parent?.type === 'variable_declarator') {
+        const varName = current.parent.childForFieldName('name');
+        if (varName) return varName.text;
+      }
+      // Check if assigned to a property: `Foo.prototype.bar = function() {}`
+      if (current.parent?.type === 'assignment_expression') {
+        const left = current.parent.childForFieldName('left');
+        if (left) return left.text;
+      }
+      // Anonymous function — still not module scope
+      return '<anonymous>';
+    }
+    current = current.parent;
+  }
+  return undefined; // module scope
+}
+
 /** Determine if a node is on the left side of an assignment */
 export function isOnAssignmentLeft(node: TreeSitterNode): boolean {
   const parent = node.parent;
@@ -64,12 +98,19 @@ export function hasDefaultFallback(node: TreeSitterNode): boolean {
   return false;
 }
 
-/** Parse a condition text to extract guard information about a credential field. */
+/** Parse a condition text to extract guard information about a credential field.
+ *
+ * Returns all matching guards found in the condition:
+ * - For `&&` compound conditions, returns all sub-expressions that match (conjunction).
+ * - For `||` compound conditions, returns an empty array — we cannot statically determine
+ *   which branch applies, so we treat the whole expression as unresolvable.
+ * - For all other forms, returns a single-element array (or empty if no match).
+ */
 export function parseGuardCondition(
   condText: string,
   negated: boolean,
   fieldExtractor: FieldExtractor,
-): GuardCondition | null {
+): GuardCondition[] {
   const trimmed = condText.trim();
 
   // Check for negation: !credentials.field or !(credentials.field)
@@ -78,27 +119,19 @@ export function parseGuardCondition(
     return parseGuardCondition(inner, !negated, fieldExtractor);
   }
 
-  // Check for logical AND first (before equality) to prevent greedy regex from consuming compound expressions
-  // Known limitation: splitting on " && " / " || " is whitespace-sensitive and returns only the first
-  // matching sub-expression rather than combining all guards into a conjunction/disjunction.
-  // typeof negation via "!==" in compound guards also doesn't propagate the negated flag correctly.
-  // Production impact is minimal because tree-sitter-extracted guards are consistently well-formatted,
-  // but complex multi-clause guards will be partially captured at best.
-  if (trimmed.includes(" && ")) {
-    const parts = trimmed.split(" && ");
+  // For logical AND: return ALL matching sub-expressions (conjunction — all must hold).
+  if (/&&/.test(trimmed)) {
+    const parts = trimmed.split(/\s*&&\s*/);
+    const results: GuardCondition[] = [];
     for (const part of parts) {
-      const guard = parseGuardCondition(part.trim(), negated, fieldExtractor);
-      if (guard) return guard;
+      results.push(...parseGuardCondition(part.trim(), negated, fieldExtractor));
     }
+    return results;
   }
 
-  // Check for logical OR first (before equality) for the same reason
-  if (trimmed.includes(" || ")) {
-    const parts = trimmed.split(" || ");
-    for (const part of parts) {
-      const guard = parseGuardCondition(part.trim(), negated, fieldExtractor);
-      if (guard) return guard;
-    }
+  // For logical OR: return empty — we cannot statically determine which branch applies.
+  if (/\|\|/.test(trimmed)) {
+    return [];
   }
 
   // Check for typeof: typeof credentials.field === 'string' or !==
@@ -110,12 +143,14 @@ export function parseGuardCondition(
     if (fieldInfo) {
       // Flip negated if the operator is !== or !=
       const isNegatingOp = op === "!==" || op === "!=";
-      return {
-        field: fieldInfo.field,
-        operator: "typeof",
-        value: typeofMatch[3],
-        negated: isNegatingOp ? !negated : negated,
-      };
+      return [
+        {
+          field: fieldInfo.field,
+          operator: "typeof",
+          value: typeofMatch[3],
+          negated: isNegatingOp ? !negated : negated,
+        },
+      ];
     }
   }
 
@@ -128,32 +163,36 @@ export function parseGuardCondition(
     const rhs = eqMatch[4]!.trim();
     const fieldInfo = fieldExtractor(lhs);
     if (fieldInfo) {
-      return {
-        field: fieldInfo.field,
-        operator: op === "===" || op === "==" ? "==" : "!=",
-        value: rhs,
-        negated,
-      };
+      return [
+        {
+          field: fieldInfo.field,
+          operator: op === "===" || op === "==" ? "==" : "!=",
+          value: rhs,
+          negated,
+        },
+      ];
     }
     // Also check rhs === lhs (value on left)
     const rhsField = fieldExtractor(rhs);
     if (rhsField) {
-      return {
-        field: rhsField.field,
-        operator: op === "===" || op === "==" ? "==" : "!=",
-        value: lhs,
-        negated,
-      };
+      return [
+        {
+          field: rhsField.field,
+          operator: op === "===" || op === "==" ? "==" : "!=",
+          value: lhs,
+          negated,
+        },
+      ];
     }
   }
 
   // Truthy/falsy check: just the credential field itself
   const fieldInfo = fieldExtractor(trimmed);
   if (fieldInfo) {
-    return { field: fieldInfo.field, operator: "truthy", negated };
+    return [{ field: fieldInfo.field, operator: "truthy", negated }];
   }
 
-  return null;
+  return [];
 }
 
 /** Like extractGuardConditions but also returns raw text of unmatched conditions. */
@@ -195,9 +234,9 @@ export function extractGuardConditionsExt(
         if (condition.type === "parenthesized_expression") {
           condition = condition.namedChildren[0] ?? condition;
         }
-        const guard = parseGuardCondition(condition.text, inElse, fieldExtractor);
-        if (guard) {
-          guards.push(guard);
+        const parsed = parseGuardCondition(condition.text, inElse, fieldExtractor);
+        if (parsed.length > 0) {
+          guards.push(...parsed);
         } else {
           rawUnmatched.push(condition.text);
         }

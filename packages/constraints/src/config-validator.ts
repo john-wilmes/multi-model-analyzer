@@ -28,6 +28,28 @@ function getConfigValue(config: Record<string, unknown>, field: string): unknown
 }
 
 /**
+ * Coerce a guard's string value to match the runtime value's type.
+ * AST extraction always stores guard values as strings (e.g., "2", "false", "null"),
+ * so we infer the intended type from the runtime value to enable correct comparison.
+ */
+function coerceGuardValue(guardValue: string | undefined, runtimeValue: unknown): unknown {
+  if (guardValue === undefined) return undefined;
+  switch (typeof runtimeValue) {
+    case 'number': {
+      const n = Number(guardValue);
+      return Number.isNaN(n) ? guardValue : n;
+    }
+    case 'boolean':
+      if (guardValue === 'true') return true;
+      if (guardValue === 'false') return false;
+      return guardValue;
+    default:
+      if (runtimeValue === null && guardValue === 'null') return null;
+      return guardValue;
+  }
+}
+
+/**
  * Evaluate a single GuardCondition against the runtime config.
  * Returns true if the guard is satisfied, false if not, or null when the
  * operator is unsupported (treated as "unknown" — doesn't trigger).
@@ -39,16 +61,19 @@ function evaluateGuard(config: Record<string, unknown>, guard: GuardCondition): 
     case 'truthy':
       return guard.negated ? !value : !!value;
     case 'falsy':
-      // 'falsy' operator (not used in current extraction but handle defensively)
       return guard.negated ? !!value : !value;
-    case '==':
+    case '==': {
+      const coerced = coerceGuardValue(guard.value, value);
       return guard.negated
-        ? value !== guard.value
-        : value === guard.value;
-    case '!=':
+        ? value !== coerced
+        : value === coerced;
+    }
+    case '!=': {
+      const coerced = coerceGuardValue(guard.value, value);
       return guard.negated
-        ? value === guard.value
-        : value !== guard.value;
+        ? value === coerced
+        : value !== coerced;
+    }
     case 'typeof':
       return guard.negated
         ? typeof value !== String(guard.value)

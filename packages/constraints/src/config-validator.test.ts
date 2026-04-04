@@ -298,6 +298,49 @@ describe("validateConfig", () => {
     expect(removeChange?.field).toBe("extra");
   });
 
+  it("guard == operator matches string guard value against numeric runtime value", () => {
+    // Guard values from AST extraction are always strings (e.g., "2"),
+    // but runtime config values can be numbers. Loose equality must be used.
+    const cs = makeConstraintSet([
+      makeConditionalField("extraToken", "apiVersion", "==", "2"),
+    ]);
+    // apiVersion is numeric 2, guard value is string "2" → should match (loose ==)
+    const resultMatch = validateConfig({ apiVersion: 2 }, cs);
+    expect(resultMatch.violations.some((v) => v.kind === "missing-conditional")).toBe(true);
+
+    // apiVersion is 3 → should not match
+    const resultNoMatch = validateConfig({ apiVersion: 3 }, cs);
+    expect(resultNoMatch.violations.filter((v) => v.kind === "missing-conditional")).toHaveLength(0);
+  });
+
+  it("guard != operator distinguishes string guard value against numeric runtime value", () => {
+    // Guard value "2" (string) vs runtime 2 (number): != should use loose inequality
+    const cs = makeConstraintSet([
+      makeConditionalField("legacyKey", "apiVersion", "!=", "2"),
+    ]);
+    // apiVersion is 3 → not equal to "2" → condition met → legacyKey required but missing
+    const resultMatch = validateConfig({ apiVersion: 3 }, cs);
+    expect(resultMatch.violations.some((v) => v.kind === "missing-conditional")).toBe(true);
+
+    // apiVersion is 2 (number) == "2" (string) → condition NOT met → no violation
+    const resultNoMatch = validateConfig({ apiVersion: 2 }, cs);
+    expect(resultNoMatch.violations.filter((v) => v.kind === "missing-conditional")).toHaveLength(0);
+  });
+
+  it("guard == operator matches string guard value against boolean runtime value", () => {
+    // Guard value "false" (string from AST) vs runtime false (boolean)
+    const cs = makeConstraintSet([
+      makeConditionalField("debugKey", "enabled", "==", "false"),
+    ]);
+    // enabled is boolean false → coerced "false" to false → matches
+    const resultMatch = validateConfig({ enabled: false }, cs);
+    expect(resultMatch.violations.some((v) => v.kind === "missing-conditional")).toBe(true);
+
+    // enabled is boolean true → does not match "false"
+    const resultNoMatch = validateConfig({ enabled: true }, cs);
+    expect(resultNoMatch.violations.filter((v) => v.kind === "missing-conditional")).toHaveLength(0);
+  });
+
   it("deeply nested unknown subtree collapses to shallowest unknown ancestor", () => {
     // { a: { b: { c: 1 } } } with no constraint — should report 'a'
     const cs = makeConstraintSet([]);
