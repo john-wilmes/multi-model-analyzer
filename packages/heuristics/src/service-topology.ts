@@ -496,6 +496,15 @@ function findHttpCalls(
       imp === "request-promise" ||
       imp === "request-promise-native",
   );
+  const usesSuperagent = fileImports.some(
+    (imp) => imp === "superagent",
+  );
+  const usesNodeFetch = fileImports.some(
+    (imp) => imp === "node-fetch",
+  );
+  const usesUndici = fileImports.some(
+    (imp) => imp === "undici",
+  );
 
   const httpMethods = new Set([
     "get",
@@ -514,13 +523,13 @@ function findHttpCalls(
     const func = node.childForFieldName("function");
     if (!func) return;
 
-    // fetch() calls
+    // fetch() calls (distinguish node-fetch import from native fetch)
     if (func.text === "fetch" || func.text === "globalThis.fetch") {
       const args = node.childForFieldName("arguments");
       const url = extractFirstStringArg(args);
       results.push({
         target: url ?? "external-api",
-        detail: "fetch()",
+        detail: usesNodeFetch && func.text === "fetch" ? "node-fetch()" : "fetch()",
       });
       return;
     }
@@ -536,6 +545,23 @@ function findHttpCalls(
       return;
     }
 
+    // superagent direct call: superagent(url) or superagent(method, url)
+    if (
+      usesSuperagent &&
+      (func.text === "superagent" || func.text === "request")
+    ) {
+      const args = node.childForFieldName("arguments");
+      const first = extractFirstStringArg(args);
+      // superagent('GET', '/api') — first arg is HTTP method, second is URL
+      const isMethod = first != null && /^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)$/i.test(first);
+      const url = isMethod ? extractNthStringArg(args, 1) : first;
+      results.push({
+        target: url ?? "external-api",
+        detail: "superagent()",
+      });
+      return;
+    }
+
     // Member expression calls: axios.get(), got.post(), httpService.get(), etc.
     if (func.type === "member_expression") {
       const object = func.childForFieldName("object");
@@ -545,12 +571,14 @@ function findHttpCalls(
 
       const objectText = object?.text ?? "";
 
-      // axios/got/request calls
+      // axios/got/request/superagent/undici calls
       if (
         (usesAxios && objectText === "axios") ||
         (usesGot && objectText === "got") ||
         (usesRequest &&
-          (objectText === "request" || objectText === "rp"))
+          (objectText === "request" || objectText === "rp")) ||
+        (usesSuperagent && objectText === "superagent") ||
+        (usesUndici && objectText === "undici")
       ) {
         const args = node.childForFieldName("arguments");
         const url = extractFirstStringArg(args);
@@ -759,14 +787,22 @@ function extractStringValue(node: TreeSitterNode): string | null {
 function extractFirstStringArg(
   argsNode: TreeSitterNode | null,
 ): string | null {
+  return extractNthStringArg(argsNode, 0);
+}
+
+function extractNthStringArg(
+  argsNode: TreeSitterNode | null,
+  n: number,
+): string | null {
   if (!argsNode) return null;
+  let found = 0;
   for (let i = 0; i < argsNode.namedChildCount; i++) {
     const arg = argsNode.namedChild(i)!;
-    if (arg.type === "number") {
-      return arg.text;
-    }
-    if (arg.type === "string" || arg.type === "template_string") {
-      return extractStringValue(arg) ?? arg.text;
+    if (arg.type === "number" || arg.type === "string" || arg.type === "template_string") {
+      if (found === n) {
+        return arg.type === "number" ? arg.text : (extractStringValue(arg) ?? arg.text);
+      }
+      found++;
     }
   }
   return null;

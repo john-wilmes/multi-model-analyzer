@@ -376,6 +376,89 @@ class ApiClient {
       expect(httpEdge).toBeDefined();
       expect(httpEdge!.metadata?.detail).toContain("HttpService");
     });
+
+    it("detects superagent.get() with import", () => {
+      const source = `
+async function getUser() {
+  const res = await superagent.get('/api/users');
+}`;
+      const input = makeInput([
+        { path: "client.ts", source, imports: ["superagent"] },
+      ]);
+      const edges = extractServiceTopology(input);
+
+      const httpEdge = edges.find((e) => e.metadata?.protocol === "http");
+      expect(httpEdge).toBeDefined();
+      expect(httpEdge!.metadata?.detail).toBe("superagent.get()");
+    });
+
+    it("detects superagent direct call with method+url args", () => {
+      const source = `
+const res = superagent('GET', '/api/users');`;
+      const input = makeInput([
+        { path: "client.ts", source, imports: ["superagent"] },
+      ]);
+      const edges = extractServiceTopology(input);
+
+      const httpEdge = edges.find((e) => e.metadata?.protocol === "http");
+      expect(httpEdge).toBeDefined();
+      expect(httpEdge!.target).toBe("/api/users");
+      expect(httpEdge!.metadata?.detail).toBe("superagent()");
+    });
+
+    it("detects superagent direct call with url-only arg", () => {
+      const source = `
+const res = superagent('/api/users');`;
+      const input = makeInput([
+        { path: "client.ts", source, imports: ["superagent"] },
+      ]);
+      const edges = extractServiceTopology(input);
+
+      const httpEdge = edges.find((e) => e.metadata?.protocol === "http");
+      expect(httpEdge).toBeDefined();
+      expect(httpEdge!.target).toBe("/api/users");
+      expect(httpEdge!.metadata?.detail).toBe("superagent()");
+    });
+
+    it("detects undici.request() with import", () => {
+      const source = `
+async function callApi() {
+  const { body } = await undici.request('https://api.example.com/data');
+}`;
+      const input = makeInput([
+        { path: "client.ts", source, imports: ["undici"] },
+      ]);
+      const edges = extractServiceTopology(input);
+
+      const httpEdge = edges.find((e) => e.metadata?.protocol === "http");
+      expect(httpEdge).toBeDefined();
+      expect(httpEdge!.metadata?.detail).toBe("undici.request()");
+    });
+
+    it("detects node-fetch() with import", () => {
+      const source = `
+async function callApi() {
+  const res = await fetch('https://api.example.com/data');
+}`;
+      const input = makeInput([
+        { path: "client.ts", source, imports: ["node-fetch"] },
+      ]);
+      const edges = extractServiceTopology(input);
+
+      const httpEdge = edges.find((e) => e.metadata?.protocol === "http");
+      expect(httpEdge).toBeDefined();
+      expect(httpEdge!.metadata?.detail).toBe("node-fetch()");
+    });
+
+    it("ignores superagent-like calls without import", () => {
+      const source = `
+const result = superagent.get('/api/data');`;
+      const input = makeInput([{ path: "no-import.ts", source }]);
+      const edges = extractServiceTopology(input);
+
+      const httpEdge = edges.find((e) => e.metadata?.protocol === "http");
+      expect(httpEdge).toBeUndefined();
+    });
   });
 
   describe("WebSocket detection", () => {

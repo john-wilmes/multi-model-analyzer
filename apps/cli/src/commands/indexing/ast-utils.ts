@@ -75,10 +75,18 @@ export function detectMissingErrorBoundaries(
   // Pattern: error callback wrappers — catchError (RxJS), onrejected, handleError
   const errorCallbackPattern = /\b(catchError|onrejected|handleError|onError)\s*\(/;
 
+  // Non-production paths: scripts, tests, fixtures, and tooling directories
+  // don't need error boundaries — they're one-off or framework-managed.
+  const nonProdPathPattern = /^(scripts|test|tests|__tests__|spec|fixtures|tools|bin)\//;
+
   for (const [functionId, cfg] of cfgs) {
     // Anonymous functions (callbacks, lambdas) propagate errors to their callers;
     // the caller owns the error boundary, so skip them to avoid false positives.
     if (functionId.includes("#anon_")) continue;
+
+    // Skip non-production code paths
+    const filePath = functionId.split("#")[0] ?? "";
+    if (nonProdPathPattern.test(filePath)) continue;
 
     const hasAwait = cfg.nodes.some(n => n.kind === "statement" && /\bawait\b/.test(n.label));
     if (!hasAwait) continue;

@@ -157,4 +157,26 @@ describe("detectMissingErrorBoundaries", () => {
     const results = detectMissingErrorBoundaries(cfgs, "test-repo");
     expect(results).toHaveLength(0);
   });
+
+  it("skips functions in scripts/ directories", () => {
+    const cfgs = new Map([
+      ["scripts/prodrunner.js#getClient", makeCfg("scripts/prodrunner.js#getClient", [
+        stmt("const client = await connect()"),
+      ])],
+    ]);
+
+    const results = detectMissingErrorBoundaries(cfgs, "test-repo");
+    expect(results).toHaveLength(0);
+  });
+
+  it("skips functions in test/ directories", () => {
+    const cfgs = new Map([
+      ["test/helpers.ts#setup", makeCfg("test/helpers.ts#setup", [
+        stmt("await db.connect()"),
+      ])],
+    ]);
+
+    const results = detectMissingErrorBoundaries(cfgs, "test-repo");
+    expect(results).toHaveLength(0);
+  });
 });
