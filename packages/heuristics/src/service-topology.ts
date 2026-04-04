@@ -490,6 +490,12 @@ function findHttpCalls(
   const usesHttpService = fileImports.some(
     (imp) => imp === "@nestjs/axios",
   );
+  const usesRequest = fileImports.some(
+    (imp) =>
+      imp === "request" ||
+      imp === "request-promise" ||
+      imp === "request-promise-native",
+  );
 
   const httpMethods = new Set([
     "get",
@@ -519,6 +525,17 @@ function findHttpCalls(
       return;
     }
 
+    // request() / request-promise() direct calls
+    if (usesRequest && (func.text === "request" || func.text === "rp")) {
+      const args = node.childForFieldName("arguments");
+      const url = extractFirstStringArg(args);
+      results.push({
+        target: url ?? "external-api",
+        detail: "request()",
+      });
+      return;
+    }
+
     // Member expression calls: axios.get(), got.post(), httpService.get(), etc.
     if (func.type === "member_expression") {
       const object = func.childForFieldName("object");
@@ -528,10 +545,12 @@ function findHttpCalls(
 
       const objectText = object?.text ?? "";
 
-      // axios/got calls (fetch is a function, not an object -- handled above)
+      // axios/got/request calls
       if (
         (usesAxios && objectText === "axios") ||
-        (usesGot && objectText === "got")
+        (usesGot && objectText === "got") ||
+        (usesRequest &&
+          (objectText === "request" || objectText === "rp"))
       ) {
         const args = node.childForFieldName("arguments");
         const url = extractFirstStringArg(args);
