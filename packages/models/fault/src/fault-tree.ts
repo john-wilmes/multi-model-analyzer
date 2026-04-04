@@ -52,6 +52,13 @@ export const FAULT_RULES: readonly SarifReportingDescriptor[] = [
     },
     defaultConfiguration: { level: "note", enabled: true },
   },
+  {
+    id: "fault/traced-error-path",
+    shortDescription: {
+      text: "Backward trace from log statement to root causes with execution flow",
+    },
+    defaultConfiguration: { level: "note", enabled: true },
+  },
 ];
 
 export function buildFaultTree(

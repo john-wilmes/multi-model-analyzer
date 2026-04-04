@@ -4,6 +4,7 @@
  */
 
 import type { RepoConfig, SarifResult, CallGraph } from "@mma/core";
+import { createSarifResult, createLogicalLocation } from "@mma/core";
 import {
   extractConfigSchemas,
   extractCredentialAccesses,
@@ -22,7 +23,7 @@ import {
 } from "@mma/constraints";
 import type { ConfigSchema, CredentialAccess } from "@mma/constraints";
 import { buildFeatureModel, extractConstraintsFromCode, validateFeatureModel } from "@mma/model-config";
-import { identifyLogRoots, traceBackwardFromLog, buildFaultTree, analyzeGaps, analyzeCascadingRisk } from "@mma/model-fault";
+import { identifyLogRoots, traceBackwardFromLog, buildFaultTree, faultTreeToCodeFlow, analyzeGaps, analyzeCascadingRisk, analyzeLogCoOccurrence } from "@mma/model-fault";
 import { buildControlFlowGraph, createCfgIdCounter } from "@mma/structural";
 import { findFunctionNodes, detectMissingErrorBoundaries } from "./ast-utils.js";
 import type { PipelineContext } from "./types.js";
@@ -219,7 +220,7 @@ export async function runPhaseModels(
     try {
       const logRoots = identifyLogRoots(logIndex);
 
-      // Build CFGs only for files that contain log templates
+      // Build CFGs for files containing log templates
       const logFiles = new Set<string>();
       for (const tmpl of logIndex.templates) {
         for (const loc of tmpl.locations) {
@@ -229,18 +230,48 @@ export async function runPhaseModels(
 
       const cfgCounter = createCfgIdCounter();
       const cfgs = new Map<string, import("@mma/core").ControlFlowGraph>();
-      for (const filePath of logFiles) {
-        const tree = trees.get(filePath);
-        if (!tree) {
-          log(`    warning: no tree-sitter tree for log file ${filePath} (skipping CFG build)`);
-          continue;
-        }
 
+      // Helper: build CFGs for all functions in a file
+      const buildCfgsForFile = (filePath: string) => {
+        const tree = trees.get(filePath);
+        if (!tree) return;
         const fnNodes = findFunctionNodes(tree.rootNode);
         for (const fnNode of fnNodes) {
           const functionId = `${filePath}#${fnNode.name}`;
-          const cfg = buildControlFlowGraph(fnNode.node, functionId, repo.name, filePath, cfgCounter);
-          cfgs.set(functionId, cfg);
+          if (!cfgs.has(functionId)) {
+            const cfg = buildControlFlowGraph(fnNode.node, functionId, repo.name, filePath, cfgCounter);
+            cfgs.set(functionId, cfg);
+          }
+        }
+      };
+
+      for (const filePath of logFiles) {
+        if (!trees.has(filePath)) {
+          log(`    warning: no tree-sitter tree for log file ${filePath} (skipping CFG build)`);
+          continue;
+        }
+        buildCfgsForFile(filePath);
+      }
+
+      // Expand CFG frontier to caller files so inter-procedural tracing works
+      // across file boundaries (up to MAX_INTERPROCEDURAL_DEPTH = 3 hops)
+      const repoCallEdgesForFrontier = await graphStore.getEdgesByKind("calls", repo.name);
+      const builtFiles = new Set(logFiles);
+      for (let hop = 0; hop < 3; hop++) {
+        const currentFunctions = new Set(cfgs.keys());
+        const newFiles = new Set<string>();
+        for (const edge of repoCallEdgesForFrontier) {
+          if (currentFunctions.has(edge.target)) {
+            const callerFile = edge.source.split("#")[0] ?? "";
+            if (callerFile && !builtFiles.has(callerFile) && trees.has(callerFile)) {
+              newFiles.add(callerFile);
+            }
+          }
+        }
+        if (newFiles.size === 0) break;
+        for (const filePath of newFiles) {
+          buildCfgsForFile(filePath);
+          builtFiles.add(filePath);
         }
       }
 
@@ -254,11 +285,8 @@ export async function runPhaseModels(
 
       const faultTrees = [];
       const allTraces: import("@mma/model-fault").BackwardTrace[] = [];
-      // Limit tracing for POC performance; full-scale tracing requires call graph
-      const MAX_TRACED_ROOTS = 50;
-      const tracedRoots = logRoots.slice(0, MAX_TRACED_ROOTS);
       const failCounts = new Map<string, number>();
-      for (const root of tracedRoots) {
+      for (const root of logRoots) {
         const trace = traceBackwardFromLog(root, cfgs, callGraph);
         allTraces.push(trace);
         if (trace.steps.length > 0) {
@@ -267,17 +295,35 @@ export async function runPhaseModels(
           failCounts.set(trace.failReason, (failCounts.get(trace.failReason) ?? 0) + 1);
         }
       }
-      if (logRoots.length > MAX_TRACED_ROOTS) {
-        log(`    warning: ${logRoots.length - MAX_TRACED_ROOTS} log roots not traced (POC limit=${MAX_TRACED_ROOTS})`);
-      }
       if (failCounts.size > 0) {
         const breakdown = [...failCounts.entries()].map(([reason, count]) => `${count} ${reason}`).join(", ");
         const totalFailed = [...failCounts.values()].reduce((a, b) => a + b, 0);
-        log(`    trace failures: ${breakdown} (${totalFailed}/${tracedRoots.length} total)`);
+        log(`    trace failures: ${breakdown} (${totalFailed}/${logRoots.length} total)`);
       }
 
       // Collect all fault SARIF results
       const faultResults: SarifResult[] = [];
+
+      // Fault trees → SARIF results with codeFlows for execution traces
+      for (const tree of faultTrees) {
+        const codeFlow = faultTreeToCodeFlow(tree);
+        const topLoc = tree.topEvent.location;
+        faultResults.push(
+          createSarifResult(
+            "fault/traced-error-path",
+            "note",
+            `Error path traced from: ${tree.topEvent.label}`,
+            {
+              locations: topLoc ? [{
+                logicalLocations: [
+                  createLogicalLocation(topLoc.repo, topLoc.module, topLoc.fullyQualifiedName ?? topLoc.module),
+                ],
+              }] : [],
+              codeFlows: [codeFlow],
+            },
+          ),
+        );
+      }
 
       // Gap analysis (unhandled-error-path + silent-failure)
       faultResults.push(...analyzeGaps(cfgs, repo.name));
@@ -288,10 +334,17 @@ export async function runPhaseModels(
       // Missing error boundaries (async functions without try/catch)
       faultResults.push(...detectMissingErrorBoundaries(cfgs, repo.name));
 
+      // Log co-occurrence analysis
+      const coOccurrence = analyzeLogCoOccurrence(logIndex, callGraph, allTraces);
+      if (coOccurrence.groups.length > 0) {
+        await kvStore.set(`logCoOccurrence:${repo.name}`, JSON.stringify(coOccurrence));
+        log(`    log co-occurrence: ${coOccurrence.groups.length} groups found`);
+      }
+
       await kvStore.set(`sarif:fault:${repo.name}`, JSON.stringify(faultResults));
       await kvStore.set(`faultTrees:${repo.name}`, JSON.stringify(faultTrees));
 
-      log(`  [${repo.name}] [fault]: ${logRoots.length} log roots, ${cfgs.size} CFGs, ${faultTrees.length} fault trees, ${faultResults.length} fault findings`);
+      log(`  [${repo.name}] [fault]: ${logRoots.length} log roots, ${cfgs.size} CFGs, ${faultTrees.length} fault trees (${faultTrees.length} with codeFlows), ${faultResults.length} fault findings`);
     } catch (error) {
       console.error(`  Failed to build fault model for ${repo.name}:`, error);
     }
