@@ -18,7 +18,7 @@ npm install -g multi-model-analyzer
 ### Option 2: Build from source
 
 ```bash
-git clone https://github.com/lumahealthhq/multi-model-analyzer.git
+git clone https://github.com/john-wilmes/multi-model-analyzer.git
 cd multi-model-analyzer
 npm install
 npm link

@@ -18,10 +18,6 @@ Reference for all diagnostics produced by Multi-Model Analyzer. Each finding app
 | `config/conflicting-settings` | error | Configuration | Two settings have contradictory values |
 | `config/high-interaction-strength` | note | Configuration | Parameter pair has high interaction strength |
 | `config/hardcoded-credential-default` | warning | Configuration | Credential field has a hardcoded default that appears to be a real secret |
-| `isc/missing-required` | error | ISC Constraints | Required credential field absent from runtime config |
-| `isc/missing-conditional` | warning | ISC Constraints | Conditionally required field absent (guard condition met) |
-| `isc/unexpected-type` | warning | ISC Constraints | Credential field has wrong runtime type |
-| `isc/unknown-field` | note | ISC Constraints | Config field not found in static analysis constraint set |
 | `fault/unhandled-error-path` | warning | Fault Tree | Catch block with no logging or re-throw |
 | `fault/silent-failure` | warning | Fault Tree | Error condition swallowed silently |
 | `fault/missing-error-boundary` | warning | Fault Tree | Async operation with no error handler |
@@ -201,7 +197,7 @@ These rules validate feature flag models built from code scanning. Constraint ch
 
 **Severity:** warning
 
-**What it means:** A credential-like field in the ISC configuration schema has a non-placeholder string default value. Any account that does not explicitly override this field will silently use the hardcoded value, which may be a real secret committed to source code.
+**What it means:** A credential-like field in the integrator configuration schema has a non-placeholder string default value. Any account that does not explicitly override this field will silently use the hardcoded value, which may be a real secret committed to source code.
 
 **Trigger:** A `FieldConstraint` with a credential-like field name (`password`, `apiKey`, `api_key`, `clientSecret`, `client_secret`, `secret`, `token`, `accessToken`, `access_token`, `refreshToken`, `refresh_token`, `privateKey`, `private_key`, or `username`) has a `defaultValue` that is a non-empty string of length ≥ 3 (≥ 4 for `username`) and is not a known placeholder (`changeme`, `TODO`, `REPLACE_ME`, `your-api-key`, `xxx`, `test`, `default`, etc.). Boolean, numeric, array, and object defaults are not flagged.
 
@@ -210,67 +206,6 @@ These rules validate feature flag models built from code scanning. Constraint ch
 **Action:** Remove the hardcoded default from the configuration schema, or replace it with a well-known placeholder string (e.g., `"REPLACE_ME"`). Ensure accounts that previously relied on the default are updated with explicit values.
 
 **When to ignore:** If the value is intentionally a non-secret string that happens to match a credential field name (e.g., a `token` field that holds a fixed protocol token rather than an auth secret), add the value to the placeholder list or rename the field to something non-credential-like.
-
----
-
-## ISC Constraint Validation
-
-Source: `packages/constraints/src/config-validator.ts`
-
-These rules validate runtime integrator configurations against constraint sets extracted by static analysis of integrator-service-clients (ISC) code. Constraint sets are built per integrator type by analyzing `configuration` schema objects and credential access patterns in ISC source files. Each constraint set tracks coverage metrics so consumers know the confidence level of the analysis.
-
-The constraint extraction pipeline (`packages/constraints`) works in three stages:
-1. **Schema extraction** — parses static `configuration` objects to discover fields, types, defaults, and required flags
-2. **Credential access extraction** — walks tree-sitter ASTs to find all `self.options.integrator.credentials.*` access sites, guard conditions, and default fallbacks
-3. **Constraint building** — merges schema and access data to classify each field as `always` required, `conditional`, or `never` required
-
-### `isc/missing-required`
-
-**Severity:** error
-
-**What it means:** A credential field that is always required by the integrator type is absent from the runtime configuration. The integrator will fail at runtime when it attempts to access this field.
-
-**Trigger:** The constraint set marks the field with `requirement: "always"` (the field appears in the configuration schema with `required: true` and no default value, or every code path accesses the field unconditionally). The runtime config object does not contain a key matching the field name.
-
-**Action:** Add the missing field to the integrator's credentials. Check the constraint set's `evidence` array for the source files and line numbers where the field is required.
-
-**When to ignore:** If the constraint set's coverage is below 100% (`coverage.resolvedAccesses / (resolvedAccesses + unresolvedAccesses)`), the field may be required only in code paths the analyzer couldn't resolve. Check the evidence before dismissing.
-
-### `isc/missing-conditional`
-
-**Severity:** warning
-
-**What it means:** A credential field is conditionally required based on a guard condition that appears to be met in the runtime config, but the field is absent. For example, if `useOAuth2` is `true`, then `oauthClientId` is required.
-
-**Trigger:** The constraint set marks the field with `requirement: "conditional"` and includes a `requiredWhen` guard. The guard condition evaluates to true against the runtime config (e.g., the guard field exists and matches the expected value), but the conditional field is missing.
-
-**Action:** Either add the missing conditional field or change the guard field's value so the condition is no longer met. The `requiredWhen` property on the constraint describes the exact condition.
-
-**When to ignore:** Guard condition evaluation is heuristic — complex compound conditions or aliased variables may cause false positives. If the guard involves fields the analyzer couldn't fully resolve, verify manually.
-
-### `isc/unexpected-type`
-
-**Severity:** warning
-
-**What it means:** A credential field exists in the runtime config but has a different type than what the configuration schema declares. For example, the schema says `port` should be a `number` but the runtime value is a string.
-
-**Trigger:** The constraint set includes a `type` property for the field (extracted from the configuration schema's type annotations), and the runtime value's `typeof` does not match.
-
-**Action:** Fix the field value to match the expected type. Type mismatches can cause subtle runtime bugs (e.g., string `"3000"` instead of number `3000` in port comparison).
-
-**When to ignore:** Some fields are legitimately polymorphic (e.g., accept both string and number). Check the ISC source code to confirm whether the type annotation is strict.
-
-### `isc/unknown-field`
-
-**Severity:** note
-
-**What it means:** A field exists in the runtime config but was not found in the constraint set for this integrator type. The field may be valid but was not seen during static analysis — it could be accessed via dynamic patterns (e.g., `_.get()`, computed property names) that the analyzer doesn't track.
-
-**Trigger:** The runtime config contains a key that does not match any `FieldConstraint.field` in the constraint set, and the key is not a known container path (parent of known fields). Unknown nested subtrees are collapsed to the shallowest unknown ancestor to provide a minimal edit set.
-
-**Action:** Verify that the field is actually consumed by the integrator. If it is, this is a false positive caused by a code pattern the analyzer doesn't cover. If it isn't, the field is dead config that should be removed.
-
-**When to ignore:** Common for integrator types that use dynamic property access patterns (`_.get`, bracket notation). Check the coverage metrics — low coverage increases the likelihood of false positives.
 
 ---
 

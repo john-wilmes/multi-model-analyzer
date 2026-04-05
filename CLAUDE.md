@@ -20,7 +20,6 @@ Monorepo with npm workspaces — 16 `packages/*` workspaces + 2 apps (`apps/cli`
 | `packages/storage-kuzu` | Kuzu-backed graph, search, and KV stores |
 | `packages/correlation` | Cross-repo correlation and service grouping |
 | `packages/mcp` | MCP server exposing analysis tools to LLM agents |
-| `packages/constraints` | ISC credential constraint extraction and config validation |
 | `packages/models/config` | Feature model (config flag inventory) |
 | `packages/models/fault` | Fault trees (fault detection rules) |
 | `packages/models/functional` | Service catalog (functional service inference) |
@@ -60,7 +59,6 @@ The `parseFiles()` orchestrator runs tree-sitter first, then optionally augments
 - Build must pass (`npx tsc --build`) before committing
 - Do not commit generated files: `dist/`, `*.tsbuildinfo`
 - Do not commit `mma.config.json` (contains local paths)
-- Do not commit `luma.mapping.json` or variants (private Luma-specific mapping for the `validate-org-config` skill)
 - Single-developer project: use feature branches + PRs to main. The `protect-main.js` hook (from the playbook repo) blocks direct commits to main/master.
 - All PRs are reviewed by CodeRabbit (GitHub app). Wait for the review and address findings before merging.
 - CodeRabbit MCP server is available for local review queries (coderabbitai in ~/.claude/settings.json)

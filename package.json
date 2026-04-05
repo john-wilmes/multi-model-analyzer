@@ -5,12 +5,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/lumahealthhq/multi-model-analyzer.git"
+    "url": "https://github.com/john-wilmes/multi-model-analyzer.git"
   },
   "bugs": {
-    "url": "https://github.com/lumahealthhq/multi-model-analyzer/issues"
+    "url": "https://github.com/john-wilmes/multi-model-analyzer/issues"
   },
-  "homepage": "https://github.com/lumahealthhq/multi-model-analyzer",
+  "homepage": "https://github.com/john-wilmes/multi-model-analyzer",
   "keywords": [
     "static-analysis",
     "typescript",
@@ -55,7 +55,6 @@
     "packages/mcp",
     "packages/correlation",
     "packages/storage-kuzu",
-    "packages/constraints",
     "apps/cli",
     "apps/dashboard"
   ],

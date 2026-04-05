@@ -17,7 +17,6 @@
     "type-check": "tsc --build --noEmit"
   },
   "dependencies": {
-    "@mma/constraints": "*",
     "@mma/core": "*",
     "@mma/correlation": "*",
     "@mma/ingestion": "*",

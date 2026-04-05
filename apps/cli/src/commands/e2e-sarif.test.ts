@@ -50,6 +50,8 @@ vi.mock("@mma/structural", () => ({
   buildControlFlowGraph: vi.fn(),
   createCfgIdCounter: vi.fn().mockReturnValue({ next: () => 0 }),
   extractCallEdgesFromTreeSitter: vi.fn().mockReturnValue([]),
+  buildImportScopeFromAst: vi.fn().mockReturnValue(new Map()),
+  resolveImportSpecifier: vi.fn().mockReturnValue(undefined),
   computeModuleMetrics: vi.fn().mockReturnValue([]),
   summarizeRepoMetrics: vi.fn().mockReturnValue({
     repo: "", moduleCount: 0, avgInstability: 0, avgAbstractness: 0,

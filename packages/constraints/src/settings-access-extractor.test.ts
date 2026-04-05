@@ -85,7 +85,7 @@ describe("extractSettingsAccesses", () => {
   it("detects integratorObject.settings.integrator.X.Y (dotted nested paths)", async () => {
     const result = await extractSettingsAccesses([
       {
-        path: "integrator-service/handler.js",
+        path: "example-service/handler.js",
         content: `
           function getDays(integratorObject) {
             return integratorObject.settings.integrator.syncWindow.days;
@@ -122,7 +122,7 @@ describe("extractSettingsAccesses", () => {
   it("detects alias: const integratorSettings = integratorObject.settings.integrator; integratorSettings.requireLock", async () => {
     const result = await extractSettingsAccesses([
       {
-        path: "integrator-service/handler.js",
+        path: "example-service/handler.js",
         content: `
           function checkLock(integratorObject) {
             const integratorSettings = integratorObject.settings.integrator;
@@ -140,7 +140,7 @@ describe("extractSettingsAccesses", () => {
   it("detects write access: integratorObject.settings.integrator.X = value", async () => {
     const result = await extractSettingsAccesses([
       {
-        path: "integrator-service/handler.js",
+        path: "example-service/handler.js",
         content: `
           function setFlag(integratorObject) {
             integratorObject.settings.integrator.debugMode = true;
@@ -157,7 +157,7 @@ describe("extractSettingsAccesses", () => {
   it("detects default fallback: integratorObject.settings.integrator.X || defaultVal", async () => {
     const result = await extractSettingsAccesses([
       {
-        path: "integrator-service/handler.js",
+        path: "example-service/handler.js",
         content: `
           function getRetries(integratorObject) {
             return integratorObject.settings.integrator.maxRetries || 3;
@@ -175,7 +175,7 @@ describe("extractSettingsAccesses", () => {
   it("populates enclosingFunction for access inside a named function", async () => {
     const result = await extractSettingsAccesses([
       {
-        path: "integrator-service/handler.js",
+        path: "example-service/handler.js",
         content: `
           function syncRecords(integratorObject) {
             return integratorObject.settings.integrator.syncBatchSize;
@@ -192,7 +192,7 @@ describe("extractSettingsAccesses", () => {
   it("enclosingFunction is undefined for module-scope settings access", async () => {
     const result = await extractSettingsAccesses([
       {
-        path: "integrator-service/config.js",
+        path: "example-service/config.js",
         content: `const batchSize = self.options.integrator.settings.integrator.syncBatchSize;`,
       },
     ]);

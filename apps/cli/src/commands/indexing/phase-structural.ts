@@ -10,9 +10,11 @@ import { isExcludedPath } from "@mma/ingestion";
 import {
   extractDependencyGraph,
   extractCallEdgesFromTreeSitter,
+  buildImportScopeFromAst,
   extractHeritageEdges,
   tagBarrelMediatedCycles,
   getBarrelPaths,
+  resolveImportSpecifier,
 } from "@mma/structural";
 import type { TsNode } from "@mma/structural";
 import type { PipelineContext } from "./types.js";
@@ -152,12 +154,30 @@ export async function runPhaseStructural(
     try {
       const start = performance.now();
       const callEdges: import("@mma/core").GraphEdge[] = [];
+      // Include all previously-indexed paths for this repo so that incremental
+      // runs (where trees only contains re-parsed files) can still resolve
+      // imports into unchanged files.
+      const allSymbolKeys = await kvStore.getByPrefix(`symbols:${repo.name}:`);
+      const symPrefixLen = `symbols:${repo.name}:`.length;
+      const knownPaths = new Set<string>([
+        ...Array.from(allSymbolKeys.keys()).map((k) => k.slice(symPrefixLen)),
+        ...trees.keys(),
+      ]);
+      const packageRootsForRepo = packageRoots;
 
       for (const [filePath, tree] of trees) {
+        const importScope = buildImportScopeFromAst(
+          tree.rootNode as TsNode,
+          (specifier) => {
+            const resolved = resolveImportSpecifier(specifier, filePath, knownPaths, packageRootsForRepo);
+            return knownPaths.has(resolved) ? resolved : undefined;
+          },
+        );
         const edges = extractCallEdgesFromTreeSitter(
           tree.rootNode as TsNode,
           filePath,
           repo.name,
+          importScope,
         );
         callEdges.push(...edges);
       }

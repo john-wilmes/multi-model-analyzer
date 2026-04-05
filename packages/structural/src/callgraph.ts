@@ -86,21 +86,48 @@ interface FunctionInfo {
 }
 
 /**
+ * Binding metadata for an imported name.
+ *
+ * Stored in the import scope to allow call graph resolution to use the
+ * original exported name (not the local alias) and to handle namespace
+ * imports correctly.
+ */
+export interface ImportBinding {
+  /** Resolved file path of the exporting module (no repo prefix). */
+  readonly filePath: string;
+  /**
+   * Original export name in the exporting module.
+   * - Named import `import { fetchData as load }` → `"fetchData"`
+   * - Default import `import foo from './x'` → `"default"` (canonical)
+   * - Namespace import `import * as ns from './x'` → equals the local name
+   */
+  readonly exportedName: string;
+  /** True for `import * as ns` — method calls like `ns.method()` strip the namespace. */
+  readonly isNamespace: boolean;
+}
+
+/**
  * Extract call edges from a tree-sitter AST root node.
  *
  * Walks the AST to find function/method declarations, then finds all
  * call_expression nodes inside each function body and emits "calls" edges.
+ *
+ * @param importScope - Optional map from local name to binding metadata for
+ *   the module that exports it. When provided, bare identifier calls and
+ *   receiver-qualified calls are resolved to the correct source file using
+ *   the original exported name, not the local alias.
  */
 export function extractCallEdgesFromTreeSitter(
   rootNode: TsNode,
   filePath: string,
   repo: string,
+  importScope?: ReadonlyMap<string, ImportBinding>,
 ): GraphEdge[] {
   const edges: GraphEdge[] = [];
   const functions = findFunctions(rootNode);
 
   for (const fn of functions) {
-    collectCallEdges(fn.node, fn.name, filePath, repo, fn.className, edges);
+    collectCallEdges(fn.node, fn.name, filePath, repo, fn.className, edges, importScope);
   }
 
   // Deduplicate edges (same source->target pair)
@@ -178,6 +205,68 @@ function findEnclosingClassName(node: TsNode): string | undefined {
   return undefined;
 }
 
+/**
+ * Collect all identifiers declared as parameters or local variables in a
+ * function node (non-recursively — stops at nested function boundaries).
+ *
+ * Used to detect shadowed imports: if a function parameter or local const/let/var
+ * has the same name as an imported binding, the local binding wins per JS
+ * lexical scoping rules and the import scope should be ignored for that name.
+ */
+function collectLocalNames(fnNode: TsNode): Set<string> {
+  const locals = new Set<string>();
+
+  function addIdentifier(node: TsNode | null): void {
+    if (!node) return;
+    if (node.type === "identifier") { locals.add(node.text); return; }
+    // Destructuring: `function f({ client })` or `const { client } = obj`
+    if (node.type === "object_pattern" || node.type === "array_pattern") {
+      for (const child of node.namedChildren) {
+        if (child.type === "shorthand_property_identifier_pattern") {
+          locals.add(child.text);
+        } else if (child.type === "pair_pattern") {
+          addIdentifier(child.childForFieldName("value"));
+        } else {
+          addIdentifier(child);
+        }
+      }
+    }
+  }
+
+  function walk(node: TsNode, isRoot: boolean): void {
+    // Stop at nested function boundaries (they have their own scope)
+    if (!isRoot && (
+      node.type === "function_declaration" ||
+      node.type === "function_expression" ||
+      node.type === "arrow_function" ||
+      node.type === "method_definition"
+    )) return;
+
+    // Parameters from formal_parameters
+    if (node.type === "formal_parameters") {
+      for (const p of node.namedChildren) {
+        // Simple param: `function f(a)`
+        if (p.type === "identifier") { locals.add(p.text); continue; }
+        // Typed/optional param: `function f(a: T)`, `function f(a?)`
+        const pname = p.childForFieldName("pattern") ?? p.childForFieldName("name");
+        addIdentifier(pname);
+      }
+    }
+
+    // Local const/let/var declarations
+    if (node.type === "variable_declarator") {
+      addIdentifier(node.childForFieldName("name"));
+    }
+
+    for (const child of node.namedChildren) {
+      walk(child, false);
+    }
+  }
+
+  walk(fnNode, true);
+  return locals;
+}
+
 function collectCallEdges(
   functionNode: TsNode,
   callerName: string,
@@ -185,14 +274,27 @@ function collectCallEdges(
   repo: string,
   className: string | undefined,
   edges: GraphEdge[],
+  importScope?: ReadonlyMap<string, ImportBinding>,
 ): void {
   const source = className
     ? makeSymbolId(repo, filePath, `${className}.${callerName}`)
     : makeSymbolId(repo, filePath, callerName);
 
+  // Build an effective scope that excludes names shadowed by local params/vars.
+  // In JS, local bindings always win over module-level import bindings.
+  let effectiveScope = importScope;
+  if (importScope && importScope.size > 0) {
+    const localNames = collectLocalNames(functionNode);
+    if (localNames.size > 0) {
+      const filtered = new Map(importScope);
+      for (const name of localNames) filtered.delete(name);
+      effectiveScope = filtered.size > 0 ? filtered : undefined;
+    }
+  }
+
   function walk(node: TsNode): void {
     if (node.type === "call_expression") {
-      const target = resolveCallTarget(node, filePath, className, repo);
+      const target = resolveCallTarget(node, filePath, className, repo, effectiveScope);
       if (target) {
         edges.push({
           source,
@@ -249,14 +351,19 @@ function resolveCallTarget(
   filePath: string,
   enclosingClassName: string | undefined,
   repo: string,
+  importScope?: ReadonlyMap<string, ImportBinding>,
 ): string | null {
   const fnChild = callNode.childForFieldName("function");
   if (!fnChild) return null;
 
   if (fnChild.type === "identifier") {
-    // Use makeSymbolId with the current file as the best-guess location so
-    // that all call-target IDs are in the same canonical format. Unresolved
-    // bare-name calls will be matched against defined symbols during analysis.
+    // If the name is imported, resolve to the exporting file using the
+    // original export name (not the local alias). E.g.
+    // `import { fetchData as load }; load()` → repo:api.ts#fetchData
+    const binding = importScope?.get(fnChild.text);
+    if (binding) {
+      return makeSymbolId(repo, binding.filePath, binding.exportedName);
+    }
     return makeSymbolId(repo, filePath, fnChild.text);
   }
 
@@ -272,12 +379,21 @@ function resolveCallTarget(
       return makeSymbolId(repo, filePath, `${enclosingClassName}.${property.text}`);
     }
 
-    // obj.method() and chained a.b.method() — the receiver is an external
-    // variable; we don't know which file defines it, so keep as a qualified
-    // name string without a file segment.  Use makeSymbolId with an empty
-    // filePath so the format is still "repo:#obj.method" rather than a bare
-    // "obj.method", giving a consistent repo-scoped prefix.
     if (object.type === "identifier") {
+      const binding = importScope?.get(object.text);
+      if (binding) {
+        if (binding.isNamespace) {
+          // import * as ns → ns.method() strips the namespace prefix so the
+          // edge points to the actual exported symbol: repo:file.ts#method
+          return makeSymbolId(repo, binding.filePath, property.text);
+        }
+        // Named/default import: use the exported name as the receiver so the
+        // edge matches the declaration in the exporting file.
+        // E.g. `import { httpClient as c }; c.get()` → repo:http.ts#httpClient.get
+        return makeSymbolId(repo, binding.filePath, `${binding.exportedName}.${property.text}`);
+      }
+      // Unknown receiver — keep as a qualified name without a file segment so
+      // the format is "repo:#obj.method" rather than a bare string.
       return makeSymbolId(repo, "", `${object.text}.${property.text}`);
     }
 
@@ -293,6 +409,83 @@ function resolveCallTarget(
   // Skip other patterns (new_expression is not a call_expression,
   // computed properties, etc.)
   return null;
+}
+
+/**
+ * Build a local-name → ImportBinding scope from top-level import statements.
+ *
+ * Handles all import forms:
+ * - `import { a, b as c } from './x'`  → `{ a: {x.ts, "a", false}, c: {x.ts, "b", false} }`
+ * - `import def from './x'`             → `{ def: {x.ts, "default", false} }`
+ * - `import * as ns from './x'`         → `{ ns: {x.ts, "ns", true} }`
+ *
+ * The `exportedName` field preserves the original export name so aliased calls
+ * like `import { fetchData as load }; load()` resolve to `file.ts#fetchData`.
+ * The `isNamespace` flag causes `ns.method()` to resolve to `file.ts#method`.
+ *
+ * @param rootNode - Root node of the file's tree-sitter parse tree.
+ * @param resolveSpecifier - Maps an import specifier to its resolved file path
+ *   (bare path, no repo prefix). Return undefined for external/unresolvable
+ *   specifiers so they are omitted from the scope.
+ */
+export function buildImportScopeFromAst(
+  rootNode: TsNode,
+  resolveSpecifier: (specifier: string) => string | undefined,
+): Map<string, ImportBinding> {
+  const scope = new Map<string, ImportBinding>();
+
+  for (const child of rootNode.namedChildren) {
+    if (child.type !== "import_statement") continue;
+
+    // Find the source string literal
+    let specifier: string | null = null;
+    for (const c of child.namedChildren) {
+      if (c.type === "string") {
+        specifier = c.text.replace(/['"]/g, "");
+        break;
+      }
+    }
+    if (!specifier) continue;
+
+    const resolved = resolveSpecifier(specifier);
+    if (!resolved) continue;
+
+    // Walk the import_clause to collect local name → binding
+    for (const clauseChild of child.namedChildren) {
+      if (clauseChild.type !== "import_clause") continue;
+
+      for (const cc of clauseChild.namedChildren) {
+        if (cc.type === "identifier") {
+          // Default import: `import foo from '...'` is semantically equivalent
+          // to `import { default as foo } from '...'`. Canonicalize exportedName
+          // to "default" so both forms produce the same call graph edge.
+          scope.set(cc.text, { filePath: resolved, exportedName: "default", isNamespace: false });
+        } else if (cc.type === "namespace_import") {
+          // Namespace: `import * as ns from '...'`
+          const id = cc.namedChildren.find((c) => c.type === "identifier");
+          if (id) scope.set(id.text, { filePath: resolved, exportedName: id.text, isNamespace: true });
+        } else if (cc.type === "named_imports") {
+          // Named: `import { a, b as c } from '...'`
+          for (const spec of cc.namedChildren) {
+            if (spec.type !== "import_specifier") continue;
+            const nameNode = spec.childForFieldName("name");
+            const aliasNode = spec.childForFieldName("alias");
+            // localNode is the identifier used in the calling file
+            const localNode = aliasNode ?? nameNode;
+            if (localNode && nameNode) {
+              scope.set(localNode.text, {
+                filePath: resolved,
+                exportedName: nameNode.text, // the name as declared in the exporting module
+                isNamespace: false,
+              });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return scope;
 }
 
 export function findCallers(

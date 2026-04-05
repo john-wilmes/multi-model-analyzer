@@ -6,7 +6,6 @@
   },
   "include": ["src"],
   "references": [
-    { "path": "../constraints" },
     { "path": "../core" },
     { "path": "../correlation" },
     { "path": "../ingestion" },

@@ -1,5 +1,5 @@
 [![npm](https://img.shields.io/npm/v/multi-model-analyzer)](https://www.npmjs.com/package/multi-model-analyzer)
-[![CI](https://github.com/lumahealthhq/multi-model-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/lumahealthhq/multi-model-analyzer/actions/workflows/ci.yml)
+[![CI](https://github.com/john-wilmes/multi-model-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/john-wilmes/multi-model-analyzer/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node: 22+](https://img.shields.io/badge/Node-22%2B-brightgreen.svg)](https://nodejs.org/)
 
@@ -108,7 +108,7 @@ mma practices
 mma dashboard
 ```
 
-Or skip indexing entirely -- download the [prebuilt Supabase baseline](https://github.com/lumahealthhq/multi-model-analyzer/releases/latest) (10 repos, 20 MB compressed) and explore immediately:
+Or skip indexing entirely -- download the [prebuilt Supabase baseline](https://github.com/john-wilmes/multi-model-analyzer/releases/latest) (10 repos, 20 MB compressed) and explore immediately:
 
 ```bash
 gunzip supabase-ecosystem-baseline.db.gz
@@ -302,7 +302,6 @@ Monorepo with npm workspaces:
 | `packages/storage` | Graph DB, search (FTS5/BM25), KV store (SQLite) |
 | `packages/storage-kuzu` | Graph DB backend (Kuzu, optional) |
 | `packages/correlation` | Cross-repo service correlation |
-| `packages/constraints` | ISC credential constraint extraction and config validation |
 | `packages/models/*` | Config model, fault model, functional model |
 | `packages/diagnostics` | SARIF emission, redaction, aggregation |
 | `packages/query` | Natural language query routing |

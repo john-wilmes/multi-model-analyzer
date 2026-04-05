@@ -101,10 +101,7 @@ describe("registerTools", () => {
       "get_hotspots", "get_temporal_coupling", "get_patterns",
       "get_symbol_importers",
       "get_config_inventory", "get_config_model", "validate_config",
-      "get_config_constraints", "validate_config_constraints",
       "get_test_configurations", "get_interaction_strength",
-      "get_integrator_config_map",
-      "get_cross_entity_dependencies",
     ];
 
     for (const tool of expectedTools) {
@@ -641,10 +638,7 @@ const ALL_TOOL_NAMES = [
   "get_hotspots", "get_temporal_coupling", "get_patterns",
   "get_symbol_importers",
   "get_config_inventory", "get_config_model", "validate_config",
-  "get_config_constraints", "validate_config_constraints",
   "get_test_configurations", "get_interaction_strength",
-  "get_integrator_config_map",
-  "get_cross_entity_dependencies",
 ] as const;
 
 /** Minimal valid args for every tool so we can invoke them without crashes. */
@@ -678,12 +672,8 @@ const MINIMAL_ARGS: Record<string, Record<string, unknown>> = {
   get_config_inventory:   {},
   get_config_model:       { repo: "test-repo" },
   validate_config:        { repo: "test-repo", config: { flagA: true } },
-  get_config_constraints: { repo: "test-repo" },
-  validate_config_constraints: { repo: "test-repo", integratorType: "ecw10e", config: { username: "admin" } },
   get_test_configurations: { repo: "test-repo" },
   get_interaction_strength: { repo: "test-repo", parameter: "flagA" },
-  get_integrator_config_map: {},
-  get_cross_entity_dependencies: { repo: "test-repo" },
 };
 
 function makeSarifStoresWithRepoMetadata(count: number) {
@@ -1170,10 +1160,10 @@ describe("MCP tool sanity checks", () => {
 // ---------------------------------------------------------------------------
 
 describe("MCP meta-sanity checks", () => {
-  it("exactly 35 tools are registered", () => {
+  it("exactly 32 tools are registered", () => {
     const server = createMockServer();
     register(server, makeStores());
-    expect(server.tools.size).toBe(35);
+    expect(server.tools.size).toBe(31);
   });
 
   it("all registered tools have non-empty descriptions", () => {

@@ -246,7 +246,7 @@ export async function handleRepoFlags(
             if (!reg.name || seenNames.has(reg.name)) continue;
             allFlags.push({
               name: reg.name,
-              repo: "model-repository",
+              repo: "(registry)",
               source: "registry",
               file: undefined,
               line: undefined,

@@ -48,6 +48,8 @@ vi.mock("@mma/structural", () => ({
   buildControlFlowGraph: vi.fn(),
   createCfgIdCounter: vi.fn().mockReturnValue({ next: () => 0 }),
   extractCallEdgesFromTreeSitter: vi.fn().mockReturnValue([]),
+  buildImportScopeFromAst: vi.fn().mockReturnValue(new Map()),
+  resolveImportSpecifier: vi.fn().mockReturnValue(undefined),
   extractHeritageEdges: vi.fn().mockReturnValue([]),
   tagBarrelMediatedCycles: vi.fn().mockReturnValue([]),
   getBarrelPaths: vi.fn().mockReturnValue([]),

@@ -16,7 +16,6 @@
     { "path": "packages/mcp" },
     { "path": "packages/correlation" },
     { "path": "packages/storage-kuzu" },
-    { "path": "packages/constraints" },
     { "path": "apps/cli" },
     { "path": "apps/dashboard" }
   ]
