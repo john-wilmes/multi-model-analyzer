@@ -4,6 +4,16 @@
 
 import type { GraphEdge, RepoConfig, SarifResult, ServiceCatalogEntry } from "@mma/core";
 
+/** A symbol imported from another repo, resolved to its definition. */
+export interface ResolvedImportedSymbol {
+  /** Imported name (e.g. "createClient", "default", "*"). */
+  readonly name: string;
+  /** Canonical file ID where the symbol is actually defined (repo:path). */
+  readonly targetFileId: string;
+  /** SymbolKind from the export (function, class, type, etc.). */
+  readonly kind: string;
+}
+
 /** A cross-repo edge with resolved source and target repos. */
 export interface ResolvedCrossRepoEdge {
   readonly edge: GraphEdge;
@@ -61,10 +71,26 @@ export interface LinchpinService {
   readonly criticalityScore: number;
 }
 
+/** A linchpin package — imported by multiple repos. */
+export interface PackageLinchpin {
+  readonly packageName: string;
+  /** Repo that owns/publishes this package. */
+  readonly ownerRepo: string;
+  /** Number of distinct repos that import this package (excludes the owner since only cross-repo edges are considered). Equals importingRepos.length. */
+  readonly importerCount: number;
+  /** Names of repos that import this package (excludes the owner). */
+  readonly importingRepos: readonly string[];
+  /** Total number of cross-repo import edges for this package. */
+  readonly edgeCount: number;
+  /** Score: importerCount * edgeCount — higher = more critical. */
+  readonly criticalityScore: number;
+}
+
 /** Service correlation results. */
 export interface ServiceCorrelationResult {
   readonly links: readonly ServiceLink[];
   readonly linchpins: readonly LinchpinService[];
+  readonly packageLinchpins: readonly PackageLinchpin[];
   readonly orphanedServices: readonly OrphanedService[];
 }
 
@@ -148,6 +174,31 @@ export interface CrossRepoModelsOptions {
   readonly crossRepoGraph: CrossRepoGraph;
   readonly serviceCorrelation: ServiceCorrelationResult;
   readonly verbose?: boolean;
+}
+
+/** Status of a repo in the incremental indexing workflow. */
+export type RepoStatus = "candidate" | "indexing" | "indexed" | "ignored";
+
+/** How a repo was discovered for indexing. */
+export type DiscoverySource =
+  | "org-scan"
+  | `dependency:${string}`
+  | "user-selected"
+  | `reverse-dep:${string}`;
+
+/** Persisted state for a single repo in the incremental indexing workflow. */
+export interface RepoState {
+  readonly name: string;
+  readonly url: string;
+  readonly defaultBranch?: string;
+  readonly language?: string;
+  readonly status: RepoStatus;
+  readonly discoveredVia: DiscoverySource;
+  readonly discoveredAt: string; // ISO date
+  readonly indexedAt?: string; // ISO date
+  readonly ignoredAt?: string; // ISO date
+  /** Number of cross-repo connections (edges) to/from already-indexed repos. */
+  readonly connectionCount: number;
 }
 
 /** Combined result of all cross-repo model analyses. */

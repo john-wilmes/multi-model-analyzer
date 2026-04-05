@@ -1,8 +1,36 @@
 import { useEffect, useState, useMemo } from 'react';
 import { fetchTemporalCoupling, fetchRepos } from '../api/client.ts';
 import type { CoupledPairRow } from '../api/client.ts';
+import { EmptyState } from '../components/shared/EmptyState.tsx';
 
 type SortKey = 'coChangeCount' | 'confidence' | 'fileA' | 'fileB';
+
+const BOILERPLATE_BASENAMES = new Set([
+  'changelog.md', 'changelog', 'package.json', 'package-lock.json',
+  'yarn.lock', 'pnpm-lock.yaml', '.gitignore', 'license', 'readme.md',
+  'tsconfig.json', 'tsconfig.build.json', 'turbo.json', 'nx.json',
+  'lerna.json', 'renovate.json',
+]);
+
+const BOILERPLATE_PREFIXES = ['.github/', '.husky/'];
+
+const BOILERPLATE_PATTERNS = [
+  /\.eslintrc\b/, /\.prettierrc\b/, /jest\.config\b/, /vitest\.config\b/,
+];
+
+function isBoilerplate(filePath: string): boolean {
+  const normalized = filePath.replace(/\\/g, '/');
+  const basename = normalized.split('/').pop()?.toLowerCase() ?? '';
+  if (BOILERPLATE_BASENAMES.has(basename)) return true;
+  const lower = normalized.toLowerCase();
+  for (const prefix of BOILERPLATE_PREFIXES) {
+    if (lower.includes(`/${prefix}`) || lower.startsWith(prefix)) return true;
+  }
+  for (const pat of BOILERPLATE_PATTERNS) {
+    if (pat.test(basename)) return true;
+  }
+  return false;
+}
 
 export default function TemporalCouplingView() {
   const [pairs, setPairs] = useState<CoupledPairRow[]>([]);
@@ -11,6 +39,7 @@ export default function TemporalCouplingView() {
   const [loading, setLoading] = useState(true);
   const [sortKey, setSortKey] = useState<SortKey>('coChangeCount');
   const [sortAsc, setSortAsc] = useState(false);
+  const [hideBoilerplate, setHideBoilerplate] = useState(true);
 
   useEffect(() => {
     Promise.all([fetchTemporalCoupling(), fetchRepos()])
@@ -25,16 +54,29 @@ export default function TemporalCouplingView() {
       .finally(() => setLoading(false));
   }, []);
 
-  const filtered = useMemo(() => {
-    const base = selectedRepo ? pairs.filter((p) => p.repo === selectedRepo) : pairs;
+  const repoCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const p of pairs) {
+      counts.set(p.repo, (counts.get(p.repo) ?? 0) + 1);
+    }
+    return counts;
+  }, [pairs]);
+
+  const { filtered, totalBeforeFilter, hiddenCount } = useMemo(() => {
+    const repoFiltered = selectedRepo ? pairs.filter((p) => p.repo === selectedRepo) : pairs;
+    const total = repoFiltered.length;
+    const base = hideBoilerplate
+      ? repoFiltered.filter((p) => !isBoilerplate(p.fileA) && !isBoilerplate(p.fileB))
+      : repoFiltered;
+    const hidden = total - base.length;
     const sorted = [...base].sort((a, b) => {
       const av = a[sortKey];
       const bv = b[sortKey];
       if (typeof av === 'string' && typeof bv === 'string') return sortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
       return sortAsc ? (av as number) - (bv as number) : (bv as number) - (av as number);
     });
-    return sorted;
-  }, [pairs, selectedRepo, sortKey, sortAsc]);
+    return { filtered: sorted, totalBeforeFilter: total, hiddenCount: hidden };
+  }, [pairs, selectedRepo, sortKey, sortAsc, hideBoilerplate]);
 
   function handleSort(key: SortKey) {
     if (key === sortKey) setSortAsc(!sortAsc);
@@ -65,24 +107,42 @@ export default function TemporalCouplingView() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
         <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100">Temporal Coupling</h1>
-        <select
-          value={selectedRepo}
-          onChange={(e) => setSelectedRepo(e.target.value)}
-          className="border border-slate-300 dark:border-slate-600 rounded px-3 py-1.5 text-sm bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200"
-        >
-          <option value="">All repos ({pairs.length} pairs)</option>
-          {repos.map((r) => (
-            <option key={r} value={r}>
-              {r} ({pairs.filter((p) => p.repo === r).length})
-            </option>
-          ))}
-        </select>
+        <div className="flex items-center gap-4">
+          <span className="text-sm text-slate-500 dark:text-slate-400">
+            Showing {filtered.length} of {totalBeforeFilter} pairs{hiddenCount > 0 && ` (${hiddenCount} hidden)`}
+          </span>
+          <label className="flex items-center gap-1.5 text-sm text-slate-600 dark:text-slate-400 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={hideBoilerplate}
+              onChange={(e) => setHideBoilerplate(e.target.checked)}
+              className="rounded border-slate-300 dark:border-slate-600"
+            />
+            Hide boilerplate
+          </label>
+          <select
+            value={selectedRepo}
+            onChange={(e) => setSelectedRepo(e.target.value)}
+            className="border border-slate-300 dark:border-slate-600 rounded px-3 py-1.5 text-sm bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200"
+          >
+            <option value="">All repos ({pairs.length} pairs)</option>
+            {repos.map((r) => (
+              <option key={r} value={r}>
+                {r} ({repoCounts.get(r) ?? 0})
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {filtered.length === 0 ? (
-        <p className="text-slate-500 dark:text-slate-400 text-center py-12">No temporal coupling detected for {selectedRepo || 'any repo'}. Files that are frequently committed together will appear here.</p>
+        <EmptyState
+          icon="search"
+          title={`No temporal coupling detected${selectedRepo ? ` for ${selectedRepo}` : ''}`}
+          description="Files that are frequently committed together will appear here."
+        />
       ) : (
         <div className="overflow-x-auto rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800">
           <table className="w-full text-sm">

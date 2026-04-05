@@ -116,8 +116,22 @@ export async function fetchAtdi(): Promise<SystemAtdi | null> {
   return fetchJson<SystemAtdi>(`${BASE}/api/atdi`).catch(() => null);
 }
 
+export interface ResolvedSymbol {
+  name: string;
+  targetFileId: string;
+  kind: string;
+}
+
 export interface CrossRepoEdge {
-  edge: { source: string; target: string; kind: string };
+  edge: {
+    source: string;
+    target: string;
+    kind: string;
+    metadata?: {
+      importedNames?: string[];
+      resolvedSymbols?: ResolvedSymbol[];
+    };
+  };
   sourceRepo: string;
   targetRepo: string;
   packageName: string;
@@ -130,9 +144,19 @@ export interface CrossRepoGraphData {
   upstreamMap: [string, string[]][];
 }
 
-export async function fetchCrossRepoGraph(repo?: string): Promise<CrossRepoGraphData> {
-  const qs = repo ? `?repo=${encodeURIComponent(repo)}` : '';
-  return fetchJson(`${BASE}/api/cross-repo-graph${qs}`);
+export interface PaginationParams {
+  limit?: number;
+  offset?: number;
+  search?: string;
+}
+
+export async function fetchCrossRepoGraph(repo?: string, pagination?: PaginationParams): Promise<CrossRepoGraphData & { total: number; limit: number; offset: number }> {
+  const params = new URLSearchParams();
+  if (repo) params.set('repo', repo);
+  if (pagination?.limit !== undefined) params.set('limit', String(pagination.limit));
+  if (pagination?.offset !== undefined) params.set('offset', String(pagination.offset));
+  const qs = params.toString();
+  return fetchJson(`${BASE}/api/cross-repo-graph${qs ? `?${qs}` : ''}`);
 }
 
 export interface CoupledPairRow {
@@ -204,19 +228,50 @@ export interface SystemCatalogEntry {
   producers: string[];
 }
 
-export async function fetchCrossRepoFeatures(repo?: string): Promise<{ flags: SharedFlag[] }> {
-  const qs = repo ? `?repo=${encodeURIComponent(repo)}` : '';
-  return fetchJson(`${BASE}/api/cross-repo-features${qs}`);
+export async function fetchCrossRepoFeatures(repo?: string, pagination?: PaginationParams): Promise<{ flags: SharedFlag[]; total: number; limit: number; offset: number }> {
+  const params = new URLSearchParams();
+  if (repo) params.set('repo', repo);
+  if (pagination?.limit !== undefined) params.set('limit', String(pagination.limit));
+  if (pagination?.offset !== undefined) params.set('offset', String(pagination.offset));
+  if (pagination?.search) params.set('search', pagination.search);
+  const qs = params.toString();
+  return fetchJson(`${BASE}/api/cross-repo-features${qs ? `?${qs}` : ''}`);
 }
 
-export async function fetchCrossRepoFaults(repo?: string): Promise<{ faultLinks: CrossRepoFaultLink[] }> {
-  const qs = repo ? `?repo=${encodeURIComponent(repo)}` : '';
-  return fetchJson(`${BASE}/api/cross-repo-faults${qs}`);
+export async function fetchCrossRepoFaults(repo?: string, pagination?: PaginationParams): Promise<{ faultLinks: CrossRepoFaultLink[]; total: number; limit: number; offset: number }> {
+  const params = new URLSearchParams();
+  if (repo) params.set('repo', repo);
+  if (pagination?.limit !== undefined) params.set('limit', String(pagination.limit));
+  if (pagination?.offset !== undefined) params.set('offset', String(pagination.offset));
+  if (pagination?.search) params.set('search', pagination.search);
+  const qs = params.toString();
+  return fetchJson(`${BASE}/api/cross-repo-faults${qs ? `?${qs}` : ''}`);
 }
 
-export async function fetchCrossRepoCatalog(repo?: string): Promise<{ entries: SystemCatalogEntry[] }> {
-  const qs = repo ? `?repo=${encodeURIComponent(repo)}` : '';
-  return fetchJson(`${BASE}/api/cross-repo-catalog${qs}`);
+export async function fetchCrossRepoCatalog(repo?: string, pagination?: PaginationParams): Promise<{ entries: SystemCatalogEntry[]; total: number; limit: number; offset: number }> {
+  const params = new URLSearchParams();
+  if (repo) params.set('repo', repo);
+  if (pagination?.limit !== undefined) params.set('limit', String(pagination.limit));
+  if (pagination?.offset !== undefined) params.set('offset', String(pagination.offset));
+  if (pagination?.search) params.set('search', pagination.search);
+  const qs = params.toString();
+  return fetchJson(`${BASE}/api/cross-repo-catalog${qs ? `?${qs}` : ''}`);
+}
+
+// -- Repo State Types --
+
+export interface RepoStateInfo {
+  name: string;
+  url: string;
+  status: 'candidate' | 'indexing' | 'indexed' | 'ignored';
+  discoveredVia: string;
+  discoveredAt: string;
+  indexedAt?: string;
+  connectionCount: number;
+}
+
+export async function fetchRepoStates(): Promise<{ states: RepoStateInfo[] }> {
+  return fetchJson(`${BASE}/api/repo-states`);
 }
 
 // -- Blast Radius Types --

@@ -5,6 +5,13 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { GraphStore, SearchStore, KVStore } from "@mma/storage";
 import { registerTools } from "./tools.js";
 import { registerResources } from "./resources.js";
+import { runWakeUpCheck } from "./wake-up.js";
+
+export interface IndexRepoResult {
+  readonly hadChanges: boolean;
+  readonly totalFiles: number;
+  readonly totalSarifResults: number;
+}
 
 export interface ServerOptions {
   readonly graphStore: GraphStore;
@@ -14,6 +21,9 @@ export interface ServerOptions {
   readonly port?: number; // default: 3001
   readonly host?: string; // default: "127.0.0.1"
   readonly token?: string; // bearer token for HTTP auth
+  readonly mirrorDir?: string; // directory for bare clones (default: "./mirrors")
+  /** Optional callback to run the full indexing pipeline for a single repo. */
+  readonly indexRepo?: (repoConfig: { name: string; localPath: string; bare: boolean }) => Promise<IndexRepoResult>;
 }
 
 function createMcpServer(opts: ServerOptions): McpServer {
@@ -28,10 +38,26 @@ function createMcpServer(opts: ServerOptions): McpServer {
   return server;
 }
 
+function fireWakeUpCheck(kvStore: ServerOptions["kvStore"]): void {
+  void runWakeUpCheck(kvStore).then(result => {
+    if (result.totalNewRepos > 0) {
+      console.error(`[wake-up] Found ${result.totalNewRepos} new repo(s) across ${result.orgsChecked} org(s)`);
+      for (const r of result.results) {
+        if (r.newRepos.length > 0) {
+          console.error(`  ${r.org}: +${r.newRepos.length} (${r.newRepos.map(n => n.name).join(", ")})`);
+        }
+      }
+    }
+  }).catch(err => {
+    console.error("[wake-up] Check failed:", err instanceof Error ? err.message : err);
+  });
+}
+
 async function startStdioServer(opts: ServerOptions): Promise<void> {
   const server = createMcpServer(opts);
   const transport = new StdioServerTransport();
   await server.connect(transport);
+  fireWakeUpCheck(opts.kvStore);
 
   // Block until stdin closes (stdio transport lifecycle)
   await new Promise<void>((resolve) => {
@@ -144,6 +170,7 @@ async function startHttpServer(opts: ServerOptions): Promise<HttpServerHandle> {
   const actualPort = typeof addr === "object" && addr !== null ? addr.port : port;
 
   console.log(`MCP HTTP server listening on http://${host}:${actualPort}/mcp`);
+  fireWakeUpCheck(opts.kvStore);
 
   return {
     port: actualPort,

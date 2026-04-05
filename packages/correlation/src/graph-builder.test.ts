@@ -330,6 +330,55 @@ describe("buildCrossRepoGraph", () => {
     expect(graph.repoPairs.size).toBe(0);
   });
 
+  it("skips URL and registry specifier targets (https:, npm:, bun:, jsr:)", async () => {
+    await store.addEdges([
+      {
+        source: "repo-a/src/server.ts",
+        target: "https://deno.land/std/http/server.ts",
+        kind: "imports",
+        metadata: { repo: "repo-a" },
+      },
+      {
+        source: "repo-a/src/db.ts",
+        target: "npm:postgres",
+        kind: "imports",
+        metadata: { repo: "repo-a" },
+      },
+      {
+        source: "repo-a/src/test.ts",
+        target: "bun:test",
+        kind: "imports",
+        metadata: { repo: "repo-a" },
+      },
+      {
+        source: "repo-a/src/lib.ts",
+        target: "jsr:@supabase/ssr",
+        kind: "imports",
+        metadata: { repo: "repo-a" },
+      },
+    ]);
+
+    const graph = await buildCrossRepoGraph(store, repos, packageRoots);
+
+    expect(graph.edges).toHaveLength(0);
+    expect(graph.repoPairs.size).toBe(0);
+  });
+
+  it("skips canonical-looking targets whose repo prefix is not a known repo", async () => {
+    await store.addEdges([
+      {
+        source: "repo-a/src/index.ts",
+        target: "unknown-repo:src/lib.ts",
+        kind: "imports",
+        metadata: { repo: "repo-a" },
+      },
+    ]);
+
+    const graph = await buildCrossRepoGraph(store, repos, packageRoots);
+
+    expect(graph.edges).toHaveLength(0);
+  });
+
   it("does not match a repo whose localPath is a prefix of another repo name", async () => {
     // Regression test for the prefix-ambiguity bug: a bare startsWith check would
     // incorrectly match /repos/repo-b against /repos/repo-b-extra/src/file.ts.

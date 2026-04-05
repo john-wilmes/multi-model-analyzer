@@ -30,6 +30,7 @@ function makeResult(hadChanges: boolean): IndexResult {
     totalFiles: 10,
     totalSarifResults: 0,
     failedRepos: 0,
+    failedRepoNames: new Set<string>(),
   };
 }
 

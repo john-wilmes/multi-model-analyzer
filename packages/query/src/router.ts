@@ -5,7 +5,7 @@
  * - Structural queries ("what calls X?", "dependencies of Y") -> graph traversal
  * - Search queries ("find error handling in scheduler") -> BM25
  * - Analytical queries ("what are the risks in...") -> pre-computed SARIF lookup
- * - NL queries requiring synthesis -> Sonnet (tier 4, sparingly)
+ * - NL queries requiring synthesis -> local Ollama LLM (optional, tier 3)
  */
 
 import type { SarifLog } from "@mma/core";

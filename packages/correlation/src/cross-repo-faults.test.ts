@@ -37,7 +37,7 @@ function makeServiceLink(endpoint: string, producers: string[], consumers: strin
 }
 
 function makeCorrelation(links: ServiceLink[]): ServiceCorrelationResult {
-  return { links, linchpins: [], orphanedServices: [] };
+  return { links, linchpins: [], packageLinchpins: [], orphanedServices: [] };
 }
 
 describe("detectCrossRepoFaults", () => {

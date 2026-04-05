@@ -7,7 +7,7 @@
 
 import { describe, it, expect, beforeAll } from "vitest";
 import { initTreeSitter, parseSource, extractSymbolsFromTree } from "@mma/parsing";
-import { extractDependencyGraph, buildControlFlowGraph, traceBackward, createCfgIdCounter, isBarrelFile, tagBarrelMediatedCycles } from "../src/index.js";
+import { extractDependencyGraph, buildControlFlowGraph, traceBackward, createCfgIdCounter, isBarrelFile, tagBarrelMediatedCycles, getBarrelPaths } from "../src/index.js";
 import type { TreeSitterTree } from "@mma/parsing";
 
 beforeAll(async () => {
@@ -606,5 +606,230 @@ describe("tagBarrelMediatedCycles", () => {
 
     const annotated = tagBarrelMediatedCycles(cycles, files, "test-repo");
     expect(annotated[0]!.barrelMediated).toBe(false);
+  });
+});
+
+describe("extractDependencyGraph with suppressBarrelCycles", () => {
+  it("suppresses a cycle that passes through a barrel index.ts", () => {
+    // a.ts imports index.ts (barrel), index.ts re-exports from a.ts → barrel-mediated cycle
+    const files = new Map<string, TreeSitterTree>();
+    files.set("src/index.ts", parseSource(`export * from "./a";`, "src/index.ts"));
+    files.set("src/a.ts", parseSource(`import { x } from "./index";`, "src/a.ts"));
+
+    const graph = extractDependencyGraph(files, "test-repo", {
+      detectCircular: true,
+      suppressBarrelCycles: true,
+    });
+
+    // The edges still exist (import graph is unchanged)
+    expect(graph.edges.length).toBeGreaterThan(0);
+    // But the barrel-mediated cycle is suppressed from circularDependencies
+    expect(graph.circularDependencies).toHaveLength(0);
+  });
+
+  it("does NOT suppress a real cycle with no barrel files", () => {
+    // a.ts <-> b.ts — a genuine circular dependency, no barrel
+    const files = new Map<string, TreeSitterTree>();
+    files.set("src/a.ts", parseSource(`export class A {}\nimport { B } from "./b";`, "src/a.ts"));
+    files.set("src/b.ts", parseSource(`export class B {}\nimport { A } from "./a";`, "src/b.ts"));
+
+    const graph = extractDependencyGraph(files, "test-repo", {
+      detectCircular: true,
+      suppressBarrelCycles: true,
+    });
+
+    // The real cycle must still be reported
+    expect(graph.circularDependencies.length).toBeGreaterThan(0);
+    const hasCycle = graph.circularDependencies.some(
+      (c) => c.some((n) => n.includes("a.ts")) && c.some((n) => n.includes("b.ts")),
+    );
+    expect(hasCycle).toBe(true);
+  });
+
+  it("suppresses barrel-mediated cycles but keeps real cycles in the same graph", () => {
+    // real cycle: a.ts <-> b.ts
+    // barrel-mediated cycle: c.ts -> index.ts (re-exports c.ts)
+    const files = new Map<string, TreeSitterTree>();
+    files.set("src/a.ts", parseSource(`export class A {}\nimport { B } from "./b";`, "src/a.ts"));
+    files.set("src/b.ts", parseSource(`export class B {}\nimport { A } from "./a";`, "src/b.ts"));
+    files.set("src/index.ts", parseSource(`export * from "./c";`, "src/index.ts"));
+    files.set("src/c.ts", parseSource(`import { x } from "./index";`, "src/c.ts"));
+
+    const graph = extractDependencyGraph(files, "test-repo", {
+      detectCircular: true,
+      suppressBarrelCycles: true,
+    });
+
+    // Real cycle survives
+    const hasRealCycle = graph.circularDependencies.some(
+      (c) => c.some((n) => n.includes("a.ts")) && c.some((n) => n.includes("b.ts")),
+    );
+    expect(hasRealCycle).toBe(true);
+
+    // Barrel-mediated cycle is gone
+    const hasBarrelCycle = graph.circularDependencies.some(
+      (c) => c.some((n) => n.includes("index.ts")),
+    );
+    expect(hasBarrelCycle).toBe(false);
+  });
+
+  it("when suppressBarrelCycles is false (default), barrel-mediated cycles are still reported", () => {
+    const files = new Map<string, TreeSitterTree>();
+    files.set("src/index.ts", parseSource(`export * from "./a";`, "src/index.ts"));
+    files.set("src/a.ts", parseSource(`import { x } from "./index";`, "src/a.ts"));
+
+    const graph = extractDependencyGraph(files, "test-repo", { detectCircular: true });
+
+    // Default behavior: barrel cycles are NOT suppressed
+    expect(graph.circularDependencies.length).toBeGreaterThan(0);
+  });
+});
+
+describe("importedNames metadata on dependency edges", () => {
+  it("records named imports in edge metadata", () => {
+    const files = new Map<string, TreeSitterTree>();
+    files.set("src/app.ts", parseSource(
+      `import { foo, bar } from "./module";`,
+      "src/app.ts",
+    ));
+    files.set("src/module.ts", parseSource(`export const foo = 1; export const bar = 2;`, "src/module.ts"));
+
+    const graph = extractDependencyGraph(files, "test-repo");
+    const edge = graph.edges.find((e) => e.source === "test-repo:src/app.ts");
+    expect(edge).toBeDefined();
+    expect(edge!.metadata!.importedNames).toEqual(["foo", "bar"]);
+  });
+
+  it("records default import as 'default' in metadata", () => {
+    const files = new Map<string, TreeSitterTree>();
+    files.set("src/app.ts", parseSource(
+      `import foo from "./module";`,
+      "src/app.ts",
+    ));
+    files.set("src/module.ts", parseSource(`export default function foo() {}`, "src/module.ts"));
+
+    const graph = extractDependencyGraph(files, "test-repo");
+    const edge = graph.edges.find((e) => e.source === "test-repo:src/app.ts");
+    expect(edge).toBeDefined();
+    expect(edge!.metadata!.importedNames).toEqual(["default"]);
+  });
+
+  it("records namespace import as '*' in metadata", () => {
+    const files = new Map<string, TreeSitterTree>();
+    files.set("src/app.ts", parseSource(
+      `import * as ns from "./module";`,
+      "src/app.ts",
+    ));
+    files.set("src/module.ts", parseSource(`export const x = 1;`, "src/module.ts"));
+
+    const graph = extractDependencyGraph(files, "test-repo");
+    const edge = graph.edges.find((e) => e.source === "test-repo:src/app.ts");
+    expect(edge).toBeDefined();
+    expect(edge!.metadata!.importedNames).toEqual(["*"]);
+  });
+
+  it("records mixed default+named import in metadata", () => {
+    const files = new Map<string, TreeSitterTree>();
+    files.set("src/app.ts", parseSource(
+      `import def, { a, b } from "./module";`,
+      "src/app.ts",
+    ));
+    files.set("src/module.ts", parseSource(`export const a = 1; export const b = 2;`, "src/module.ts"));
+
+    const graph = extractDependencyGraph(files, "test-repo");
+    const edge = graph.edges.find((e) => e.source === "test-repo:src/app.ts");
+    expect(edge).toBeDefined();
+    expect(edge!.metadata!.importedNames).toEqual(["default", "a", "b"]);
+  });
+
+  it("omits importedNames for side-effect-only imports", () => {
+    const files = new Map<string, TreeSitterTree>();
+    files.set("src/app.ts", parseSource(
+      `import "./module";`,
+      "src/app.ts",
+    ));
+    files.set("src/module.ts", parseSource(`export const x = 1;`, "src/module.ts"));
+
+    const graph = extractDependencyGraph(files, "test-repo");
+    const edge = graph.edges.find((e) => e.source === "test-repo:src/app.ts");
+    expect(edge).toBeDefined();
+    // Side-effect import has no imported names — key should be absent
+    expect(edge!.metadata!.importedNames).toBeUndefined();
+  });
+
+  it("records named re-export names in metadata", () => {
+    const files = new Map<string, TreeSitterTree>();
+    files.set("src/index.ts", parseSource(
+      `export { x } from "./module";`,
+      "src/index.ts",
+    ));
+    files.set("src/module.ts", parseSource(`export const x = 1;`, "src/module.ts"));
+
+    const graph = extractDependencyGraph(files, "test-repo");
+    const edge = graph.edges.find((e) => e.source === "test-repo:src/index.ts");
+    expect(edge).toBeDefined();
+    expect(edge!.metadata!.importedNames).toEqual(["x"]);
+  });
+
+  it("records '*' for star re-export in metadata", () => {
+    const files = new Map<string, TreeSitterTree>();
+    files.set("src/index.ts", parseSource(
+      `export * from "./module";`,
+      "src/index.ts",
+    ));
+    files.set("src/module.ts", parseSource(`export const x = 1;`, "src/module.ts"));
+
+    const graph = extractDependencyGraph(files, "test-repo");
+    const edge = graph.edges.find((e) => e.source === "test-repo:src/index.ts");
+    expect(edge).toBeDefined();
+    expect(edge!.metadata!.importedNames).toEqual(["*"]);
+  });
+});
+
+describe("getBarrelPaths", () => {
+  it("returns index.ts files that are pure barrel files", () => {
+    const files = new Map<string, TreeSitterTree>();
+    files.set("src/index.ts", parseSource(
+      `export * from "./service";\nexport { Config } from "./config";`,
+      "src/index.ts",
+    ));
+    files.set("src/service.ts", parseSource(`export class Service {}`, "src/service.ts"));
+    files.set("src/config.ts", parseSource(`export interface Config { port: number; }`, "src/config.ts"));
+
+    const barrels = getBarrelPaths(files);
+    expect(barrels).toContain("src/index.ts");
+  });
+
+  it("excludes index.ts with local exports (not a pure barrel)", () => {
+    const files = new Map<string, TreeSitterTree>();
+    files.set("src/index.ts", parseSource(
+      `export * from "./service";\nexport const version = "1.0";`,
+      "src/index.ts",
+    ));
+    files.set("src/service.ts", parseSource(`export class Service {}`, "src/service.ts"));
+
+    const barrels = getBarrelPaths(files);
+    expect(barrels).not.toContain("src/index.ts");
+  });
+
+  it("excludes non-index files even if they only re-export", () => {
+    const files = new Map<string, TreeSitterTree>();
+    files.set("src/re-exports.ts", parseSource(
+      `export * from "./service";`,
+      "src/re-exports.ts",
+    ));
+    files.set("src/service.ts", parseSource(`export class Service {}`, "src/service.ts"));
+
+    const barrels = getBarrelPaths(files);
+    expect(barrels).not.toContain("src/re-exports.ts");
+  });
+
+  it("returns empty array when no barrel files exist", () => {
+    const files = new Map<string, TreeSitterTree>();
+    files.set("src/app.ts", parseSource(`import { x } from "./util";`, "src/app.ts"));
+    files.set("src/util.ts", parseSource(`export const x = 1;`, "src/util.ts"));
+
+    const barrels = getBarrelPaths(files);
+    expect(barrels).toHaveLength(0);
   });
 });

@@ -9,6 +9,8 @@ import DependencyGraph from './components/DependencyGraph.tsx';
 import BlastRadius from './components/BlastRadius.tsx';
 import CrossRepoView from './components/CrossRepoView.tsx';
 import TemporalCouplingView from './views/TemporalCouplingView.tsx';
+import HotspotsView from './views/HotspotsView.tsx';
+import PatternsView from './views/PatternsView.tsx';
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -61,6 +63,8 @@ export default function App() {
             <Route path="/blast-radius/:name" element={<BlastRadius />} />
             <Route path="/cross-repo" element={<CrossRepoView />} />
             <Route path="/temporal-coupling" element={<TemporalCouplingView />} />
+            <Route path="/hotspots" element={<HotspotsView />} />
+            <Route path="/patterns" element={<PatternsView />} />
           </Route>
         </Routes>
       </BrowserRouter>

@@ -31,7 +31,7 @@ import { createSarifResult, createLogicalLocation } from "@mma/core";
 import { detectChanges, classifyFiles, getFileContent, getFileContentBatch, getHeadCommit, isBareRepo, getCommitHistory } from "@mma/ingestion";
 import { parseFiles } from "@mma/parsing";
 import type { TreeSitterTree } from "@mma/parsing";
-import { extractDependencyGraph, buildControlFlowGraph, createCfgIdCounter, extractCallEdgesFromTreeSitter, computeModuleMetrics, summarizeRepoMetrics, detectDeadExports, detectInstabilityViolations, extractHeritageEdges, tagBarrelMediatedCycles } from "@mma/structural";
+import { extractDependencyGraph, buildControlFlowGraph, createCfgIdCounter, extractCallEdgesFromTreeSitter, computeModuleMetrics, summarizeRepoMetrics, detectDeadExports, detectInstabilityViolations, extractHeritageEdges, tagBarrelMediatedCycles, getBarrelPaths } from "@mma/structural";
 import type { TreeSitterNode } from "@mma/parsing";
 import { buildFeatureModel, extractConstraintsFromCode, validateFeatureModel } from "@mma/model-config";
 import { identifyLogRoots, traceBackwardFromLog, buildFaultTree, analyzeGaps, analyzeCascadingRisk, FAULT_RULES } from "@mma/model-fault";
@@ -61,15 +61,16 @@ import {
   tier1Summarize,
   tier2Summarize,
   shouldEscalateToTier3,
-  tier3BatchSummarize,
-  tier4BatchSummarize,
-  SONNET_DEFAULTS,
-  narrateAll,
+  tier3Summarize as ollamaTier3Summarize,
+  isOllamaAvailable,
+  tier3SummarizeLlmApi,
+  isLlmApiAvailable,
 } from "@mma/summarization";
-import type { ServiceSummaryInput, RepoNarrationInput, SystemNarrationInput } from "@mma/summarization";
+import type { OllamaOptions, LlmApiOptions } from "@mma/summarization";
 import { computeAffectedScope } from "./affected-scope.js";
 import type { AffectedScope } from "./affected-scope.js";
 import { PipelineTracer } from "../tracer.js";
+import { ProgressTracker } from "./progress.js";
 
 function pLimit(concurrency: number) {
   if (!Number.isInteger(concurrency) || concurrency < 1) {
@@ -120,15 +121,17 @@ export interface IndexOptions {
   readonly searchStore: SearchStore;
   readonly verbose: boolean;
   readonly enableTsMorph?: boolean;
-  readonly anthropicApiKey?: string;
   readonly maxApiCalls?: number;
   readonly rules?: readonly ArchitecturalRule[];
   readonly affected?: boolean;
-  readonly narrateOnly?: boolean;
-  readonly narrateForce?: boolean;
   readonly forceFullReindex?: boolean;
   readonly advisories?: readonly Advisory[];
   readonly enrich?: boolean;
+  readonly ollamaUrl?: string;
+  readonly ollamaModel?: string;
+  readonly llmProvider?: "anthropic" | "openai" | "ollama";
+  readonly llmApiKey?: string;
+  readonly llmModel?: string;
 }
 
 export interface IndexResult {
@@ -137,6 +140,8 @@ export interface IndexResult {
   readonly totalFiles: number;
   readonly totalSarifResults: number;
   readonly failedRepos: number;
+  /** Names of repos that failed at any pipeline phase. */
+  readonly failedRepoNames: ReadonlySet<string>;
 }
 
 export async function indexCommand(options: IndexOptions): Promise<IndexResult> {
@@ -148,153 +153,42 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
 
   log(`Indexing ${repos.length} repositories...`);
 
-  // Narrate-only mode: skip Phases 1-7, regenerate narrations from stored data
-  if (options.narrateOnly) {
-    if (!options.anthropicApiKey) {
-      throw new Error("--narrate-only requires an Anthropic API key");
-    }
-    log("Narrate-only mode: skipping analysis, regenerating narrations from stored data...");
-
-    // Reconstruct repoSarifCounts from stored per-category SARIF keys
-    const repoSarifCounts = new Map<string, Record<string, number>>();
-    let totalFindings = 0;
-    for (const repo of repos) {
-      const counts: Record<string, number> = {};
-      for (const key of ["config", "fault", "deadExports", "arch", "instability", "blastRadius", "hotspot", "temporal-coupling", "vuln"] as const) {
-        const json = await kvStore.get(`sarif:${key}:${repo.name}`);
-        if (json) {
-          try {
-            const results = JSON.parse(json) as unknown[];
-            counts[key] = results.length;
-            totalFindings += results.length;
-          } catch { /* skip malformed */ }
-        }
+  // LLM availability check (when --enrich is set)
+  if (options.enrich) {
+    const provider = options.llmProvider ?? "ollama";
+    if (provider === "anthropic" || provider === "openai") {
+      const apiKey =
+        options.llmApiKey ??
+        (provider === "anthropic"
+          ? process.env.ANTHROPIC_API_KEY
+          : process.env.OPENAI_API_KEY) ??
+        "";
+      if (!apiKey) {
+        throw new Error(
+          `No API key for ${provider}. Set --llm-api-key or ${provider === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY"} env var.`,
+        );
       }
-      repoSarifCounts.set(repo.name, counts);
-    }
-    // Add cross-repo SARIF counts
-    for (const crossRepoKey of ["sarif:correlation", "sarif:cross-repo-models"] as const) {
-      const json = await kvStore.get(crossRepoKey);
-      if (json) {
-        try {
-          totalFindings += (JSON.parse(json) as unknown[]).length;
-        } catch { /* skip */ }
+      const available = await isLlmApiAvailable({ provider, apiKey, timeout: 5_000 });
+      if (!available) {
+        throw new Error(`${provider} API is not reachable. Check your API key and network.`);
       }
-    }
-
-    // Build narration inputs (same logic as Phase 8 in the full pipeline)
-    tracer.startPhase("Narration");
-    const narrationStart = performance.now();
-    const repoInputs: RepoNarrationInput[] = [];
-
-    for (const repo of repos) {
-      const patternsJson = await kvStore.get(`patterns:${repo.name}`);
-      const patterns: string[] = patternsJson
-        ? (JSON.parse(patternsJson) as Array<{ kind: string }>).map((p) => p.kind)
-        : [];
-
-      const summaryJson = await kvStore.get(`metricsSummary:${repo.name}`);
-      const metricsSummary = summaryJson ? JSON.parse(summaryJson) as RepoNarrationInput["metricsSummary"] : null;
-
-      const sarifCounts = repoSarifCounts.get(repo.name) ?? {};
-
-      // Recover service names + summaries from tier-4 cache
-      const services: string[] = [];
-      const serviceSummaries: string[] = [];
-      const t4Keys = await kvStore.keys("summary:t4:");
-      for (const k of t4Keys) {
-        const val = await kvStore.get(k);
-        if (val) {
-          try {
-            const s = JSON.parse(val) as { entityId: string; description: string };
-            const repoServicePrefix = `service:${repo.name}/`;
-            if (s.entityId.startsWith(repoServicePrefix)) {
-              services.push(s.entityId.slice(repoServicePrefix.length));
-              if (s.description) serviceSummaries.push(s.description);
-            }
-          } catch { /* skip malformed */ }
-        }
+      log(`${provider} API available`);
+    } else {
+      const ollamaUrl = options.ollamaUrl ?? "http://localhost:11434";
+      const available = await isOllamaAvailable(ollamaUrl);
+      if (!available) {
+        throw new Error(`Ollama is not reachable at ${ollamaUrl}. Start Ollama or specify --ollama-url.`);
       }
-
-      // Cross-repo edge count for this repo
-      let crossRepoEdges = 0;
-      const corrGraphJson = await kvStore.get("correlation:graph");
-      if (corrGraphJson) {
-        try {
-          const cg = JSON.parse(corrGraphJson) as { edges: Array<{ source: string; target: string }> };
-          crossRepoEdges = cg.edges.filter(
-            (e) => e.source.startsWith(repo.name) || e.target.startsWith(repo.name),
-          ).length;
-        } catch { /* skip */ }
-      }
-
-      repoInputs.push({ repo: repo.name, patterns, metricsSummary, sarifCounts, services, serviceSummaries, crossRepoEdges });
+      log(`Ollama available at ${ollamaUrl}`);
     }
-
-    // System overview input
-    let systemInput: SystemNarrationInput | undefined;
-    if (repos.length > 1) {
-      const corrServicesJson = await kvStore.get("correlation:services");
-      const linchpins: string[] = [];
-      let crossRepoEdgeCount = 0;
-      if (corrServicesJson) {
-        try {
-          const cs = JSON.parse(corrServicesJson) as { linchpins: string[] };
-          linchpins.push(...cs.linchpins);
-        } catch { /* skip */ }
-      }
-      const corrGraphJson = await kvStore.get("correlation:graph");
-      if (corrGraphJson) {
-        try {
-          const cg = JSON.parse(corrGraphJson) as { edges: unknown[] };
-          crossRepoEdgeCount = cg.edges.length;
-        } catch { /* skip */ }
-      }
-      systemInput = {
-        repoNames: repos.map((r) => r.name),
-        totalFindings,
-        crossRepoEdgeCount,
-        linchpins,
-      };
-    }
-
-    const narrationResults = await narrateAll(repoInputs, systemInput, {
-      apiKey: options.anthropicApiKey,
-      kvStore,
-      force: options.narrateForce,
-    });
-
-    const cached = narrationResults.filter((r) => r.cached).length;
-    const generated = narrationResults.length - cached;
-    const narrationMs = Math.round(performance.now() - narrationStart);
-    log(`  Narration: ${narrationResults.length} total (${generated} generated, ${cached} cached) in ${narrationMs}ms`);
-    tracer.record("narrationsGenerated", generated);
-    tracer.record("narrationsCached", cached);
-    tracer.endPhase();
-
-    // Store pipeline trace
-    const trace = tracer.finalize();
-    await kvStore.set("pipeline:trace:latest", JSON.stringify(trace));
-    if (verbose) {
-      log(PipelineTracer.formatSummary(trace));
-    }
-
-    log("Narration complete.");
-    return {
-      hadChanges: false,
-      repoCount: repos.length,
-      totalFiles: 0,
-      totalSarifResults: totalFindings,
-      failedRepos: 0,
-    };
   }
 
-  // Load previous commit hashes
+  // Load previous commit hashes (parallel KV reads)
   const previousCommits = new Map<string, string>();
-  for (const repo of repos) {
+  await Promise.all(repos.map(async (repo) => {
     const prev = await kvStore.get(`commit:${repo.name}`);
     if (prev) previousCommits.set(repo.name, prev);
-  }
+  }));
 
   // Phase 1: Ingestion
   log("Phase 1: Detecting changes...");
@@ -302,8 +196,9 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
   const phase1Start = performance.now();
   const changeSets: ChangeSet[] = [];
   const isTTY = process.stderr.isTTY;
-  for (let i = 0; i < repos.length; i++) {
-    const repo = repos[i]!;
+  let ingestionDone = 0;
+  const ingestionLimit = pLimit(4);
+  await Promise.all(repos.map((repo, i) => ingestionLimit(async () => {
     if (!verbose) {
       const progress = `[${i + 1}/${repos.length}] ${repo.name}`;
       if (isTTY) {
@@ -323,7 +218,11 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       console.error(`  Failed to index ${repo.name}:`, error);
       failedRepoNames.add(repo.name);
     }
-  }
+    ingestionDone++;
+    if (!verbose && isTTY) {
+      process.stderr.write(`\r[${ingestionDone}/${repos.length}] done\x1b[K`);
+    }
+  })));
   // Clear progress line when done (TTY only)
   if (!verbose && isTTY && repos.length > 0) {
     process.stderr.write(`\r\x1b[K`);
@@ -335,28 +234,24 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
   // Phase 0: Cleanup stale data for deleted files
   tracer.startPhase("Cleanup");
   const phase0Start = performance.now();
-  for (const changeSet of changeSets) {
+  await Promise.all(changeSets.map(async (changeSet) => {
     if (changeSet.deletedFiles.length > 0) {
       log(`Phase 0: Cleaning up ${changeSet.deletedFiles.length} deleted files from ${changeSet.repo}...`);
-      const deletedIds: string[] = [];
-      for (const filePath of changeSet.deletedFiles) {
-        deletedIds.push(filePath);
-      }
 
       // Remove from search index
-      await options.searchStore.delete(deletedIds);
+      await options.searchStore.delete(changeSet.deletedFiles);
 
       // Remove stale graph edges sourced from deleted files
       await options.graphStore.deleteEdgesForFiles(changeSet.repo, changeSet.deletedFiles);
 
       // Remove KV entries associated with deleted files
-      for (const filePath of changeSet.deletedFiles) {
-        await kvStore.deleteByPrefix(`symbols:${changeSet.repo}:${filePath}`);
-      }
+      await Promise.all(changeSet.deletedFiles.map(filePath =>
+        kvStore.deleteByPrefix(`symbols:${changeSet.repo}:${filePath}`)
+      ));
 
       log(`  Removed stale data for ${changeSet.deletedFiles.length} files`);
     }
-  }
+  }));
   tracer.endPhase();
   log(`  Phase 0: ${Math.round(performance.now() - phase0Start)}ms`);
 
@@ -389,7 +284,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     }
     // If cache was empty (e.g., first run after upgrade), scan repos via git
     if (packageRoots.size === 0) {
-      for (const repo of repos) {
+      await Promise.all(repos.map(async (repo) => {
         try {
           const isBare = await checkBareRepo(repo.localPath);
           const commit = await resolveCommitForBare(repo.localPath, changeSets, repo.name);
@@ -399,7 +294,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
             { cwd: repo.localPath, encoding: "utf-8", timeout: 10000 },
           );
           const pjPaths = lsOutput.split("\n").filter(p => p.endsWith("/package.json") || p === "package.json");
-          for (const pjPath of pjPaths) {
+          await Promise.all(pjPaths.map(async (pjPath) => {
             try {
               const raw = isBare
                 ? await getFileContent(repo.localPath, commit, pjPath)
@@ -410,23 +305,23 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
                 packageRoots.set(name, join(repo.localPath, dirname(pjPath)));
               }
             } catch { /* skip unreadable */ }
-          }
+          }));
         } catch { /* skip repos that fail git ls-tree */ }
-      }
+      }));
       if (packageRoots.size > 0) {
         await kvStore.set("_packageRoots", JSON.stringify([...packageRoots.entries()]));
         log(`  Built packageRoots from git scan: ${packageRoots.size} packages`);
       }
     }
   } else {
-    for (const repo of repos) {
+    await Promise.all(repos.map(async (repo) => {
       const classified = classifiedByRepo.get(repo.name);
-      if (!classified) continue;
+      if (!classified) return;
       const packageJsonFiles = classified.filter(
         (f) => f.kind === "json" && f.path.endsWith("package.json"),
       );
       const isBare = await checkBareRepo(repo.localPath);
-      for (const pjFile of packageJsonFiles) {
+      await Promise.all(packageJsonFiles.map(async (pjFile) => {
         try {
           const raw = isBare
             ? await getFileContent(repo.localPath, await resolveCommitForBare(repo.localPath, changeSets, repo.name), pjFile.path)
@@ -443,8 +338,8 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         } catch {
           // Skip unreadable package.json files
         }
-      }
-    }
+      }));
+    }));
     if (packageRoots.size > 0) {
       await kvStore.set("_packageRoots", JSON.stringify([...packageRoots.entries()]));
       log(`  Built packageRoots map: ${packageRoots.size} packages across all repos`);
@@ -670,6 +565,29 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         const annotated = tagBarrelMediatedCycles(graph.circularDependencies, trees, repo.name);
         const barrelFlags = annotated.map((a) => a.barrelMediated);
         await kvStore.set(`circularDepsBarrel:${repo.name}`, JSON.stringify(barrelFlags));
+        // Persist barrel file paths for cross-repo symbol resolution.
+        const barrelKey = `barrelFiles:${repo.name}`;
+        const newBarrels = getBarrelPaths(trees);
+        if (options.forceFullReindex) {
+          if (newBarrels.length > 0) {
+            await kvStore.set(barrelKey, JSON.stringify(newBarrels));
+          } else {
+            await kvStore.delete(barrelKey);
+          }
+        } else {
+          // Incremental: merge with previous barrel set. Keep barrels from the
+          // previous run that were not re-parsed, and add newly detected ones.
+          const prev = await kvStore.get(barrelKey);
+          const existing = prev ? (JSON.parse(prev) as string[]) : [];
+          const parsedPaths = new Set(trees.keys());
+          const merged = existing.filter((p) => !parsedPaths.has(p));
+          merged.push(...newBarrels);
+          if (merged.length > 0) {
+            await kvStore.set(barrelKey, JSON.stringify(merged));
+          } else {
+            await kvStore.delete(barrelKey);
+          }
+        }
         if (graph.circularDependencies.length > 0) {
           const barrelCount = barrelFlags.filter(Boolean).length;
           log(`    ${graph.circularDependencies.length} circular dependencies found (${barrelCount} barrel-mediated)`);
@@ -851,7 +769,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
 
         const packageJsons = new Map<string, PackageJsonInfo>();
         const isBare = await checkBareRepo(repo.localPath);
-        for (const pjFile of packageJsonFiles) {
+        await Promise.all(packageJsonFiles.map(async (pjFile) => {
           try {
             const raw = isBare
               ? await getFileContent(repo.localPath, await resolveCommitForBare(repo.localPath, changeSets, repo.name), pjFile.path)
@@ -868,7 +786,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
           } catch {
             log(`    warning: could not read ${pjFile.path}`);
           }
-        }
+        }));
 
         const filePaths = parsedFiles && parsedFiles.length > 0
           ? parsedFiles.map((pf) => pf.path)
@@ -1200,13 +1118,13 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         let tier1ReadErrors = 0;
         let tier1CacheHits = 0;
         const BATCH_SIZE = 20;
-        // Source snippets for tier-3 context (entityId → first ~30 lines of symbol body)
-        const sourceContextMap = new Map<string, string>();
+        // Tier-3 snippets are loaded lazily at tier-3 time to avoid OOM on large repos.
         const MAX_SNIPPET_LINES = 30;
         const isBareForTier1 = await checkBareRepo(repo.localPath);
         const bareCommitForTier1 = isBareForTier1
           ? await resolveCommitForBare(repo.localPath, changeSets, repo.name)
           : undefined;
+        const tier1Progress = new ProgressTracker(parsedFiles.length);
 
         for (let batchStart = 0; batchStart < parsedFiles.length; batchStart += BATCH_SIZE) {
           const batch = parsedFiles.slice(batchStart, batchStart + BATCH_SIZE);
@@ -1241,7 +1159,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
               if (cached) {
                 tier1CacheHits++;
                 try {
-                  return { summaries: JSON.parse(cached) as Summary[], symbols: pf.symbols, sourceLines: null as string[] | null, filePath: pf.path };
+                  return { summaries: JSON.parse(cached) as Summary[], symbols: pf.symbols, filePath: pf.path };
                 } catch {
                   // Corrupted cache entry; re-generate below
                 }
@@ -1258,33 +1176,22 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
                 if (summaries.length > 0) {
                   await kvStore.set(cacheKey, JSON.stringify(summaries));
                 }
-                return { summaries, symbols: pf.symbols, sourceLines: sourceText.split("\n"), filePath: pf.path };
+                return { summaries, symbols: pf.symbols, filePath: pf.path };
               } catch {
                 tier1ReadErrors++;
-                return { summaries: [] as Summary[], symbols: pf.symbols, sourceLines: null as string[] | null, filePath: pf.path };
+                return { summaries: [] as Summary[], symbols: pf.symbols, filePath: pf.path };
               }
             }),
           );
-          for (const { summaries: tier1, symbols, sourceLines, filePath } of results) {
+          for (const { summaries: tier1 } of results) {
             for (const s of tier1) {
               summaryMap.set(s.entityId, s);
             }
-            // Extract source snippets for tier-3 context
-            if (sourceLines) {
-              for (const sym of symbols) {
-                if (sym.kind !== "function" && sym.kind !== "method" && sym.kind !== "class") continue;
-                const entityId = sym.containerName
-                  ? `${filePath}#${sym.containerName}.${sym.name}`
-                  : `${filePath}#${sym.name}`;
-                const start = Math.max(0, sym.startLine - 1);
-                const end = Math.min(sourceLines.length, start + MAX_SNIPPET_LINES);
-                sourceContextMap.set(entityId, sourceLines.slice(start, end).join("\n"));
-              }
-            }
           }
+          tier1Progress.tick(batch.length);
           const processed = Math.min(batchStart + BATCH_SIZE, parsedFiles.length);
           if (batchStart === 0 || processed % 1000 < BATCH_SIZE || processed === parsedFiles.length) {
-            log(`    [tier-1] ${processed}/${parsedFiles.length}`);
+            log(`    [tier-1] ${tier1Progress.format()}`);
           }
         }
         if (tier1CacheHits > 0) {
@@ -1309,94 +1216,166 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
           }
         }
 
-        // Tier 3: Haiku LLM for low-confidence method summaries
+        // Tier 3: LLM (cloud API or Ollama) for low-confidence method summaries (lazy snippet loading)
         let tier3Count = 0;
-        if (options.enrich && options.anthropicApiKey && (!sharedApiBudget || sharedApiBudget.remaining > 0)) {
+        if (options.enrich && (!sharedApiBudget || sharedApiBudget.remaining > 0)) {
           let tier3Candidates = [...summaryMap.entries()]
-            .filter(([, s]) => shouldEscalateToTier3(s, undefined))
-            .map(([entityId, s]) => ({
-              entityId,
-              description: s.description,
-              context: sourceContextMap.get(entityId) ?? entityId,
-            }));
+            .filter(([, s]) => shouldEscalateToTier3(s, undefined));
           // Atomically reserve budget before async work
           if (sharedApiBudget) {
             const granted = sharedApiBudget.reserve(tier3Candidates.length);
             tier3Candidates = tier3Candidates.slice(0, granted);
           }
           if (tier3Candidates.length > 0) {
-            log(`    Tier 3 (Haiku): upgrading ${tier3Candidates.length} low-confidence summaries`);
-            const tier3Results = await tier3BatchSummarize(
-              tier3Candidates,
-              options.anthropicApiKey,
-            );
-            for (const s of tier3Results) {
-              if (s.confidence > 0) {
-                summaryMap.set(s.entityId, s);
-                tier3Count++;
+            const tier3Provider = options.llmProvider ?? "ollama";
+            log(`    Tier 3 (${tier3Provider}): upgrading ${tier3Candidates.length} low-confidence summaries`);
+
+            // Lazily load source snippets only for tier-3 candidates (avoids OOM on large repos)
+            const isBareForTier3 = await checkBareRepo(repo.localPath);
+            const bareCommitForTier3 = isBareForTier3
+              ? await resolveCommitForBare(repo.localPath, changeSets, repo.name)
+              : undefined;
+
+            // Build a symbol start-line index from parsedFiles
+            const symbolLineIndex = new Map<string, number>();
+            for (const pf of parsedFiles) {
+              for (const sym of pf.symbols) {
+                if (sym.kind !== "function" && sym.kind !== "method" && sym.kind !== "class") continue;
+                const eid = sym.containerName
+                  ? `${pf.path}#${sym.containerName}.${sym.name}`
+                  : `${pf.path}#${sym.name}`;
+                symbolLineIndex.set(eid, sym.startLine);
               }
             }
-          }
-        }
 
-        // Tier 4: Sonnet for service-level summaries
-        let tier4Count = 0;
-        if (options.enrich && options.anthropicApiKey) {
-          const services6b = servicesByRepo.get(repo.name);
-          if (services6b && services6b.length > 0) {
-            const inputs: ServiceSummaryInput[] = services6b.map((svc) => ({
-              entityId: `service:${repo.name}/${svc.rootPath}`,
-              serviceName: svc.name,
-              methodSummaries: [...summaryMap!.values()]
-                .filter((s) => s.entityId.startsWith(svc.rootPath))
-                .slice(0, 20)
-                .map((s) => s.description),
-              dependencies: [...svc.dependencies],
-              entryPoints: [...svc.entryPoints],
-            }));
-            // Atomically reserve budget before async work
-            const tier4Budget = sharedApiBudget ? sharedApiBudget.reserve(inputs.length) : undefined;
-            if (sharedApiBudget && tier4Budget === 0) {
-              log(`    Tier 4: no API budget remaining, skipping`);
-            } else {
-              log(`    Tier 4 (Sonnet): summarizing ${inputs.length} services`);
-              const tier4Result = await tier4BatchSummarize(inputs, {
-                ...SONNET_DEFAULTS,
-                apiKey: options.anthropicApiKey,
-                kvStore,
-                maxApiCalls: tier4Budget,
-              });
-              for (const s of tier4Result.summaries) {
-                if (s.confidence > 0) {
-                  summaryMap.set(s.entityId, s);
-                  tier4Count++;
+            const ollamaOpts: Partial<OllamaOptions> = {
+              ...(options.ollamaUrl ? { baseUrl: options.ollamaUrl } : {}),
+              ...(options.ollamaModel ? { model: options.ollamaModel } : {}),
+            };
+
+            // Process tier-3 in chunks of 200 to bound memory (load snippets per chunk, then free)
+            const TIER3_CHUNK = 200;
+            const tier3Progress = new ProgressTracker(tier3Candidates.length);
+            for (let ci = 0; ci < tier3Candidates.length; ci += TIER3_CHUNK) {
+              const chunk = tier3Candidates.slice(ci, ci + TIER3_CHUNK);
+
+              // Group this chunk's candidates by file
+              const chunkByFile = new Map<string, { entityId: string }[]>();
+              for (const [entityId] of chunk) {
+                const [filePath, symPart] = entityId.split("#");
+                if (!filePath || !symPart) continue;
+                let list = chunkByFile.get(filePath);
+                if (!list) { list = []; chunkByFile.set(filePath, list); }
+                list.push({ entityId });
+              }
+
+              // Load snippets for this chunk only
+              const snippetMap = new Map<string, string>();
+              const filePaths = [...chunkByFile.keys()];
+              if (isBareForTier3 && bareCommitForTier3 && filePaths.length > 0) {
+                try {
+                  const fetched = await getFileContentBatch(repo.localPath, bareCommitForTier3, filePaths);
+                  for (const [fp, content] of fetched) {
+                    const lines = content.split("\n");
+                    for (const { entityId } of chunkByFile.get(fp) ?? []) {
+                      const startLine = symbolLineIndex.get(entityId);
+                      if (startLine === undefined) continue;
+                      const start = Math.max(0, startLine - 1);
+                      const end = Math.min(lines.length, start + MAX_SNIPPET_LINES);
+                      snippetMap.set(entityId, lines.slice(start, end).join("\n"));
+                    }
+                  }
+                } catch {
+                  // Fall through — use entityId as context
+                }
+              } else {
+                for (const [fp, candidates] of chunkByFile) {
+                  try {
+                    const content = await readFile(join(repo.localPath, fp), "utf-8");
+                    const lines = content.split("\n");
+                    for (const { entityId } of candidates) {
+                      const startLine = symbolLineIndex.get(entityId);
+                      if (startLine === undefined) continue;
+                      const start = Math.max(0, startLine - 1);
+                      const end = Math.min(lines.length, start + MAX_SNIPPET_LINES);
+                      snippetMap.set(entityId, lines.slice(start, end).join("\n"));
+                    }
+                  } catch {
+                    // File not readable — skip
+                  }
                 }
               }
-              // Refund unused budget
-              if (sharedApiBudget && tier4Budget !== undefined) {
-                const unused = tier4Budget - tier4Result.apiCallsMade;
-                if (unused > 0) sharedApiBudget.refund(unused);
+
+              const tier3Entities = chunk.map(([entityId]) => ({
+                entityId,
+                sourceCode: snippetMap.get(entityId) ?? entityId,
+                context: entityId,
+              }));
+
+              let tier3Results;
+              if (tier3Provider === "anthropic" || tier3Provider === "openai") {
+                const resolvedApiKey =
+                  options.llmApiKey ??
+                  (tier3Provider === "anthropic"
+                    ? process.env.ANTHROPIC_API_KEY
+                    : process.env.OPENAI_API_KEY) ??
+                  "";
+                const llmOpts: LlmApiOptions = {
+                  provider: tier3Provider,
+                  apiKey: resolvedApiKey,
+                  model: options.llmModel ?? (tier3Provider === "anthropic" ? "claude-haiku-4-5-20251001" : "gpt-4o-mini"),
+                  timeout: 30_000,
+                  maxTokens: 200,
+                };
+                tier3Results = await tier3SummarizeLlmApi(tier3Entities, llmOpts, 20);
+              } else {
+                const ollamaEntities = tier3Entities;
+                tier3Results = await ollamaTier3Summarize(ollamaEntities, ollamaOpts);
               }
-              if (tier4Result.cacheHits > 0) {
-                log(`    Tier 4: ${tier4Result.cacheHits} cache hits, ${tier4Result.apiCallsMade} API calls`);
+              for (const s of tier3Results) {
+                if (s.confidence > 0) {
+                  summaryMap.set(s.entityId, s);
+                  tier3Count++;
+                }
+              }
+              tier3Progress.tick(chunk.length);
+              if (ci % 1000 < TIER3_CHUNK) {
+                log(`    [tier-3] ${tier3Progress.format()}`);
               }
             }
           }
         }
 
-        // Index summaries in search store for query support
-        const searchDocs = [...summaryMap.values()].map((s) => ({
-          id: s.entityId,
-          content: `${s.entityId} ${s.description}`,
-          metadata: { tier: String(s.tier), repo: repo.name },
-        }));
-        await options.searchStore.index(searchDocs);
+        // Index summaries in search store for query support (batched to limit memory)
+        const SEARCH_BATCH = 1000;
+        let searchDocs: Array<{
+          id: string;
+          content: string;
+          metadata: { tier: string; repo: string };
+        }> = [];
+        for (const s of summaryMap.values()) {
+          // Extract bare symbol name for better BM25 recall (e.g., "signIn" from "src/auth.ts#AuthService.signIn")
+          const hashPart = s.entityId.split("#")[1] ?? "";
+          const symbolName = hashPart.split(".").pop() ?? "";
+          const containerName = hashPart.includes(".") ? hashPart.split(".")[0] ?? "" : "";
+          searchDocs.push({
+            id: s.entityId,
+            content: [symbolName, containerName, s.entityId, s.description].filter(Boolean).join(" "),
+            metadata: { tier: String(s.tier), repo: repo.name },
+          });
+          if (searchDocs.length === SEARCH_BATCH) {
+            await options.searchStore.index(searchDocs);
+            searchDocs = [];
+          }
+        }
+        if (searchDocs.length > 0) {
+          await options.searchStore.index(searchDocs);
+        }
 
         const tierBreakdown = [
           `${tier1Count} tier-1`,
           `${tier2Total} tier-2 (${tier2Upgraded} upgraded)`,
           tier3Count > 0 ? `${tier3Count} tier-3` : null,
-          tier4Count > 0 ? `${tier4Count} tier-4` : null,
         ].filter(Boolean).join(", ");
         log(`  [${repo.name}] Summaries: ${tierBreakdown}, ${summaryMap.size} total`);
       } catch (error) {
@@ -1483,7 +1462,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
   const allSarifResults: import("@mma/core").SarifResult[] = [];
   const sarifRepoNames: string[] = [];
   const repoSarifCounts = new Map<string, Record<string, number>>();
-  for (const repo of repos) {
+  await Promise.all(repos.map(async (repo) => {
     const repoResults: import("@mma/core").SarifResult[] = [];
     const counts: Record<string, number> = {};
     for (const key of ["config", "fault", "deadExports", "arch", "instability", "blastRadius", "hotspot", "temporal-coupling", "vuln"] as const) {
@@ -1504,7 +1483,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       sarifRepoNames.push(repo.name);
     }
     allSarifResults.push(...repoResults);
-  }
+  }));
   // Add cross-repo correlation SARIF (not per-repo)
   for (const crossRepoKey of ["sarif:correlation", "sarif:cross-repo-models"] as const) {
     const json = await kvStore.get(crossRepoKey);
@@ -1640,7 +1619,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
   tracer.startPhase("ATDI");
   {
     const repoAtdiScores: import("@mma/diagnostics").AtdiScore[] = [];
-    for (const repo of repos) {
+    await Promise.all(repos.map(async (repo) => {
       // Read metrics summary (pain/uselessness zone counts + avgDistance)
       const summaryJson = await kvStore.get(`metricsSummary:${repo.name}`);
       let moduleCount = 0;
@@ -1687,7 +1666,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
       repoAtdiScores.push(atdi);
       await kvStore.set(`atdi:${repo.name}`, JSON.stringify(atdi));
       log(`  [ATDI] ${repo.name}: ${atdi.score}/100 (modules=${atdi.moduleCount}, errors=${errorCount}, warnings=${warningCount}, notes=${noteCount})`);
-    }
+    }));
 
     const systemAtdi = computeSystemAtdi(repoAtdiScores);
     await kvStore.set("atdi:system", JSON.stringify(systemAtdi));
@@ -1702,98 +1681,6 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     log(PipelineTracer.formatSummary(trace));
   }
 
-  // Phase 8: LLM narration (optional, requires Anthropic API key)
-  if (options.anthropicApiKey) {
-    tracer.startPhase("Narration");
-    const narrationStart = performance.now();
-    const repoInputs: RepoNarrationInput[] = [];
-
-    for (const repo of repos) {
-      const patternsJson = await kvStore.get(`patterns:${repo.name}`);
-      const patterns: string[] = patternsJson
-        ? (JSON.parse(patternsJson) as Array<{ kind: string }>).map((p) => p.kind)
-        : [];
-
-      const summaryJson = await kvStore.get(`metricsSummary:${repo.name}`);
-      const metricsSummary = summaryJson ? JSON.parse(summaryJson) as RepoNarrationInput["metricsSummary"] : null;
-
-      const sarifCounts = repoSarifCounts.get(repo.name) ?? {};
-
-      // Recover service names + summaries from tier-4 cache
-      const services: string[] = [];
-      const serviceSummaries: string[] = [];
-      const t4Keys = await kvStore.keys("summary:t4:");
-      for (const k of t4Keys) {
-        const val = await kvStore.get(k);
-        if (val) {
-          try {
-            const s = JSON.parse(val) as { entityId: string; description: string };
-            const repoServicePrefix = `service:${repo.name}/`;
-            if (s.entityId.startsWith(repoServicePrefix)) {
-              services.push(s.entityId.slice(repoServicePrefix.length));
-              if (s.description) serviceSummaries.push(s.description);
-            }
-          } catch { /* skip malformed */ }
-        }
-      }
-
-      // Cross-repo edge count for this repo
-      let crossRepoEdges = 0;
-      const corrGraphJson = await kvStore.get("correlation:graph");
-      if (corrGraphJson) {
-        try {
-          const cg = JSON.parse(corrGraphJson) as { edges: Array<{ source: string; target: string }> };
-          crossRepoEdges = cg.edges.filter(
-            (e) => e.source.startsWith(repo.name) || e.target.startsWith(repo.name),
-          ).length;
-        } catch { /* skip */ }
-      }
-
-      repoInputs.push({ repo: repo.name, patterns, metricsSummary, sarifCounts, services, serviceSummaries, crossRepoEdges });
-    }
-
-    // System overview input
-    let systemInput: SystemNarrationInput | undefined;
-    if (repos.length > 1) {
-      const corrServicesJson = await kvStore.get("correlation:services");
-      const linchpins: string[] = [];
-      let crossRepoEdgeCount = 0;
-      if (corrServicesJson) {
-        try {
-          const cs = JSON.parse(corrServicesJson) as { linchpins: string[] };
-          linchpins.push(...cs.linchpins);
-        } catch { /* skip */ }
-      }
-      const corrGraphJson = await kvStore.get("correlation:graph");
-      if (corrGraphJson) {
-        try {
-          const cg = JSON.parse(corrGraphJson) as { edges: unknown[] };
-          crossRepoEdgeCount = cg.edges.length;
-        } catch { /* skip */ }
-      }
-      systemInput = {
-        repoNames: repos.map((r) => r.name),
-        totalFindings: allSarifResults.length,
-        crossRepoEdgeCount,
-        linchpins,
-      };
-    }
-
-    const narrationResults = await narrateAll(repoInputs, systemInput, {
-      apiKey: options.anthropicApiKey,
-      kvStore,
-      force: options.narrateForce,
-    });
-
-    const cached = narrationResults.filter((r) => r.cached).length;
-    const generated = narrationResults.length - cached;
-    const narrationMs = Math.round(performance.now() - narrationStart);
-    log(`  Phase 8 narration: ${narrationResults.length} total (${generated} generated, ${cached} cached) in ${narrationMs}ms`);
-    tracer.record("narrationsGenerated", generated);
-    tracer.record("narrationsCached", cached);
-    tracer.endPhase();
-  }
-
   // Determine if any repo had actual file changes
   const hadChanges = changeSets.some(
     (cs) => cs.addedFiles.length > 0 || cs.modifiedFiles.length > 0 || cs.deletedFiles.length > 0,
@@ -1806,6 +1693,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
     totalFiles,
     totalSarifResults: allSarifResults.length,
     failedRepos: failedRepoNames.size,
+    failedRepoNames,
   };
 }
 

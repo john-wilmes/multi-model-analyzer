@@ -2,9 +2,6 @@ export { summarizeFromTemplate, tier1Summarize } from "./templates.js";
 export { summarizeFromNaming, tier2Summarize, shouldEscalateToTier3 } from "./heuristics.js";
 export { summarizeWithOllama, isOllamaAvailable, tier3Summarize } from "./ollama.js";
 export type { OllamaOptions } from "./ollama.js";
-export { summarizeWithHaiku, tier3BatchSummarize } from "./haiku.js";
-export type { HaikuOptions } from "./haiku.js";
-export { summarizeWithSonnet, tier4BatchSummarize, SONNET_DEFAULTS, callAnthropicWithRetry } from "./sonnet.js";
-export type { SonnetOptions, ServiceSummaryInput, Tier4BatchOptions, Tier4BatchResult } from "./sonnet.js";
-export { narrateAll, narrateSingle, NARRATION_CACHE_PREFIX } from "./narration.js";
-export type { NarrationType, RepoNarrationInput, SystemNarrationInput, NarrationResult, NarrationOptions } from "./narration.js";
+// Cloud LLM API provider (llm-api.ts): Anthropic Claude and OpenAI-compatible
+export { summarizeWithLlmApi, tier3SummarizeLlmApi, isLlmApiAvailable } from "./llm-api.js";
+export type { LlmApiOptions, LlmProvider } from "./llm-api.js";

@@ -186,4 +186,85 @@ describe("executeArchitectureQuery", () => {
     expect(result.description).toContain("1 repos");
     expect(result.description).toContain("cross-repo import edges");
   });
+
+  it("infers backend-service from express import", async () => {
+    const graphStore = new InMemoryGraphStore();
+    const kvStore = new InMemoryKVStore();
+    await graphStore.addEdges([
+      makeEdge("src/server.ts", "express", "imports", "api-gateway"),
+    ]);
+    const result = await executeArchitectureQuery(graphStore, kvStore);
+    expect(result.repos.find((r) => r.name === "api-gateway")!.role).toBe("backend-service");
+  });
+
+  it("infers backend-service from fastify import", async () => {
+    const graphStore = new InMemoryGraphStore();
+    const kvStore = new InMemoryKVStore();
+    await graphStore.addEdges([
+      makeEdge("src/app.ts", "fastify", "imports", "rest-api"),
+    ]);
+    const result = await executeArchitectureQuery(graphStore, kvStore);
+    expect(result.repos.find((r) => r.name === "rest-api")!.role).toBe("backend-service");
+  });
+
+  it("infers backend-service from 3+ Node.js builtin imports", async () => {
+    const graphStore = new InMemoryGraphStore();
+    const kvStore = new InMemoryKVStore();
+    await graphStore.addEdges([
+      makeEdge("src/main.ts", "node:fs", "imports", "cli-tool"),
+      makeEdge("src/main.ts", "node:path", "imports", "cli-tool"),
+      makeEdge("src/main.ts", "node:http", "imports", "cli-tool"),
+    ]);
+    const result = await executeArchitectureQuery(graphStore, kvStore);
+    expect(result.repos.find((r) => r.name === "cli-tool")!.role).toBe("backend-service");
+  });
+
+  it("infers shared-library from name containing 'shared' or 'utils'", async () => {
+    const graphStore = new InMemoryGraphStore();
+    const kvStore = new InMemoryKVStore();
+    await graphStore.addEdges([
+      makeEdge("src/index.ts", "./helpers", "imports", "shared-types"),
+    ]);
+    const result = await executeArchitectureQuery(graphStore, kvStore);
+    expect(result.repos.find((r) => r.name === "shared-types")!.role).toBe("shared-library");
+  });
+
+  it("infers shared-library from high fan-in (3+ importers)", async () => {
+    const graphStore = new InMemoryGraphStore();
+    const kvStore = new InMemoryKVStore();
+    // Register @acme/config as an indexed package
+    await kvStore.set("_packageRoots", JSON.stringify([["@acme/config", "packages/config"]]));
+    await graphStore.addEdges([
+      // config repo's own imports
+      makeEdge("src/index.ts", "./defaults", "imports", "config"),
+      // 3 other repos import @acme/config
+      makeEdge("src/a.ts", "@acme/config", "imports", "api"),
+      makeEdge("src/b.ts", "@acme/config", "imports", "worker"),
+      makeEdge("src/c.ts", "@acme/config", "imports", "dashboard"),
+    ]);
+    const result = await executeArchitectureQuery(graphStore, kvStore);
+    expect(result.repos.find((r) => r.name === "config")!.role).toBe("shared-library");
+  });
+
+  it("infers frontend from React imports with no service calls", async () => {
+    const graphStore = new InMemoryGraphStore();
+    const kvStore = new InMemoryKVStore();
+    await graphStore.addEdges([
+      makeEdge("src/App.tsx", "react", "imports", "ui-app"),
+      makeEdge("src/App.tsx", "react-dom", "imports", "ui-app"),
+    ]);
+    const result = await executeArchitectureQuery(graphStore, kvStore);
+    expect(result.repos.find((r) => r.name === "ui-app")!.role).toBe("frontend");
+  });
+
+  it("does not infer frontend for React repo with library-style name", async () => {
+    const graphStore = new InMemoryGraphStore();
+    const kvStore = new InMemoryKVStore();
+    await graphStore.addEdges([
+      makeEdge("src/Button.tsx", "react", "imports", "ui-utils"),
+    ]);
+    const result = await executeArchitectureQuery(graphStore, kvStore);
+    // "utils" in name → shared-library takes priority
+    expect(result.repos.find((r) => r.name === "ui-utils")!.role).toBe("shared-library");
+  });
 });

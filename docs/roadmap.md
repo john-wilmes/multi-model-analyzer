@@ -4,13 +4,49 @@ Candidate features informed by analysis of comparable open-source projects: [Roa
 
 ## Landscape Summary
 
-No existing tool combines all of what mma does: tree-sitter + ts-morph dual parsing, cross-repo service topology (queue/HTTP/WebSocket), fault tree generation, pattern detection, 4-tier summarization, SARIF output, and natural language query routing -- all without LLM calls at analysis time. Related tools tend to focus on one slice (dependency-cruiser for dep graphs, Jelly for call graphs) or are broader platforms that don't expose raw analytical models (Sourcegraph, CodeScene). The emerging MCP-server tools (Roam Code, Code Pathfinder, CodeMCP) are the most similar in spirit but are younger and primarily designed as AI-agent context providers rather than standalone analysis pipelines.
+No existing tool combines all of what mma does: tree-sitter + ts-morph dual parsing, cross-repo service topology (queue/HTTP/WebSocket), fault tree generation, pattern detection, 3-tier summarization, SARIF output, and natural language query routing -- all without cloud LLM calls at analysis time. Related tools tend to focus on one slice (dependency-cruiser for dep graphs, Jelly for call graphs) or are broader platforms that don't expose raw analytical models (Sourcegraph, CodeScene). The emerging MCP-server tools (Roam Code, Code Pathfinder, CodeMCP) are the most similar in spirit but are younger and primarily designed as AI-agent context providers rather than standalone analysis pipelines.
 
 ## Completed
 
 ### MCP Server ✓
 
-Implemented in `packages/mcp`. Exposes mma's query layer as MCP tools over stdio transport for AI agent integration (Claude Code, Codex, Cursor, etc.). Run via `npx mma serve`.
+Implemented in `packages/mcp`. Exposes mma's query layer as MCP tools over stdio or HTTP transport for AI agent integration (Claude Code, Codex, Cursor, etc.). Run via `mma serve`. Use `--transport http` to switch to HTTP mode (default port 3001).
+
+### MCP Tools Modularization ✓
+
+Split the monolithic `tools.ts` into focused modules (PR #73). Each tool category lives in its own file under `packages/mcp/src/tools/`, reducing merge conflicts and making it easier to add new tools.
+
+### MCP Agent Scenario Tests ✓
+
+Six scripted multi-step integration tests in `packages/mcp/src/agent-scenarios.test.ts` that simulate real agent workflows. Each scenario seeds interconnected stores, then chains 2-4 tool calls where each step's output informs the next — validating that an agent can answer questions like "what breaks if I change this file?" or "trace this vulnerability's reach" using the MCP tools.
+
+### Worker Thread Blast Radius ✓
+
+Implemented in PR #74. `computeReachCounts` (SCC + bitset) runs in a worker thread with a 30-second timeout and graceful fallback. Prevents large-repo blast radius computation from blocking the main thread.
+
+### Lazy SARIF Pagination ✓
+
+Implemented in PR #75. `getSarifResultsPaginated` iterates repos lazily, stopping as soon as the requested page is filled. Performance is O(max_per_repo + limit) instead of O(total_findings), enabling fast pagination over large result sets.
+
+### Barrel Cycle Suppression ✓
+
+Implemented in PR #76. A new `suppressBarrelCycles` option filters circular dependency findings where the cycle is mediated by barrel (`index.ts`) re-exports rather than a genuine mutual dependency. Reduces false positives by ~17% in measured corpora.
+
+### Interactive Indexing ✓
+
+Implemented as `mma explore`. Guided repo discovery with incremental indexing — add and index repos one at a time without a full config file. Supports `--enrich` and all LLM provider flags (`--llm-provider`, `--llm-api-key`, `--llm-model`, `--ollama-url`, `--ollama-model`). Useful for exploratory analysis.
+
+### GitHub Org Indexing ✓
+
+Implemented as `mma index-org <org>`. Scans a GitHub org via the API, clones all matching repos, indexes in batches, and runs cross-repo correlation. Resumable: already-indexed repos are skipped; repos stuck in `"indexing"` state are reset on restart. Supports `--concurrency`, `--batch-size`, `--language`, `--force-full-reindex`, and all LLM enrichment flags.
+
+### LLM Provider Config File Support ✓
+
+`llmProvider`, `llmApiKey`, and `llmModel` can now be set in `mma.config.json`. Precedence: CLI flags > config file > defaults. API keys should still be passed via environment variables rather than committed to the config file.
+
+### Progress Tracking with ETA ✓
+
+A `ProgressTracker` utility displays estimated time remaining during the clone phase, batch indexing, tier-1 summarization, and tier-3 LLM summarization phases.
 
 ### Instability Metrics ✓
 
@@ -57,4 +93,4 @@ Areas where mma already has strong capabilities:
 - **Fault tree generation** -- static fault trees derived from call graphs.
 - **SARIF output** -- standardized format with logical locations.
 - **Pattern detection** -- adapter, facade, observer, factory, singleton, repository, middleware, decorator.
-- **4-tier summarization** -- from free AST templates to optional LLM-powered descriptions.
+- **3-tier summarization** -- from free AST templates to optional local Ollama LLM descriptions.

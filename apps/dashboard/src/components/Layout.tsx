@@ -57,6 +57,34 @@ function IconClock() {
   );
 }
 
+function IconFlame() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+      <path
+        d="M9 2C9 2 12 5 11 8C13 6 13 4 13 4C15 7 15 11 13 14C12 15 10 16 9 16C8 16 6 15 5 14C3 11 3 7 5 4C5 4 6 7 7 7C6 5 9 2 9 2Z"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function IconPatterns() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+      <rect x="2" y="2" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.5" />
+      <rect x="11" y="2" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.5" />
+      <rect x="2" y="11" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.5" />
+      <rect x="11" y="11" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.5" />
+      <line x1="9" y1="4" x2="11" y2="4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <line x1="9" y1="14" x2="11" y2="14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <line x1="4" y1="9" x2="4" y2="11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <line x1="14" y1="9" x2="14" y2="11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function IconTarget() {
   return (
     <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
@@ -156,6 +184,18 @@ function useBreadcrumbs(): BreadcrumbSegment[] {
     return segments;
   }
 
+  // /hotspots
+  if (pathname === '/hotspots') {
+    segments.push({ label: 'Hotspots', to: null });
+    return segments;
+  }
+
+  // /patterns
+  if (pathname === '/patterns') {
+    segments.push({ label: 'Design Patterns', to: null });
+    return segments;
+  }
+
   // /blast-radius/:name
   const blastMatch = pathname.match(/^\/blast-radius\/(.+)$/);
   if (blastMatch) {
@@ -208,8 +248,12 @@ function usePageTitle(breadcrumbs: BreadcrumbSegment[]) {
 // Layout
 // ---------------------------------------------------------------------------
 
+const REPO_PAGE_SIZE = 20;
+
 export default function Layout() {
   const [repos, setRepos] = useState<string[]>([]);
+  const [repoSearch, setRepoSearch] = useState('');
+  const [repoShowAll, setRepoShowAll] = useState(false);
   const location = useLocation();
 
   // Sidebar collapsed state — persisted
@@ -355,6 +399,24 @@ export default function Layout() {
             {!collapsed && <span>Temporal Coupling</span>}
           </Link>
 
+          <Link
+            to="/hotspots"
+            className={navClass('/hotspots')}
+            title={collapsed ? 'Hotspots' : undefined}
+          >
+            <IconFlame />
+            {!collapsed && <span>Hotspots</span>}
+          </Link>
+
+          <Link
+            to="/patterns"
+            className={navClass('/patterns')}
+            title={collapsed ? 'Design Patterns' : undefined}
+          >
+            <IconPatterns />
+            {!collapsed && <span>Design Patterns</span>}
+          </Link>
+
           {repos[0] ? (
             <Link
               to={`/blast-radius/${encodeURIComponent(repos[0])}`}
@@ -383,18 +445,56 @@ export default function Layout() {
                 </div>
               ) : (
                 <>
-                  <p className="px-3 text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">
-                    Repos
-                  </p>
-                  {repos.map((repo) => (
-                    <Link
-                      key={repo}
-                      to={`/repo/${encodeURIComponent(repo)}`}
-                      className={navClass(`/repo/${encodeURIComponent(repo)}`)}
-                    >
-                      <span className="truncate">{repo}</span>
-                    </Link>
-                  ))}
+                  <div className="flex items-center justify-between px-3 mb-1">
+                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                      Repositories
+                    </p>
+                    <span className="text-xs text-slate-500 bg-slate-700 rounded-full px-1.5 py-0.5 leading-none">
+                      {repos.length}
+                    </span>
+                  </div>
+                  {/* B5: Repo search filter */}
+                  <div className="px-3 mb-1">
+                    <input
+                      type="text"
+                      placeholder="Filter repos..."
+                      value={repoSearch}
+                      onChange={(e) => { setRepoSearch(e.target.value); setRepoShowAll(false); }}
+                      className="w-full px-2 py-1 text-xs rounded bg-slate-700 border border-slate-600 text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      aria-label="Filter repositories"
+                    />
+                  </div>
+                  {(() => {
+                    const filtered = repoSearch.trim()
+                      ? repos.filter((r) => r.toLowerCase().includes(repoSearch.toLowerCase()))
+                      : repos;
+                    const visible = repoShowAll ? filtered : filtered.slice(0, REPO_PAGE_SIZE);
+                    const hidden = filtered.length - visible.length;
+                    return (
+                      <>
+                        {visible.map((repo) => (
+                          <Link
+                            key={repo}
+                            to={`/repo/${encodeURIComponent(repo)}`}
+                            className={navClass(`/repo/${encodeURIComponent(repo)}`, true)}
+                          >
+                            <span className="truncate">{repo}</span>
+                          </Link>
+                        ))}
+                        {hidden > 0 && (
+                          <button
+                            onClick={() => setRepoShowAll(true)}
+                            className="w-full text-left px-3 py-1 text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-700 rounded"
+                          >
+                            Show {hidden} more...
+                          </button>
+                        )}
+                        {filtered.length === 0 && (
+                          <p className="px-3 py-1 text-xs text-slate-500">No repos match</p>
+                        )}
+                      </>
+                    );
+                  })()}
                 </>
               )}
             </div>

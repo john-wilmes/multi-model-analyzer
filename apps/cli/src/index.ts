@@ -48,6 +48,12 @@ interface CliConfig {
   readonly baselinePath?: string;
   readonly backend?: StorageBackend;
   readonly advisories?: readonly Advisory[];
+  readonly enrich?: boolean;
+  readonly llmProvider?: "anthropic" | "openai" | "ollama";
+  readonly llmApiKey?: string;
+  readonly llmModel?: string;
+  readonly ollamaUrl?: string;
+  readonly ollamaModel?: string;
 }
 
 async function main(): Promise<void> {
@@ -72,12 +78,14 @@ async function main(): Promise<void> {
       "watch-interval": { type: "string", default: "30" },
       raw: { type: "boolean", default: false },
       baseline: { type: "string" },
-      "api-key": { type: "string" },
       "max-api-calls": { type: "string" },
-      "narrate-only": { type: "boolean", default: false },
-      force: { type: "boolean", default: false },
       "force-full-reindex": { type: "boolean", default: false },
       enrich: { type: "boolean", default: false },
+      "ollama-url": { type: "string" },
+      "ollama-model": { type: "string" },
+      "llm-provider": { type: "string" },
+      "llm-api-key": { type: "string" },
+      "llm-model": { type: "string" },
       port: { type: "string", default: "3000" },
       host: { type: "string", default: "127.0.0.1" },
       "cors-origin": { type: "string", multiple: true },
@@ -87,6 +95,9 @@ async function main(): Promise<void> {
       repo: { type: "string" },
       "max-depth": { type: "string", default: "5" },
       "audit-file": { type: "string" },
+      concurrency: { type: "string" },
+      language: { type: "string" },
+      "batch-size": { type: "string" },
     },
   });
 
@@ -137,7 +148,7 @@ async function main(): Promise<void> {
   const earlyBackend: StorageBackend =
     values.backend === "kuzu" ? "kuzu" : "sqlite";
 
-  // serve command bypasses config -- only needs the DB (read-only)
+  // serve command: reads config for mirrorDir/backend, opens writable stores for index_repo support
   if (command === "serve") {
     if (!existsSync(dbPath)) {
       console.error(`Database not found: ${dbPath}`);
@@ -150,15 +161,20 @@ async function main(): Promise<void> {
       console.error(`Invalid --port: "${values.port}". Must be 1–65535.`);
       process.exit(1);
     }
-    // W24: Respect config.backend for serve command
+    // W24: Respect config.backend for serve command; also read mirrorDir for index_repo
     let serveBackend = earlyBackend;
-    if (!values.backend && values.config) {
+    let serveMirrorDir = resolve("mirrors");
+    if (values.config) {
       try {
         const cfgRaw = JSON.parse(readFileSync(resolve(values.config), "utf-8")) as Record<string, unknown>;
         if (cfgRaw["backend"] === "kuzu") serveBackend = "kuzu";
-      } catch { /* use earlyBackend */ }
+        if (typeof cfgRaw["mirrorDir"] === "string" && cfgRaw["mirrorDir"].trim() !== "") {
+          serveMirrorDir = resolve(dirname(resolve(values.config)), cfgRaw["mirrorDir"]);
+        }
+      } catch { /* use defaults */ }
     }
-    const stores = await createStores({ backend: serveBackend, dbPath, readonly: true });
+    // Open writable stores so index_repo can persist analysis results
+    const stores = await createStores({ backend: serveBackend, dbPath });
     try {
       const transport = values.transport === "http" ? "http" as const : "stdio" as const;
       await serveCommand({
@@ -169,6 +185,22 @@ async function main(): Promise<void> {
         port: servePort,
         host: values.host,
         token: process.env["MMA_MCP_TOKEN"],
+        mirrorDir: serveMirrorDir,
+        indexRepo: async (repoConfig) => {
+          const result = await indexCommand({
+            repos: [{ name: repoConfig.name, localPath: repoConfig.localPath, url: "", branch: "" }],
+            mirrorDir: serveMirrorDir,
+            kvStore: stores.kvStore,
+            graphStore: stores.graphStore,
+            searchStore: stores.searchStore,
+            verbose: false,
+          });
+          return {
+            hadChanges: result.hadChanges,
+            totalFiles: result.totalFiles,
+            totalSarifResults: result.totalSarifResults,
+          };
+        },
       });
     } finally {
       stores.close();
@@ -276,16 +308,11 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  // enrich command: standalone LLM enrichment (Tier 3/4) outside of index
+  // enrich command: standalone LLM enrichment (Tier 3) outside of index
   if (command === "enrich") {
     if (!existsSync(dbPath)) {
       console.error(`Database not found: ${dbPath}`);
       console.error("Run 'mma index' first to create the analysis database.");
-      process.exit(1);
-    }
-    const anthropicApiKey = values["api-key"] || process.env.ANTHROPIC_API_KEY;
-    if (!anthropicApiKey) {
-      console.error("enrich requires --api-key or ANTHROPIC_API_KEY environment variable.");
       process.exit(1);
     }
     const maxApiCalls = values["max-api-calls"] ? parseInt(values["max-api-calls"], 10) : undefined;
@@ -298,12 +325,13 @@ async function main(): Promise<void> {
       const result = await enrichCommand({
         kvStore: stores.kvStore,
         searchStore: stores.searchStore,
-        apiKey: anthropicApiKey,
         maxApiCalls,
         repo: values.repo,
         verbose,
+        ollamaUrl: values["ollama-url"],
+        ollamaModel: values["ollama-model"],
       });
-      console.log(`Enriched ${result.reposEnriched} repo(s): ${result.tier3Count} tier-3, ${result.tier4Count} tier-4 summaries (${result.apiCallsMade} API calls)`);
+      console.log(`Enriched ${result.reposEnriched} repo(s): ${result.tier3Count} tier-3 summaries`);
     } finally {
       stores.close();
     }
@@ -652,6 +680,123 @@ async function main(): Promise<void> {
     return;
   }
 
+  // index-org command -- scan a GitHub org and index all repos in batches
+  // Implementation: commands/index-org-cmd.ts (dynamic import below)
+  if (command === "index-org") {
+    const orgName = positionals[1];
+    if (!orgName) {
+      console.error("Usage: mma index-org <org-name> [--mirrors dir] [--db path] [--concurrency N] [--language ts,js] [--force-full-reindex]");
+      process.exit(1);
+    }
+    // Resolve mirrorDir and backend from config (same pattern as explore command),
+    // falling back to CLI flags and defaults.
+    let mirrorDir = resolve(values.mirrors ?? "mirrors");
+    let orgBackend = earlyBackend;
+    let orgCfg: CliConfig | undefined;
+    try {
+      const configPath = resolve(values.config);
+      const configRaw = await readFile(configPath, "utf-8");
+      const cfg = JSON.parse(configRaw) as CliConfig;
+      orgCfg = cfg;
+      if (!values.mirrors && typeof cfg.mirrorDir === "string" && cfg.mirrorDir.trim() !== "") {
+        mirrorDir = resolve(dirname(configPath), cfg.mirrorDir);
+      }
+      if (!values.backend && cfg.backend) {
+        orgBackend = cfg.backend;
+      }
+    } catch { /* use defaults */ }
+    if (dbPath !== ":memory:") mkdirSync(dirname(dbPath), { recursive: true });
+    const stores = await createStores({ backend: orgBackend, dbPath });
+    try {
+      const { indexOrgCommand } = await import("./commands/index-org-cmd.js");
+      const concurrency = parseInt(values.concurrency ?? "4", 10);
+      const batchSizeVal = parseInt(values["batch-size"] ?? "20", 10);
+      const languages = (values.language ?? "TypeScript,JavaScript").split(",").map((s: string) => s.trim());
+      const rawOrgProvider = values["llm-provider"] ?? orgCfg?.llmProvider ?? "ollama";
+      const orgAllowedProviders = ["anthropic", "openai", "ollama"] as const;
+      if (!orgAllowedProviders.includes(rawOrgProvider as typeof orgAllowedProviders[number])) {
+        console.error(`Invalid --llm-provider "${rawOrgProvider}". Allowed values: ${orgAllowedProviders.join(", ")}`);
+        process.exit(1);
+      }
+      const orgLlmProvider = rawOrgProvider as "anthropic" | "openai" | "ollama";
+      const result = await indexOrgCommand({
+        org: orgName,
+        kvStore: stores.kvStore,
+        graphStore: stores.graphStore,
+        searchStore: stores.searchStore,
+        mirrorDir,
+        concurrency: Number.isFinite(concurrency) ? concurrency : 4,
+        languages,
+        force: values["force-full-reindex"] ?? false,
+        verbose,
+        batchSize: Number.isFinite(batchSizeVal) ? batchSizeVal : 20,
+        enrich: values.enrich ?? orgCfg?.enrich,
+        ollamaUrl: values["ollama-url"] ?? orgCfg?.ollamaUrl ?? "http://localhost:11434",
+        ollamaModel: values["ollama-model"] ?? orgCfg?.ollamaModel ?? "qwen2.5-coder:1.5b",
+        llmProvider: orgLlmProvider,
+        llmApiKey: values["llm-api-key"] ?? orgCfg?.llmApiKey,
+        llmModel: values["llm-model"] ?? orgCfg?.llmModel,
+      });
+      if (result.failedRepos.length > 0) {
+        console.error(`Failed repos: ${result.failedRepos.join(", ")}`);
+        process.exit(1);
+      }
+    } finally {
+      stores.close();
+    }
+    return;
+  }
+
+  // explore command -- interactive incremental indexing
+  if (command === "explore") {
+    if (dbPath !== ":memory:") mkdirSync(dirname(dbPath), { recursive: true });
+    // Try to get mirrorDir and backend from config; fall back to defaults
+    let mirrorDir = resolve("mirrors");
+    let exploreBackend = earlyBackend;
+    let exploreCfg: CliConfig | undefined;
+    try {
+      const configPath = resolve(values.config);
+      const configRaw = await readFile(configPath, "utf-8");
+      const config = JSON.parse(configRaw) as CliConfig;
+      exploreCfg = config;
+      if (typeof config.mirrorDir === "string" && config.mirrorDir.trim() !== "") {
+        mirrorDir = resolve(dirname(configPath), config.mirrorDir);
+      }
+      // Honour config.backend unless --backend was explicitly passed on CLI
+      if (!values.backend && config.backend) {
+        exploreBackend = config.backend;
+      }
+    } catch { /* use defaults */ }
+    const stores = await createStores({ backend: exploreBackend, dbPath });
+    try {
+      const { exploreCommand } = await import("./commands/index-interactive.js");
+      const rawProvider = values["llm-provider"] ?? exploreCfg?.llmProvider ?? "ollama";
+      const allowedProviders = ["anthropic", "openai", "ollama"] as const;
+      if (!allowedProviders.includes(rawProvider as typeof allowedProviders[number])) {
+        console.error(`Invalid --llm-provider "${rawProvider}". Allowed values: ${allowedProviders.join(", ")}`);
+        process.exit(1);
+      }
+      const llmProvider = rawProvider as "anthropic" | "openai" | "ollama";
+      await exploreCommand({
+        kvStore: stores.kvStore,
+        graphStore: stores.graphStore,
+        searchStore: stores.searchStore,
+        mirrorDir,
+        verbose,
+        seedUrl: values.repo,
+        enrich: values.enrich ?? exploreCfg?.enrich,
+        ollamaUrl: values["ollama-url"] ?? exploreCfg?.ollamaUrl ?? "http://localhost:11434",
+        ollamaModel: values["ollama-model"] ?? exploreCfg?.ollamaModel ?? "qwen2.5-coder:1.5b",
+        llmProvider,
+        llmApiKey: values["llm-api-key"] ?? exploreCfg?.llmApiKey,
+        llmModel: values["llm-model"] ?? exploreCfg?.llmModel,
+      });
+    } finally {
+      stores.close();
+    }
+    return;
+  }
+
   const configPath = resolve(values.config);
   let config: CliConfig;
   try {
@@ -679,7 +824,7 @@ async function main(): Promise<void> {
       process.exit(1);
     }
     // Warn on unknown top-level fields (catches typos)
-    const knownFields = new Set(["repos", "mirrorDir", "dbPath", "rules", "baselinePath", "backend", "advisories"]);
+    const knownFields = new Set(["repos", "mirrorDir", "dbPath", "rules", "baselinePath", "backend", "advisories", "enrich", "ollamaUrl", "ollamaModel", "llmProvider", "llmApiKey", "llmModel"]);
     for (const key of Object.keys(cfg)) {
       if (!knownFields.has(key)) {
         console.error(`warning: unknown config field "${key}" — possible typo`);
@@ -773,18 +918,9 @@ async function main(): Promise<void> {
     switch (command) {
       case "index": {
         const indexFormat = validateFormat(values.format, "table");
-        const anthropicApiKey = values["api-key"] || process.env.ANTHROPIC_API_KEY;
         const maxApiCalls = values["max-api-calls"] ? parseInt(values["max-api-calls"], 10) : undefined;
         if (maxApiCalls !== undefined && (isNaN(maxApiCalls) || maxApiCalls < 0)) {
           console.error(`Invalid --max-api-calls: "${values["max-api-calls"]}". Must be a non-negative integer.`);
-          process.exit(1);
-        }
-        if (values["narrate-only"] && !anthropicApiKey) {
-          console.error("--narrate-only requires --api-key or ANTHROPIC_API_KEY environment variable.");
-          process.exit(1);
-        }
-        if (values.enrich && !anthropicApiKey) {
-          console.error("--enrich requires --api-key or ANTHROPIC_API_KEY environment variable.");
           process.exit(1);
         }
         const indexOpts = {
@@ -796,13 +932,15 @@ async function main(): Promise<void> {
           verbose,
           rules: validatedRules,
           affected: values.affected,
-          anthropicApiKey,
           enrich: values.enrich,
           maxApiCalls,
-          narrateOnly: values["narrate-only"],
-          narrateForce: values["force"],
           forceFullReindex: values["force-full-reindex"],
           advisories: config.advisories,
+          ollamaUrl: values["ollama-url"],
+          ollamaModel: values["ollama-model"],
+          llmProvider: (values["llm-provider"] ?? config.llmProvider ?? "ollama") as "anthropic" | "openai" | "ollama",
+          llmApiKey: values["llm-api-key"] ?? config.llmApiKey,
+          llmModel: values["llm-model"] ?? config.llmModel,
         } as const;
 
         if (values.watch) {
@@ -877,8 +1015,7 @@ Multi-Model Analyzer (mma)
 Usage:
   mma index [-c config.json] [-v] [--affected] [--enrich] [--baseline file.db]
             [--format json|table|sarif] [--watch [-w] [--watch-interval N]]
-            [--narrate-only] [--force] [--force-full-reindex]
-                                          Index repositories (default: table)
+            [--force-full-reindex]         Index repositories (default: table)
   mma query [-c config.json] "..." [--format json|table|sarif]
                                                 Query the index (default: table)
   mma affected <rev-range> [--db path] [--repo name] [--max-depth N]
@@ -908,11 +1045,16 @@ Usage:
                                                 Export Backstage catalog-info.yaml (default: stdout)
   mma audit [--audit-file file.json] [--repo name] [--db path] [-v]
                                                 Parse npm audit JSON and check vulnerability reachability
-  mma enrich [--db path] [--api-key KEY] [--max-api-calls N] [--repo name] [-v]
-                                                Enrich summaries with LLM (Tier 3/4)
+  mma enrich [--db path] [--max-api-calls N] [--ollama-url URL] [--ollama-model M] [--repo name] [-v]
+                                                Enrich summaries with Ollama (Tier 3)
   mma compress [--db path]                      Gzip the analysis database
   mma dashboard [--db path] [--port 3000] [--host 127.0.0.1]
                                                 Serve local web dashboard
+  mma explore [--repo <url>] [--db path] [--config path] [--backend <name>] [-v]
+                                                Interactive incremental indexing (guided repo discovery)
+  mma index-org <org-name> [--concurrency N] [--language ts,js] [--batch-size N]
+            [--llm-provider anthropic|openai] [--llm-model M]
+            [--force-full-reindex]             Scan & index a GitHub org
 
 Options:
   -c, --config    Path to config file (default: mma.config.json)
@@ -934,13 +1076,17 @@ Options:
   --port          Port for dashboard server (default: 3000)
   --host          Host/IP to bind dashboard server (default: 127.0.0.1)
   --cors-origin   Allowed CORS origin(s) for the dashboard API (repeatable, e.g. --cors-origin http://localhost:5173)
-  --force         Bypass narration cache (use with --narrate-only or --api-key)
   --force-full-reindex  Clear and rebuild graph for each repo (default: incremental)
-  --enrich        Enable LLM enrichment (Tier 3/4) during indexing (requires --api-key)
+  --enrich        Enable LLM enrichment (Tier 3) during indexing
+  --ollama-url    Ollama endpoint (default: http://localhost:11434)
+  --ollama-model  Ollama model (default: qwen2.5-coder:1.5b)
+  --llm-provider  LLM backend: ollama (default), anthropic, or openai
+  --llm-api-key   API key for cloud LLM (or set ANTHROPIC_API_KEY / OPENAI_API_KEY)
+  --llm-model     Override model name (default: claude-haiku-4-5-20251001 / gpt-4o-mini)
   --backend       Storage backend: sqlite (default) or kuzu
   --transport     MCP transport: stdio (default) or http (use with serve)
   --exit-code     Exit with code 1 if new/updated findings exist (use with delta)
-  --repo          Filter to a single repo (use with affected, catalog)
+  --repo          Repo name or URL (filter for affected/catalog/audit/enrich, seed for explore)
   --max-depth     Max blast radius depth (default: 5, use with affected)
   -h, --help      Show this help message
   --version       Show version number

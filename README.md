@@ -1,3 +1,4 @@
+[![npm](https://img.shields.io/npm/v/multi-model-analyzer)](https://www.npmjs.com/package/multi-model-analyzer)
 [![CI](https://github.com/john-wilmes/multi-model-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/john-wilmes/multi-model-analyzer/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node: 22+](https://img.shields.io/badge/Node-22%2B-brightgreen.svg)](https://nodejs.org/)
@@ -18,32 +19,44 @@
 - [Data Handling](#data-handling)
 - [Findings Reference](#findings-reference)
 - [Contributing](#contributing)
+- [Getting Started Guide](#getting-started-guide)
 - [License](#license)
 
-Point `mma` at your TypeScript repos. Get back a health report with structural problems, fault risks, and dead code -- in seconds, with no LLM required.
+Static analysis toolchain for TypeScript monorepos. Index hundreds of repos, surface structural debt, fault risks, and cross-repo coupling -- then explore results in a web dashboard, share baselines with your team, or plug into your IDE via MCP. No cloud API required.
 
-```
-$ mma index -c repos.json && mma practices
+<p align="center">
+  <img src="docs/ecosystem-venn.svg" alt="MMA ecosystem capability map" width="800">
+</p>
 
-Practices Report — Grade: F (0/100) — 1 repo(s)
+```text
+$ mma index -c supabase.config.json
+[1/10] supabase-js  [2/10] gotrue-js  ...  [10/10] supabase
+Indexed 10 repos: 7,775 modules, 214,850 edges, 4,488 findings (118s)
+
+$ mma practices
+Practices Report — Grade: F (0/100) — 10 repo(s)
+
+ATDI: 85.1/100 (stable) — 4,488 findings across 10 repos
 
 Category Scorecard:
 Category      Health  Errors  Warnings  Notes  Total
 ------------  ------  ------  --------  -----  -----
-structural    ★☆☆☆☆   0       64        420    484
-fault         ★★☆☆☆   0       15        0      15
-blast-radius  ★★★★★   0       0         10     10
+fault         ★★☆☆☆   0       218       938    1156
+structural    ★☆☆☆☆   0       81        2846   2927
+hotspot       ★★★☆☆   0       0         121    121
+blast-radius  ★★★★★   0       0         93     93
 
 Top Findings:
-Rule                                Category    Level    Count  Score
-----------------------------------  ----------  -------  -----  -----
-structural/unstable-dependency      structural  warning  64     115
-fault/unhandled-error-path          fault       warning  15     95
-structural/dead-export              structural  note     186    75
-structural/pain-zone-module         structural  note     222    75
+Rule                                Category    Level    Count
+----------------------------------  ----------  -------  -----
+structural/dead-export              structural  note     2315
+fault/missing-error-boundary        fault       note     938
+structural/pain-zone-module         structural  note     485
+fault/unhandled-error-path          fault       warning  218
+hotspot/high-churn-complexity       hotspot     note     121
 ```
 
-That output is real -- [TypeORM](https://github.com/typeorm/typeorm) (3,371 modules, 61k call graph edges), indexed in 26 seconds on a laptop.
+That output is real — [Supabase](https://github.com/supabase) ecosystem (10 repos, 7,775 modules, 215k edges).
 
 ## What It Finds
 
@@ -51,76 +64,98 @@ That output is real -- [TypeORM](https://github.com/typeorm/typeorm) (3,371 modu
 |----------|------|---------|
 | **Structural** | Unstable dependencies, dead exports, pain zone modules | "Module A (stable) depends on module B (unstable) -- inverted dependency direction" |
 | **Fault** | Unhandled error paths, silent catch blocks, missing re-throws | "Catch block in `handler` has no logging or re-throw" |
-| **Blast radius** | High-PageRank modules where changes ripple widely | "This module's public API affects 40% of the import graph" |
+| **Blast radius** | High-PageRank modules where changes ripple widely | "Changes to this file affect many dependents" |
 
 All findings are SARIF v2.1.0 with logical locations only -- no source code leaves your machine.
 
 ## Key Features
 
-- Cross-repo analysis across hundreds of TypeScript repositories
+- Cross-repo analysis across multiple TypeScript repositories, with symbol-level resolution (98% coverage on real-world monorepo ecosystems)
 - SARIF v2.1.0 output with built-in anonymization for safe sharing
-- MCP server for IDE/agent integration (`mma serve`)
+- MCP server with 26 tools for IDE/agent integration (`mma serve`) — stdio or HTTP transport
 - Web dashboard with dependency graphs, blast radius, and service catalog views
-- 4-tier summarization (2 free local tiers + 2 optional LLM tiers)
+- 3-tier summarization (2 free local tiers + optional LLM tier via Ollama, Anthropic, or OpenAI)
 - Design pattern detection (adapter, facade, observer, factory, singleton, repository, middleware, decorator)
 - Baseline sharing for incremental reindexing across teams — see [docs/baseline-sharing.md](docs/baseline-sharing.md)
-- No LLM required for core analysis — everything runs locally
-
-See [where MMA fits in the ecosystem](docs/ecosystem-venn.svg) for a capability map across related tools.
+- Pluggable storage backends: SQLite (default) and Kuzu graph DB (`--backend kuzu`)
+- No cloud API required — everything runs locally by default; cloud LLM providers are optional
+- Progress tracking with ETA display during clone, batch indexing, and tier-1/tier-3 summarization phases
 
 ### Dashboard
 
-![Dashboard screenshot](docs/dashboard-screenshot.png)
-
-*Web dashboard with dependency graphs, blast radius visualization, and service health overview.*
+The web dashboard provides 10 views — Overview, Findings, Cross-Repo (Graph, Feature Flags, Cascading Faults, Service Catalog), Temporal Coupling, Hotspots, Design Patterns, Blast Radius, Repo Detail, Module Detail, and Dependency Graph — served via 15 API endpoints. Launch it with `mma dashboard` (default port 3000).
 
 ## Quick Start
 
-If published to npm, you can skip the clone: `npx multi-model-analyzer index -v`. Otherwise:
-
 ```bash
-# Clone and install
-git clone https://github.com/john-wilmes/multi-model-analyzer.git
-cd multi-model-analyzer && npm install && npm run build
+npm install -g multi-model-analyzer
 
 # Create a config pointing at your repos
 cat > mma.config.json << 'EOF'
 {
-  "mirrorDir": "./data/mirrors",
-  "dbPath": "./data/mma.db",
-  "repos": [{
-    "name": "my-service",
-    "url": "https://github.com/org/my-service.git",
-    "branch": "main",
-    "localPath": "./data/mirrors/my-service.git"
-  }]
+  "mirrorDir": "./mirrors",
+  "outputDb": "./mma.db",
+  "repos": [
+    { "url": "https://github.com/supabase/supabase-js.git", "branch": "main" },
+    { "url": "https://github.com/supabase/ssr.git", "branch": "main" }
+  ]
 }
 EOF
 
 # Index and analyze
-npx mma index -v
-npx mma practices
+mma index -c mma.config.json -v
+mma practices
+mma dashboard
 ```
+
+Or skip indexing entirely -- download the [prebuilt Supabase baseline](https://github.com/john-wilmes/multi-model-analyzer/releases/latest) (10 repos, 20 MB compressed) and explore immediately:
+
+```bash
+gunzip supabase-ecosystem-baseline.db.gz
+mma import supabase-ecosystem-baseline.db
+mma dashboard
+```
+
+See [docs/getting-started.md](docs/getting-started.md) for a full walkthrough.
 
 ## Commands
 
-```
-mma index      Index repositories (clone, parse, analyze)
-mma practices  Health report with prioritized findings and grades
-mma query      Natural language queries ("what calls auth?", "dependencies of scheduler")
-mma report     Anonymized field trial report (JSON, markdown, SARIF)
-mma export     Export SQLite DB (anonymized by default, --raw for baseline sharing)
-mma import     Import a raw baseline export into local DB
-mma merge      Combine multiple anonymized export DBs
-mma validate   Statistical validation of SARIF findings quality
-mma affected   Blast radius for a rev range
-mma serve      MCP server for IDE integration (stdio)
+After `npm install -g multi-model-analyzer`, all commands are available as `mma <command>`.
+
+```text
+mma index            Index repositories (clone, parse, analyze)
+mma practices        Health report with prioritized findings and grades
+mma query            Natural language queries ("what calls auth?", "dependencies of scheduler")
+mma report           Anonymized field trial report (JSON, markdown, SARIF)
+mma export           Export SQLite DB (anonymized by default, --raw for baseline sharing)
+mma import           Import a raw baseline export into local DB
+mma merge            Combine multiple anonymized export DBs
+mma validate         Statistical validation of SARIF findings quality
+mma affected         Blast radius for a rev range
+mma serve            MCP server for IDE integration (stdio default, --transport http on port 3001)
 mma baseline create  Snapshot findings as known-violations baseline
 mma baseline check   Check for new violations against baseline (exit 1 if found)
-mma delta      Show diff of findings between two runs
-mma catalog    Inspect the inferred service catalog
-mma dashboard  Launch the web dashboard UI
-mma compress   Compress/prune the SQLite DB to reduce disk usage
+mma delta            Show diff of findings between two runs
+mma catalog          Inspect the inferred service catalog
+mma dashboard        Launch the web dashboard UI (port 3000)
+mma compress         Compress/prune the SQLite DB to reduce disk usage
+mma audit            Parse npm audit JSON and check vulnerability reachability
+mma enrich           Standalone LLM enrichment (Tier 3 summaries via Ollama)
+mma explore          Interactive incremental indexing with guided repo discovery (supports --enrich and LLM flags)
+mma index-org        Scan a GitHub org and index all matching repos in batches
+```
+
+Key flags that apply across commands:
+
+```text
+--backend kuzu      Use Kuzu graph DB instead of SQLite (applies to index, serve, explore, and others)
+--transport http    Use HTTP transport for MCP server instead of stdio (applies to serve, default port 3001)
+--enrich            Enable LLM enrichment (Tier 3) during indexing
+--ollama-url URL    Ollama endpoint (default: http://localhost:11434)
+--ollama-model M    Ollama model (default: qwen2.5-coder:1.5b)
+--llm-provider P    LLM backend: ollama (default), anthropic, or openai
+--llm-api-key KEY   API key for cloud LLM (or set ANTHROPIC_API_KEY / OPENAI_API_KEY)
+--llm-model M       Override model name (default: claude-haiku-4-5-20251001 / gpt-4o-mini)
 ```
 
 ## Examples
@@ -174,10 +209,10 @@ No source code, no file paths, no service names -- just the structural finding.
 
 Index-heavy, query-cheap. All analysis runs at index time; queries are lookups and graph traversals.
 
-```
+```text
 Repos --> Ingestion --> Parsing --> Structural Analysis --> Heuristic Analysis
                                                                |
-                                          Summarization (tiers 1-4) --> Storage
+                                          Summarization (tiers 1-3) --> Storage
                                                                |
                               Config Model / Fault Model / Functional Model
                                                                |
@@ -186,14 +221,75 @@ Repos --> Ingestion --> Parsing --> Structural Analysis --> Heuristic Analysis
 
 **Parsing** uses [tree-sitter](https://tree-sitter.github.io/tree-sitter/) (WASM) for fast syntax-only parsing, with optional [ts-morph](https://ts-morph.com/) for type-resolved symbols.
 
-**Summarization** has 4 tiers -- the first 2 are free and local; tiers 3–4 use the Anthropic API:
+**Summarization** has 3 tiers -- the first 2 are free and deterministic; tier 3 uses an LLM:
 
 | Tier | Source | Cost | Example |
 |------|--------|------|---------|
 | 1 | Templates from AST | Free | "Accepts (patientId: string), returns Promise" |
 | 2 | Heuristics from naming | Free | "Fetches appointments for a patient" |
-| 3 | Claude Haiku API | API tokens | "Queries appointment table, maps results, handles pagination" |
-| 4 | Claude Sonnet API | API tokens | "The Scheduler service manages appointment booking across provider calendars" |
+| 3 | LLM (Ollama/Anthropic/OpenAI) | Free or API cost | "Queries appointment table, maps results, handles pagination" |
+
+### LLM Enrichment (Tier 3)
+
+Tiers 1 and 2 are deterministic (no LLM). Tier 3 upgrades low-confidence summaries using an LLM.
+
+**Local (Ollama — default):**
+
+```bash
+mma index -c config.json --enrich
+# Requires Ollama running locally (http://localhost:11434)
+# Default model: qwen2.5-coder:1.5b
+```
+
+**Cloud (Anthropic / OpenAI):**
+
+```bash
+# Via environment variable (recommended):
+export ANTHROPIC_API_KEY=sk-ant-...
+mma index -c config.json --enrich --llm-provider anthropic
+
+# Via CLI flag:
+mma index -c config.json --enrich --llm-provider openai --llm-api-key sk-...
+
+# Custom model:
+mma index -c config.json --enrich --llm-provider anthropic --llm-model claude-sonnet-4-5-20250514
+```
+
+**Via config file (`mma.config.json`):**
+
+```json
+{
+  "mirrorDir": "./mirrors",
+  "llmProvider": "anthropic",
+  "llmModel": "claude-haiku-4-5-20251001",
+  "repos": [...]
+}
+```
+
+Set `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` as an environment variable — do not put API keys in the config file.
+
+### GitHub Org Indexing
+
+Use `mma index-org` to scan an entire GitHub org and index all TypeScript/JavaScript repos in batches:
+
+```bash
+# Scan and index the supabase org
+mma index-org supabase -c mma.config.json --enrich --llm-provider anthropic
+
+# With options:
+mma index-org my-org --concurrency 8 --batch-size 20 --language TypeScript,JavaScript
+```
+
+Flags:
+- `--concurrency N` — parallel repos per batch (default: 4)
+- `--batch-size N` — repos per batch before persisting (default: 20)
+- `--language` — comma-separated list of GitHub language filters (default: TypeScript,JavaScript)
+- `--force-full-reindex` — clear and rebuild graph for each repo
+- All `--enrich`, `--llm-provider`, `--llm-api-key`, `--llm-model` flags apply
+
+`index-org` is resumable: repos already in the database are skipped, and any repos stuck in an `"indexing"` state from a prior interrupted run are automatically reset before the next batch begins.
+
+The command runs a 6-phase pipeline per batch: scan org repos → register candidates → filter by language → clone → batch index → cross-repo correlation.
 
 ## Architecture
 
@@ -206,7 +302,7 @@ Monorepo with npm workspaces:
 | `packages/parsing` | AST parsing (tree-sitter WASM + ts-morph) |
 | `packages/structural` | Call graphs, dependency graphs, control flow graphs |
 | `packages/heuristics` | Service inference, pattern detection, feature flags, log mining |
-| `packages/summarization` | 4-tier description generation |
+| `packages/summarization` | 3-tier description generation |
 | `packages/storage` | Graph DB, search (FTS5/BM25), KV store (SQLite) |
 | `packages/storage-kuzu` | Graph DB backend (Kuzu, optional) |
 | `packages/correlation` | Cross-repo service correlation |
@@ -223,7 +319,8 @@ Monorepo with npm workspaces:
 - macOS, Linux, or Windows (WSL2)
 
 Optional:
-- Anthropic API key for tier 3 (Haiku) and tier 4 (Sonnet) summarization
+- [Ollama](https://ollama.com/) for tier-3 LLM summarization (free, runs locally)
+- Anthropic or OpenAI API key for cloud-based tier-3 summarization at scale (see `--llm-provider`)
 
 ## Data Handling
 
@@ -240,6 +337,10 @@ See [docs/findings-guide.md](docs/findings-guide.md) for all SARIF rule IDs, sev
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
+
+## Getting Started Guide
+
+For a detailed 15-minute walkthrough (install, index, explore, share), see [docs/getting-started.md](docs/getting-started.md).
 
 ## License
 

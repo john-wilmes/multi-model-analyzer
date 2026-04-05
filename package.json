@@ -1,11 +1,14 @@
 {
   "name": "multi-model-analyzer",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Static analysis toolchain for large TypeScript/JavaScript codebases. Extracts symbols, dependency graphs, call graphs, and architectural patterns without runtime LLM calls.",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/john-wilmes/multi-model-analyzer.git"
+  },
+  "bugs": {
+    "url": "https://github.com/john-wilmes/multi-model-analyzer/issues"
   },
   "homepage": "https://github.com/john-wilmes/multi-model-analyzer",
   "keywords": [
@@ -27,10 +30,14 @@
     "apps/cli/dist",
     "apps/dashboard/dist",
     "packages/*/dist",
-    "packages/models/*/dist"
+    "packages/models/*/dist",
+    "packages/parsing/wasm"
   ],
   "engines": {
     "node": ">=22.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "workspaces": [
     "packages/core",
@@ -56,7 +63,7 @@
     "build:dashboard": "npm run build -w apps/dashboard",
     "type-check": "tsc --build --noEmit",
     "lint": "eslint packages/ apps/",
-    "test": "vitest run && cd apps/dashboard && npx vitest run",
+    "test": "node --import ./suppress-ipc-close.mjs node_modules/.bin/vitest run && cd apps/dashboard && npx vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
@@ -72,6 +79,7 @@
     "@types/node": "^22.0.0",
     "@vitest/coverage-v8": "^3.2.4",
     "eslint": "^9.0.0",
+    "fast-check": "^4.6.0",
     "husky": "^9.1.7",
     "playwright": "^1.58.2",
     "typescript": "^5.7.0",

@@ -52,12 +52,14 @@ function resolveTargetRepo(
   repos: readonly RepoConfig[],
   packageRoots: ReadonlyMap<string, string>,
 ): { targetRepo: string; packageName: string } | null {
-  // Skip Node.js built-in modules (node:path, node:fs, etc.)
-  if (edge.target.startsWith("node:")) return null;
+  // Skip non-repo specifiers (node:fs, https://..., npm:pkg, bun:test, jsr:@pkg)
+  if (/^(?:node|https?|npm|bun|jsr|data):/.test(edge.target)) return null;
 
-  // Fast path: canonical ID carries repo inline
+  // Fast path: canonical ID carries repo inline — verify it's a known repo
   const targetRepoFromId = extractRepo(edge.target);
   if (targetRepoFromId) {
+    const isKnownRepo = repos.some((r) => r.name === targetRepoFromId);
+    if (!isKnownRepo) return null;
     const packageName = extractPackageName(edge.target) ?? edge.target;
     return { targetRepo: targetRepoFromId, packageName };
   }

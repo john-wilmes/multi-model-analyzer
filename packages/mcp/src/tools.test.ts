@@ -1,6 +1,17 @@
 import { describe, it, expect, vi } from "vitest";
 import { registerTools } from "./tools.js";
 import type { Stores } from "./tools.js";
+
+// Stub out network-dependent ingestion helpers so tools that call scanGitHubOrg
+// or cloneOrFetch don't throw "GitHub token required" errors in unit tests.
+vi.mock("@mma/ingestion", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@mma/ingestion")>();
+  return {
+    ...actual,
+    scanGitHubOrg: vi.fn().mockResolvedValue({ totalReposInOrg: 0, repos: [] }),
+    cloneOrFetch: vi.fn().mockResolvedValue(undefined),
+  };
+});
 import {
   InMemoryGraphStore,
   InMemorySearchStore,
@@ -85,6 +96,10 @@ describe("registerTools", () => {
       "get_cross_repo_graph", "get_service_correlation", "get_cross_repo_models",
       "get_cross_repo_impact",
       "get_flag_inventory", "get_flag_impact", "get_vulnerability",
+      "scan_org", "get_repo_candidates", "index_repo",
+      "ignore_repo", "get_indexing_state", "check_new_repos",
+      "get_hotspots", "get_temporal_coupling", "get_patterns",
+      "get_symbol_importers",
     ];
 
     for (const tool of expectedTools) {
@@ -297,6 +312,80 @@ describe("get_cross_repo_graph", () => {
     expect(parsed.paths).toBeDefined();
     expect(parsed.paths["repo-a->repo-b"]).toBeDefined();
   });
+
+  it("repoCount reflects filtered edges, not full graph", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    // Two disjoint repo pairs in the graph
+    await stores.kvStore.set("correlation:graph", JSON.stringify({
+      edges: [
+        { edge: { source: "src/a.ts", target: "src/b.ts", kind: "imports", metadata: {} }, sourceRepo: "repo-a", targetRepo: "repo-b", packageName: "@a/b" },
+        { edge: { source: "src/c.ts", target: "src/d.ts", kind: "imports", metadata: {} }, sourceRepo: "repo-c", targetRepo: "repo-d", packageName: "@c/d" },
+      ],
+      repoPairs: ["repo-a->repo-b", "repo-c->repo-d"],
+      downstreamMap: [["repo-a", ["repo-b"]], ["repo-c", ["repo-d"]]],
+      upstreamMap: [["repo-b", ["repo-a"]], ["repo-d", ["repo-c"]]],
+    }));
+    register(server, stores);
+
+    const handler = server.tools.get("get_cross_repo_graph")!.handler;
+    // Filtering to repo-a should only see repo-a + repo-b (2 repos), not all 4
+    const result = await handler({ repo: "repo-a" });
+    const parsed = JSON.parse(result.content[0]!.text) as { repoCount: number; edgeCount: number };
+    expect(parsed.edgeCount).toBe(1);
+    expect(parsed.repoCount).toBe(2); // only repo-a and repo-b, not repo-c/repo-d
+  });
+
+  it("downstreamMap and upstreamMap are filtered when repo is specified", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("correlation:graph", JSON.stringify({
+      edges: [
+        { edge: { source: "src/a.ts", target: "src/b.ts", kind: "imports", metadata: {} }, sourceRepo: "repo-a", targetRepo: "repo-b", packageName: "@a/b" },
+        { edge: { source: "src/c.ts", target: "src/d.ts", kind: "imports", metadata: {} }, sourceRepo: "repo-c", targetRepo: "repo-d", packageName: "@c/d" },
+      ],
+      repoPairs: ["repo-a->repo-b", "repo-c->repo-d"],
+      downstreamMap: [["repo-a", ["repo-b"]], ["repo-c", ["repo-d"]]],
+      upstreamMap: [["repo-b", ["repo-a"]], ["repo-d", ["repo-c"]]],
+    }));
+    register(server, stores);
+
+    const handler = server.tools.get("get_cross_repo_graph")!.handler;
+    const result = await handler({ repo: "repo-a" });
+    const parsed = JSON.parse(result.content[0]!.text) as {
+      downstreamMap: Record<string, string[]>;
+      upstreamMap: Record<string, string[]>;
+    };
+    // repo-c and repo-d should be absent from both maps
+    expect(Object.keys(parsed.downstreamMap)).not.toContain("repo-c");
+    expect(Object.keys(parsed.upstreamMap)).not.toContain("repo-d");
+    // repo-a's downstream entry should be present
+    expect(parsed.downstreamMap["repo-a"]).toEqual(["repo-b"]);
+  });
+
+  it("includePaths uses filteredEdges when repo is specified", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("correlation:graph", JSON.stringify({
+      edges: [
+        { edge: { source: "src/a.ts", target: "src/b.ts", kind: "imports", metadata: {} }, sourceRepo: "repo-a", targetRepo: "repo-b", packageName: "@a/b" },
+        { edge: { source: "src/c.ts", target: "src/d.ts", kind: "imports", metadata: {} }, sourceRepo: "repo-c", targetRepo: "repo-d", packageName: "@c/d" },
+      ],
+      repoPairs: ["repo-a->repo-b", "repo-c->repo-d"],
+      downstreamMap: [["repo-a", ["repo-b"]], ["repo-c", ["repo-d"]]],
+      upstreamMap: [["repo-b", ["repo-a"]], ["repo-d", ["repo-c"]]],
+    }));
+    register(server, stores);
+
+    const handler = server.tools.get("get_cross_repo_graph")!.handler;
+    const result = await handler({ repo: "repo-a", includePaths: true });
+    const parsed = JSON.parse(result.content[0]!.text) as { paths?: Record<string, unknown> };
+    // Paths should only exist between repo-a and repo-b, not involving repo-c/repo-d
+    if (parsed.paths) {
+      expect(Object.keys(parsed.paths).every((k) => k.includes("repo-a") || k.includes("repo-b"))).toBe(true);
+      expect(Object.keys(parsed.paths).some((k) => k.includes("repo-c") || k.includes("repo-d"))).toBe(false);
+    }
+  });
 });
 
 describe("get_service_correlation", () => {
@@ -368,6 +457,48 @@ describe("get_service_correlation", () => {
     };
     expect(parsed.linchpins.results).toHaveLength(1);
     expect(parsed.orphanedServices.results).toHaveLength(0);
+  });
+
+  it("filters template-literal URLs from linchpins", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("correlation:services", JSON.stringify({
+      links: [],
+      linchpins: [
+        { endpoint: "/api/real", producerCount: 1, consumerCount: 1, linkedRepoCount: 2, criticalityScore: 5 },
+        { endpoint: "${BASE_URL}/api/internal", producerCount: 1, consumerCount: 1, linkedRepoCount: 2, criticalityScore: 5 },
+      ],
+      orphanedServices: [],
+    }));
+    register(server, stores);
+
+    const handler = server.tools.get("get_service_correlation")!.handler;
+    const result = await handler({ kind: "linchpins" });
+    const parsed = JSON.parse(result.content[0]!.text) as { linchpins: { results: Array<{ endpoint: string }> } };
+    expect(parsed.linchpins.results).toHaveLength(1);
+    expect(parsed.linchpins.results[0]!.endpoint).toBe("/api/real");
+  });
+
+  it("truncates links to 100 when more than 100 exist", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    const manyLinks = Array.from({ length: 150 }, (_, i) => ({ from: `svc-${i}`, to: `svc-${i + 1}` }));
+    await stores.kvStore.set("correlation:services", JSON.stringify({
+      links: manyLinks,
+      linchpins: [],
+      orphanedServices: [],
+    }));
+    register(server, stores);
+
+    const handler = server.tools.get("get_service_correlation")!.handler;
+    const result = await handler({});
+    const parsed = JSON.parse(result.content[0]!.text) as {
+      links: unknown[];
+      linksTruncated?: { shown: number; total: number };
+    };
+    expect(parsed.links).toHaveLength(100);
+    expect(parsed.linksTruncated).toBeDefined();
+    expect(parsed.linksTruncated!.total).toBe(150);
   });
 });
 
@@ -500,6 +631,10 @@ const ALL_TOOL_NAMES = [
   "get_cross_repo_graph", "get_service_correlation", "get_cross_repo_models",
   "get_cross_repo_impact",
   "get_flag_inventory", "get_flag_impact", "get_vulnerability",
+  "scan_org", "get_repo_candidates", "index_repo",
+  "ignore_repo", "get_indexing_state", "check_new_repos",
+  "get_hotspots", "get_temporal_coupling", "get_patterns",
+  "get_symbol_importers",
 ] as const;
 
 /** Minimal valid args for every tool so we can invoke them without crashes. */
@@ -520,6 +655,16 @@ const MINIMAL_ARGS: Record<string, Record<string, unknown>> = {
   get_flag_inventory:     {},
   get_flag_impact:        { flag: "MY_FLAG", repo: "repo-a" },
   get_vulnerability:      {},
+  scan_org:               { org: "test-org" },
+  get_repo_candidates:    {},
+  index_repo:             { name: "test-repo", url: "https://github.com/test/test-repo" },
+  ignore_repo:            { name: "test-repo" },
+  get_indexing_state:     {},
+  check_new_repos:        { org: "test-org" },
+  get_hotspots:           {},
+  get_temporal_coupling:  {},
+  get_patterns:           {},
+  get_symbol_importers:   { symbol: "createClient" },
 };
 
 function makeSarifStoresWithRepoMetadata(count: number) {
@@ -551,7 +696,7 @@ function makeInvoker(server: ReturnType<typeof createMockServer>) {
 // ---------------------------------------------------------------------------
 
 describe("MCP tool sanity checks", () => {
-  it("all 16 tools return valid JSON content with text entry", async () => {
+  it("all 26 tools return valid JSON content with text entry", async () => {
     const server = createMockServer();
     register(server, makeStores());
     const invoker = makeInvoker(server);
@@ -832,6 +977,24 @@ describe("MCP tool sanity checks", () => {
     expect(parsed.findings[0]!.ruleId).toBe("vuln/lodash");
   });
 
+  it("get_vulnerability severity filter handles uppercase severity values from npm audit", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("sarif:latest:index", JSON.stringify({ repos: ["test-repo"] }));
+    await stores.kvStore.set("sarif:vuln:test-repo", JSON.stringify([
+      { ruleId: "vuln/critical-pkg", level: "error", message: { text: "Critical vuln" }, properties: { severity: "CRITICAL" } },
+      { ruleId: "vuln/low-pkg", level: "note", message: { text: "Low vuln" }, properties: { severity: "low" } },
+    ]));
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    // Filter by "high" — CRITICAL (uppercase) should still be included (CRITICAL >= high)
+    const result = await invoker("get_vulnerability", { severity: "high" });
+    const parsed = JSON.parse(result.content[0]!.text!) as { findings: Array<{ ruleId: string }>; total: number };
+    expect(parsed.total).toBe(1);
+    expect(parsed.findings[0]!.ruleId).toBe("vuln/critical-pkg");
+  });
+
   it("get_flag_inventory empty returns empty list", async () => {
     const server = createMockServer();
     register(server, makeStores());
@@ -854,6 +1017,99 @@ describe("MCP tool sanity checks", () => {
     expect(parsed).toBeDefined();
     expect(Array.isArray(parsed.affectedFiles)).toBe(true);
     expect(parsed.affectedFiles).toHaveLength(0);
+  });
+
+  it("get_blast_radius with crossRepo=true but no correlation data returns warning", async () => {
+    const server = createMockServer();
+    register(server, makeStores());
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_blast_radius", { files: ["test.ts"], crossRepo: true });
+    const parsed = JSON.parse(result.content[0]!.text!) as { crossRepoWarning?: string };
+    expect(parsed.crossRepoWarning).toBeDefined();
+    expect(parsed.crossRepoWarning).toContain("no correlation data");
+  });
+
+  it("get_blast_radius serializes crossRepoAffected as plain object, not empty", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    // Seed graph with import edges and correlation graph
+    await stores.graphStore.addEdges([
+      { source: "repo-a:src/a.ts", target: "repo-a:src/b.ts", kind: "imports", metadata: { repo: "repo-a" } },
+      { source: "repo-b:src/x.ts", target: "repo-b:src/y.ts", kind: "imports", metadata: { repo: "repo-b" } },
+    ]);
+    await stores.kvStore.set("correlation:graph", makeSerializedGraph());
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_blast_radius", { files: ["repo-a:src/b.ts"], repo: "repo-a", crossRepo: true });
+    const text = result.content[0]!.text!;
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    // crossRepoAffected should be a plain object (not undefined, not {})
+    // or if no downstream matches, should have a crossRepoNote
+    expect(parsed.crossRepoWarning).toBeUndefined();
+    if (parsed.crossRepoAffected) {
+      expect(typeof parsed.crossRepoAffected).toBe("object");
+      expect(Array.isArray(parsed.crossRepoAffected)).toBe(false);
+    }
+  });
+
+  it("get_cross_repo_graph returns downstreamMap as object, not array-of-arrays", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("correlation:graph", makeSerializedGraph());
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_cross_repo_graph", {});
+    const parsed = JSON.parse(result.content[0]!.text!) as { downstreamMap: unknown; upstreamMap: unknown };
+    // Should be plain objects, not arrays
+    expect(typeof parsed.downstreamMap).toBe("object");
+    expect(Array.isArray(parsed.downstreamMap)).toBe(false);
+    expect(typeof parsed.upstreamMap).toBe("object");
+    expect(Array.isArray(parsed.upstreamMap)).toBe(false);
+    // Verify values
+    expect((parsed.downstreamMap as Record<string, string[]>)["repo-a"]).toEqual(["repo-b"]);
+    expect((parsed.upstreamMap as Record<string, string[]>)["repo-b"]).toEqual(["repo-a"]);
+  });
+
+  it("get_service_correlation filters template-literal URLs from orphans", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("correlation:services", JSON.stringify({
+      links: [],
+      linchpins: [],
+      orphanedServices: [
+        { endpoint: "/api/real", hasProducers: false, hasConsumers: true, repos: ["r1"] },
+        { endpoint: "${MAILPIT_URL}/api/v1/search", hasProducers: false, hasConsumers: true, repos: ["r2"] },
+        { endpoint: "${BASE_URL}/auth/callback", hasProducers: false, hasConsumers: true, repos: ["r3"] },
+      ],
+    }));
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_service_correlation", { kind: "orphaned" });
+    const parsed = JSON.parse(result.content[0]!.text!) as { orphanedServices: { results: Array<{ endpoint: string }> } };
+    expect(parsed.orphanedServices.results).toHaveLength(1);
+    expect(parsed.orphanedServices.results[0]!.endpoint).toBe("/api/real");
+  });
+
+  it("get_diagnostics with level filter returns hint about other levels", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    // Seed with warning-level findings only
+    await stores.kvStore.set("sarif:latest:index", JSON.stringify({ repos: ["test-repo"] }));
+    await stores.kvStore.set("sarif:repo:test-repo", JSON.stringify([
+      { ruleId: "test/rule", level: "warning", message: { text: "something" }, locations: [] },
+    ]));
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_diagnostics", { level: "error" });
+    const parsed = JSON.parse(result.content[0]!.text!) as { total: number; note?: string };
+    expect(parsed.total).toBe(0);
+    expect(parsed.note).toBeDefined();
+    expect(parsed.note).toContain("other severity levels");
   });
 
   it("get_cross_repo_impact with no graph data returns graceful error", async () => {
@@ -895,10 +1151,10 @@ describe("MCP tool sanity checks", () => {
 // ---------------------------------------------------------------------------
 
 describe("MCP meta-sanity checks", () => {
-  it("exactly 16 tools are registered", () => {
+  it("exactly 26 tools are registered", () => {
     const server = createMockServer();
     register(server, makeStores());
-    expect(server.tools.size).toBe(16);
+    expect(server.tools.size).toBe(26);
   });
 
   it("all registered tools have non-empty descriptions", () => {
@@ -1076,5 +1332,563 @@ describe("MCP meta-sanity checks", () => {
     for (const link of resourceLinks) {
       expect(link.uri, "resource_link URI should start with mma://").toMatch(/^mma:\/\//);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// get_hotspots tests
+// ---------------------------------------------------------------------------
+
+describe("get_hotspots", () => {
+  it("returns empty note when no hotspot data exists", async () => {
+    const server = createMockServer();
+    register(server, makeStores());
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_hotspots", {});
+    const parsed = JSON.parse(result.content[0]!.text!) as { results: unknown[]; total: number; note: string };
+    expect(parsed.total).toBe(0);
+    expect(parsed.results).toEqual([]);
+    expect(parsed.note).toContain("No hotspot data");
+  });
+
+  it("returns hotspots sorted by hotspotScore descending", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("hotspots:repo-a", JSON.stringify([
+      { file: "src/low.ts", hotspotScore: 30, churnScore: 0.3, complexityScore: 0.4 },
+      { file: "src/big.ts", hotspotScore: 85, churnScore: 0.9, complexityScore: 0.8 },
+      { file: "src/mid.ts", hotspotScore: 55, churnScore: 0.6, complexityScore: 0.5 },
+    ]));
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_hotspots", {});
+    const parsed = JSON.parse(result.content[0]!.text!) as {
+      total: number;
+      results: Array<{ file: string; hotspotScore: number; repo: string }>;
+    };
+    expect(parsed.total).toBe(3);
+    expect(parsed.results[0]!.hotspotScore).toBe(85);
+    expect(parsed.results[0]!.file).toBe("src/big.ts");
+    expect(parsed.results[0]!.repo).toBe("repo-a");
+    expect(parsed.results[1]!.hotspotScore).toBe(55);
+    expect(parsed.results[2]!.hotspotScore).toBe(30);
+  });
+
+  it("filters hotspots by repo", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("hotspots:repo-a", JSON.stringify([
+      { file: "src/a.ts", hotspotScore: 70, churnScore: 0.7, complexityScore: 0.6 },
+    ]));
+    await stores.kvStore.set("hotspots:repo-b", JSON.stringify([
+      { file: "src/b.ts", hotspotScore: 90, churnScore: 0.9, complexityScore: 0.8 },
+    ]));
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_hotspots", { repo: "repo-a" });
+    const parsed = JSON.parse(result.content[0]!.text!) as { total: number; results: Array<{ repo: string }> };
+    expect(parsed.total).toBe(1);
+    expect(parsed.results[0]!.repo).toBe("repo-a");
+  });
+
+  it("paginates hotspots with limit and offset", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    const hotspots = Array.from({ length: 10 }, (_, i) => ({
+      file: `src/file-${i}.ts`,
+      hotspotScore: i * 10,
+      churnScore: 0.5,
+      complexityScore: 0.5,
+    }));
+    await stores.kvStore.set("hotspots:repo-a", JSON.stringify(hotspots));
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const page = await invoker("get_hotspots", { limit: 3, offset: 0 });
+    const parsed = JSON.parse(page.content[0]!.text!) as { total: number; returned: number; hasMore: boolean };
+    expect(parsed.total).toBe(10);
+    expect(parsed.returned).toBe(3);
+    expect(parsed.hasMore).toBe(true);
+  });
+
+  it("returns empty note with repo param when no data for that repo", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("hotspots:repo-b", JSON.stringify([
+      { file: "src/b.ts", hotspotScore: 50, churnScore: 0.5, complexityScore: 0.5 },
+    ]));
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_hotspots", { repo: "repo-a" });
+    const parsed = JSON.parse(result.content[0]!.text!) as { total: number; note: string };
+    expect(parsed.total).toBe(0);
+    expect(parsed.note).toContain("repo-a");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// get_temporal_coupling tests
+// ---------------------------------------------------------------------------
+
+describe("get_temporal_coupling", () => {
+  it("returns empty result when no temporal coupling data exists", async () => {
+    const server = createMockServer();
+    register(server, makeStores());
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_temporal_coupling", {});
+    const parsed = JSON.parse(result.content[0]!.text!) as { results: unknown[]; total: number };
+    expect(parsed.total).toBe(0);
+    expect(parsed.results).toEqual([]);
+  });
+
+  it("returns paired files sorted by coChangeCount descending", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("temporal-coupling:repo-a", JSON.stringify({
+      pairs: [
+        { fileA: "a.ts", fileB: "b.ts", coChangeCount: 5, npmi: 0.7 },
+        { fileA: "c.ts", fileB: "d.ts", coChangeCount: 12, npmi: 0.9 },
+        { fileA: "e.ts", fileB: "f.ts", coChangeCount: 3, npmi: 0.4 },
+      ],
+      commitsAnalyzed: 100,
+      commitsSkipped: 2,
+    }));
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_temporal_coupling", { repo: "repo-a" });
+    const parsed = JSON.parse(result.content[0]!.text!) as {
+      total: number;
+      commitsAnalyzed: number;
+      results: Array<{ fileA: string; fileB: string; coChangeCount: number }>;
+    };
+    expect(parsed.total).toBe(3);
+    expect(parsed.commitsAnalyzed).toBe(100);
+    expect(parsed.results[0]!.coChangeCount).toBe(12);
+    expect(parsed.results[0]!.fileA).toBe("c.ts");
+    expect(parsed.results[1]!.coChangeCount).toBe(5);
+    expect(parsed.results[2]!.coChangeCount).toBe(3);
+  });
+
+  it("filters by repo", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("temporal-coupling:repo-a", JSON.stringify({
+      pairs: [{ fileA: "a.ts", fileB: "b.ts", coChangeCount: 5, npmi: 0.7 }],
+      commitsAnalyzed: 50,
+    }));
+    await stores.kvStore.set("temporal-coupling:repo-b", JSON.stringify({
+      pairs: [{ fileA: "x.ts", fileB: "y.ts", coChangeCount: 8, npmi: 0.8 }],
+      commitsAnalyzed: 75,
+    }));
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_temporal_coupling", { repo: "repo-a" });
+    const parsed = JSON.parse(result.content[0]!.text!) as {
+      total: number;
+      results: Array<{ fileA: string }>;
+    };
+    expect(parsed.total).toBe(1);
+    expect(parsed.results[0]!.fileA).toBe("a.ts");
+  });
+
+  it("filters by minCoChanges", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("temporal-coupling:repo-a", JSON.stringify({
+      pairs: [
+        { fileA: "a.ts", fileB: "b.ts", coChangeCount: 2, npmi: 0.5 },
+        { fileA: "c.ts", fileB: "d.ts", coChangeCount: 8, npmi: 0.8 },
+        { fileA: "e.ts", fileB: "f.ts", coChangeCount: 1, npmi: 0.2 },
+      ],
+      commitsAnalyzed: 60,
+    }));
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_temporal_coupling", { repo: "repo-a", minCoChanges: 3 });
+    const parsed = JSON.parse(result.content[0]!.text!) as { total: number; results: Array<{ coChangeCount: number }> };
+    expect(parsed.total).toBe(1);
+    expect(parsed.results[0]!.coChangeCount).toBe(8);
+  });
+
+  it("returns note when no data for specific repo", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_temporal_coupling", { repo: "nonexistent-repo" });
+    const parsed = JSON.parse(result.content[0]!.text!) as { results: unknown[]; total: number; commitsAnalyzed: number; note: string };
+    expect(parsed.results).toEqual([]);
+    expect(parsed.total).toBe(0);
+    expect(parsed.commitsAnalyzed).toBe(0);
+    expect(parsed.note).toContain("nonexistent-repo");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// get_patterns tests
+// ---------------------------------------------------------------------------
+
+describe("get_patterns", () => {
+  it("returns empty note when no pattern data exists", async () => {
+    const server = createMockServer();
+    register(server, makeStores());
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_patterns", {});
+    const parsed = JSON.parse(result.content[0]!.text!) as { patterns: Record<string, unknown>; note: string };
+    expect(parsed.patterns).toEqual({});
+    expect(parsed.note).toContain("No pattern data");
+  });
+
+  it("returns all patterns for a specific repo", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("patterns:repo-a", JSON.stringify({
+      factory: [{ file: "factory.ts", symbol: "createFoo" }],
+      singleton: [{ file: "single.ts", symbol: "getInstance" }],
+    }));
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_patterns", { repo: "repo-a" });
+    const parsed = JSON.parse(result.content[0]!.text!) as {
+      repo: string;
+      patterns: { factory: Array<{ file: string; symbol: string }>; singleton: Array<{ file: string; symbol: string }> };
+    };
+    expect(parsed.repo).toBe("repo-a");
+    expect(parsed.patterns.factory).toHaveLength(1);
+    expect(parsed.patterns.factory[0]!.symbol).toBe("createFoo");
+    expect(parsed.patterns.singleton[0]!.symbol).toBe("getInstance");
+  });
+
+  it("filters patterns by pattern type substring (case-insensitive)", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("patterns:repo-a", JSON.stringify({
+      factory: [{ file: "factory.ts", symbol: "createFoo" }],
+      singleton: [{ file: "single.ts", symbol: "getInstance" }],
+      observer: [{ file: "events.ts", symbol: "EventEmitter" }],
+    }));
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_patterns", { repo: "repo-a", pattern: "FACT" });
+    const parsed = JSON.parse(result.content[0]!.text!) as {
+      patterns: Record<string, unknown>;
+    };
+    expect(Object.keys(parsed.patterns)).toEqual(["factory"]);
+  });
+
+  it("returns all repos patterns when no repo filter specified", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("patterns:repo-a", JSON.stringify({
+      factory: [{ file: "factory.ts", symbol: "createFoo" }],
+    }));
+    await stores.kvStore.set("patterns:repo-b", JSON.stringify({
+      singleton: [{ file: "single.ts", symbol: "getInstance" }],
+    }));
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_patterns", {});
+    const parsed = JSON.parse(result.content[0]!.text!) as { repos: Record<string, unknown> };
+    expect(parsed.repos).toHaveProperty("repo-a");
+    expect(parsed.repos).toHaveProperty("repo-b");
+  });
+
+  it("filters all-repo patterns by pattern type", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("patterns:repo-a", JSON.stringify({
+      factory: [{ file: "factory.ts", symbol: "createFoo" }],
+      observer: [{ file: "events.ts", symbol: "EventEmitter" }],
+    }));
+    await stores.kvStore.set("patterns:repo-b", JSON.stringify({
+      singleton: [{ file: "single.ts", symbol: "getInstance" }],
+    }));
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    // "factory" only matches repo-a (repo-b has singleton/observer, no factory)
+    const result = await invoker("get_patterns", { pattern: "factory" });
+    const parsed = JSON.parse(result.content[0]!.text!) as { repos: Record<string, unknown> };
+    expect(parsed.repos).toHaveProperty("repo-a");
+    expect(parsed.repos).not.toHaveProperty("repo-b");
+    const repoAPatterns = parsed.repos["repo-a"] as Record<string, unknown>;
+    expect(Object.keys(repoAPatterns)).toEqual(["factory"]);
+  });
+
+  it("returns note when no data for specific repo", async () => {
+    const server = createMockServer();
+    register(server, makeStores());
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_patterns", { repo: "missing-repo" });
+    const parsed = JSON.parse(result.content[0]!.text!) as { repo: string; patterns: Record<string, unknown>; note: string };
+    expect(parsed.repo).toBe("missing-repo");
+    expect(parsed.patterns).toEqual({});
+    expect(parsed.note).toContain("missing-repo");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// get_symbol_importers
+// ---------------------------------------------------------------------------
+
+/** Build a serialized correlation:graph with resolved and/or importedNames metadata. */
+function makeGraphWithSymbols() {
+  return JSON.stringify({
+    edges: [
+      {
+        edge: {
+          source: "repo-a:src/app.ts",
+          target: "repo-b:src/client.ts",
+          kind: "imports",
+          metadata: {
+            importedNames: ["createClient"],
+            resolvedSymbols: [
+              { name: "createClient", targetFileId: "repo-b:src/client.ts", kind: "function" },
+            ],
+          },
+        },
+        sourceRepo: "repo-a",
+        targetRepo: "repo-b",
+        packageName: "@acme/supabase-js",
+      },
+      {
+        edge: {
+          source: "repo-c:src/index.ts",
+          target: "repo-b:src/client.ts",
+          kind: "imports",
+          metadata: {
+            importedNames: ["SupabaseClient"],
+            resolvedSymbols: [
+              { name: "SupabaseClient", targetFileId: "repo-b:src/client.ts", kind: "class" },
+            ],
+          },
+        },
+        sourceRepo: "repo-c",
+        targetRepo: "repo-b",
+        packageName: "@acme/supabase-js",
+      },
+      {
+        edge: {
+          source: "repo-d:src/helper.ts",
+          target: "repo-b:src/client.ts",
+          kind: "imports",
+          metadata: {
+            // Only importedNames, no resolvedSymbols (unresolved edge)
+            importedNames: ["createClient"],
+          },
+        },
+        sourceRepo: "repo-d",
+        targetRepo: "repo-b",
+        packageName: "@acme/supabase-js",
+      },
+    ],
+    repoPairs: ["repo-a->repo-b", "repo-c->repo-b", "repo-d->repo-b"],
+    downstreamMap: [["repo-a", ["repo-b"]], ["repo-c", ["repo-b"]], ["repo-d", ["repo-b"]]],
+    upstreamMap: [["repo-b", ["repo-a", "repo-c", "repo-d"]]],
+  });
+}
+
+describe("get_symbol_importers", () => {
+  it("returns error when no correlation data exists", async () => {
+    const server = createMockServer();
+    register(server, makeStores());
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_symbol_importers", { symbol: "createClient" });
+    const parsed = JSON.parse(result.content[0]!.text!) as { error: string };
+    expect(parsed.error).toContain("No correlation data");
+  });
+
+  it("finds importers by resolvedSymbols match", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("correlation:graph", makeGraphWithSymbols());
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_symbol_importers", { symbol: "createClient" });
+    const parsed = JSON.parse(result.content[0]!.text!) as {
+      symbol: string;
+      importerCount: number;
+      importers: Array<{ repo: string; files: unknown[] }>;
+    };
+    expect(parsed.symbol).toBe("createClient");
+    // repo-a has resolvedSymbols match; repo-d has importedNames fallback — both grouped by repo
+    expect(parsed.importerCount).toBeGreaterThanOrEqual(1);
+    const repos = parsed.importers.map((i) => i.repo);
+    expect(repos).toContain("repo-a");
+  });
+
+  it("finds SupabaseClient importer via resolvedSymbols", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("correlation:graph", makeGraphWithSymbols());
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_symbol_importers", { symbol: "SupabaseClient" });
+    const parsed = JSON.parse(result.content[0]!.text!) as {
+      importerCount: number;
+      importers: Array<{ repo: string }>;
+    };
+    expect(parsed.importerCount).toBe(1);
+    expect(parsed.importers[0]!.repo).toBe("repo-c");
+  });
+
+  it("falls back to importedNames when no resolvedSymbols match", async () => {
+    // Build a graph with only importedNames (no resolvedSymbols at all)
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("correlation:graph", JSON.stringify({
+      edges: [
+        {
+          edge: {
+            source: "repo-a:src/app.ts",
+            target: "repo-b:src/lib.ts",
+            kind: "imports",
+            metadata: { importedNames: ["helperFn"] },
+          },
+          sourceRepo: "repo-a",
+          targetRepo: "repo-b",
+          packageName: "@acme/lib",
+        },
+      ],
+      repoPairs: ["repo-a->repo-b"],
+      downstreamMap: [["repo-a", ["repo-b"]]],
+      upstreamMap: [["repo-b", ["repo-a"]]],
+    }));
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_symbol_importers", { symbol: "helperFn" });
+    const parsed = JSON.parse(result.content[0]!.text!) as {
+      importerCount: number;
+      importers: Array<{ repo: string; files: Array<{ resolvedSymbols: unknown[] }> }>;
+    };
+    expect(parsed.importerCount).toBe(1);
+    expect(parsed.importers[0]!.repo).toBe("repo-a");
+    // Fallback match has empty resolvedSymbols in the file entry
+    expect(parsed.importers[0]!.files[0]!.resolvedSymbols).toEqual([]);
+  });
+
+  it("returns empty importers when symbol not found", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("correlation:graph", makeGraphWithSymbols());
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_symbol_importers", { symbol: "nonExistentSymbol" });
+    const parsed = JSON.parse(result.content[0]!.text!) as { importerCount: number; importers: unknown[] };
+    expect(parsed.importerCount).toBe(0);
+    expect(parsed.importers).toHaveLength(0);
+  });
+
+  it("filters importers by package name", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("correlation:graph", JSON.stringify({
+      edges: [
+        {
+          edge: {
+            source: "repo-a:src/app.ts",
+            target: "repo-b:src/client.ts",
+            kind: "imports",
+            metadata: {
+              importedNames: ["createClient"],
+              resolvedSymbols: [{ name: "createClient", targetFileId: "repo-b:src/client.ts", kind: "function" }],
+            },
+          },
+          sourceRepo: "repo-a",
+          targetRepo: "repo-b",
+          packageName: "@acme/supabase-js",
+        },
+        {
+          edge: {
+            source: "repo-x:src/app.ts",
+            target: "repo-y:src/lib.ts",
+            kind: "imports",
+            metadata: {
+              importedNames: ["createClient"],
+              resolvedSymbols: [{ name: "createClient", targetFileId: "repo-y:src/lib.ts", kind: "function" }],
+            },
+          },
+          sourceRepo: "repo-x",
+          targetRepo: "repo-y",
+          packageName: "@other/lib",
+        },
+      ],
+      repoPairs: ["repo-a->repo-b", "repo-x->repo-y"],
+      downstreamMap: [["repo-a", ["repo-b"]], ["repo-x", ["repo-y"]]],
+      upstreamMap: [["repo-b", ["repo-a"]], ["repo-y", ["repo-x"]]],
+    }));
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_symbol_importers", { symbol: "createClient", package: "@acme/supabase-js" });
+    const parsed = JSON.parse(result.content[0]!.text!) as {
+      importerCount: number;
+      importers: Array<{ repo: string; files: Array<{ packageName: string }> }>;
+    };
+    expect(parsed.importerCount).toBe(1);
+    expect(parsed.importers[0]!.repo).toBe("repo-a");
+    expect(parsed.importers[0]!.files[0]!.packageName).toBe("@acme/supabase-js");
+  });
+
+  it("filters importers by target repo", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("correlation:graph", makeGraphWithSymbols());
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    // Filter to edges targeting repo-b — createClient is imported from repo-a and repo-d
+    const result = await invoker("get_symbol_importers", { symbol: "createClient", repo: "repo-b" });
+    const parsed = JSON.parse(result.content[0]!.text!) as {
+      importerCount: number;
+      importers: Array<{ repo: string; files: Array<{ targetRepo: string }> }>;
+    };
+    // All returned file entries should target repo-b
+    const allTargetB = parsed.importers.every((i) => i.files.every((f) => f.targetRepo === "repo-b"));
+    expect(allTargetB).toBe(true);
+  });
+
+  it("returns symbol and package in response", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("correlation:graph", makeGraphWithSymbols());
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_symbol_importers", { symbol: "createClient", package: "@acme/supabase-js" });
+    const parsed = JSON.parse(result.content[0]!.text!) as { symbol: string; package: string | null };
+    expect(parsed.symbol).toBe("createClient");
+    expect(parsed.package).toBe("@acme/supabase-js");
+  });
+
+  it("returns null package when no package filter given", async () => {
+    const server = createMockServer();
+    const stores = makeStores();
+    await stores.kvStore.set("correlation:graph", makeGraphWithSymbols());
+    register(server, stores);
+    const invoker = makeInvoker(server);
+
+    const result = await invoker("get_symbol_importers", { symbol: "createClient" });
+    const parsed = JSON.parse(result.content[0]!.text!) as { package: string | null };
+    expect(parsed.package).toBeNull();
   });
 });

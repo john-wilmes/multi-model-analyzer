@@ -32,6 +32,12 @@ Thumbs.db
 # Test coverage
 coverage/
 
-# Playwright
+# Corpus data (local only)
+data-*/
+
+# Logs
+*.log
+
+# Playwright / test results
 test-results/
 playwright-report/

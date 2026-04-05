@@ -1,9 +1,8 @@
+import { join } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { GraphStore, SearchStore, KVStore } from "@mma/storage";
 import { getSarifResultsPaginated } from "@mma/storage";
-import type { DetectedPattern, FaultTree, SarifLog } from "@mma/core";
 import { findDependencyPaths, computeCrossRepoImpact } from "@mma/correlation";
-import type { CrossRepoGraph } from "@mma/correlation";
+import type { CrossRepoGraph, ResolvedImportedSymbol } from "@mma/correlation";
 import {
   routeQuery,
   executeSearchQuery,
@@ -16,37 +15,18 @@ import {
   getFlagInventory,
   computeFlagImpact,
 } from "@mma/query";
-import type { ModuleMetrics, RepoMetricsSummary } from "@mma/core";
 import { z } from "zod";
-
-export interface Stores {
-  readonly graphStore: GraphStore;
-  readonly searchStore: SearchStore;
-  readonly kvStore: KVStore;
-}
-
-type ContentItem =
-  | { type: "text"; text: string }
-  | { type: "resource_link"; uri: string; name: string; description?: string };
-type ToolResult = { content: ContentItem[] };
-
-function jsonResult(data: unknown, resourceLinks?: Array<{ uri: string; name: string; description?: string }>): ToolResult {
-  const content: ContentItem[] = [{ type: "text" as const, text: JSON.stringify(data, null, 2) }];
-  if (resourceLinks) {
-    for (const link of resourceLinks) {
-      content.push({ type: "resource_link" as const, ...link });
-    }
-  }
-  return { content };
-}
-
-function paginated<T>(items: readonly T[], offset: number, limit: number): { total: number; returned: number; offset: number; hasMore: boolean; results: T[] } {
-  const page = items.slice(offset, offset + limit);
-  return { total: items.length, returned: page.length, offset, hasMore: offset + limit < items.length, results: page };
-}
+import {
+  jsonResult,
+  paginated,
+  deserializeGraph,
+} from "./tools/helpers.js";
+export type { IndexRepoResult, Stores, ContentItem, ToolResult } from "./tools/helpers.js";
+import type { Stores } from "./tools/helpers.js";
+import { dispatchRoute, getMetrics } from "./tools/dispatch.js";
 
 export function registerTools(server: McpServer, stores: Stores): void {
-  const { graphStore, searchStore, kvStore } = stores;
+  const { graphStore, searchStore, kvStore, mirrorDir, indexRepo } = stores;
 
   // 1. Natural language query (catch-all)
   server.registerTool("query", {
@@ -90,9 +70,9 @@ export function registerTools(server: McpServer, stores: Stores): void {
 
   // 3. Who calls a symbol
   server.registerTool("get_callers", {
-    description: "Find all callers of a symbol. Accepts fully qualified names (file.ts#ClassName) or short names (resolved via BM25 fallback).",
+    description: "Find all callers of a symbol. Best results with fully qualified names like 'src/auth.ts#AuthService.signIn' or 'file.ts#ClassName'. Short names like 'signIn' use BM25 fallback (less precise). Use 'search' first to find the exact symbol ID if unsure.",
     inputSchema: {
-      symbol: z.string().describe("Symbol name or FQN to look up callers for"),
+      symbol: z.string().describe("Symbol FQN (e.g. 'src/auth.ts#AuthService.signIn') or short name (BM25 fallback)"),
       repo: z.string().optional().describe("Filter to a specific repository name"),
     },
   }, async ({ symbol, repo }) => {
@@ -102,9 +82,9 @@ export function registerTools(server: McpServer, stores: Stores): void {
 
   // 4. What does a symbol call
   server.registerTool("get_callees", {
-    description: "Find all symbols called by a given symbol. Accepts fully qualified names or short names.",
+    description: "Find all symbols called by a given symbol. Best results with fully qualified names like 'src/auth.ts#AuthService.signIn'. Short names use BM25 fallback. Use 'search' first to find the exact symbol ID if unsure.",
     inputSchema: {
-      symbol: z.string().describe("Symbol name or FQN to look up callees for"),
+      symbol: z.string().describe("Symbol FQN (e.g. 'src/auth.ts#AuthService.signIn') or short name (BM25 fallback)"),
       repo: z.string().optional().describe("Filter to a specific repository name"),
     },
   }, async ({ symbol, repo }) => {
@@ -136,7 +116,34 @@ export function registerTools(server: McpServer, stores: Stores): void {
     },
   }, async ({ repo }) => {
     const result = await executeArchitectureQuery(graphStore, kvStore, repo);
-    return jsonResult(result);
+    // Truncate large arrays to prevent 20K+ token responses
+    const MAX_EDGES = 50;
+    const MAX_TOPOLOGY = 30;
+    const truncated: Record<string, unknown> = {
+      repos: result.repos,
+      description: result.description,
+    };
+    if (result.crossRepoEdges.length > MAX_EDGES) {
+      // Sort by count descending, keep top N
+      const sorted = [...result.crossRepoEdges].sort((a, b) => b.count - a.count);
+      truncated["crossRepoEdges"] = sorted.slice(0, MAX_EDGES);
+      truncated["crossRepoEdgesTruncated"] = { shown: MAX_EDGES, total: result.crossRepoEdges.length, note: "Sorted by import count desc. Use get_cross_repo_graph for full edge list." };
+    } else {
+      truncated["crossRepoEdges"] = result.crossRepoEdges;
+    }
+    if (result.serviceTopology.length > MAX_TOPOLOGY) {
+      // Sort deterministically by sourceRepo+sourceFile before truncating (no count field on ServiceLink)
+      const sortedTopology = [...result.serviceTopology].sort((a, b) => {
+        const aKey = `${(a as { sourceRepo?: string }).sourceRepo ?? ""}:${(a as { sourceFile?: string }).sourceFile ?? ""}`;
+        const bKey = `${(b as { sourceRepo?: string }).sourceRepo ?? ""}:${(b as { sourceFile?: string }).sourceFile ?? ""}`;
+        return aKey.localeCompare(bKey) || JSON.stringify(a).localeCompare(JSON.stringify(b));
+      });
+      truncated["serviceTopology"] = sortedTopology.slice(0, MAX_TOPOLOGY);
+      truncated["serviceTopologyTruncated"] = { shown: MAX_TOPOLOGY, total: result.serviceTopology.length, note: "Results are sorted alphabetically by sourceRepo:sourceFile. Use get_service_correlation for full service topology." };
+    } else {
+      truncated["serviceTopology"] = result.serviceTopology;
+    }
+    return jsonResult(truncated);
   });
 
   // 7. SARIF diagnostics
@@ -163,6 +170,17 @@ export function registerTools(server: McpServer, stores: Stores): void {
       const hasData = await kvStore.has("sarif:latest") || await kvStore.has("sarif:latest:index");
       if (!hasData) {
         return jsonResult({ error: "No analysis results available. Run 'mma index' first.", results: [] });
+      }
+    }
+
+    if (total === 0 && level) {
+      // Check if other levels have data for this repo
+      const { total: anyTotal } = await getSarifResultsPaginated(kvStore, { repo, limit: 1, offset: 0 });
+      if (anyTotal > 0) {
+        return jsonResult({
+          total: 0, returned: 0, offset: offset ?? 0, hasMore: false, results: [],
+          note: `No '${level}'-level findings${repo ? ` for ${repo}` : ""}. There are ${anyTotal} findings at other severity levels — try without the level filter.`,
+        });
       }
     }
 
@@ -238,17 +256,50 @@ export function registerTools(server: McpServer, stores: Stores): void {
       ? graph.edges.filter((e) => e.sourceRepo === repo || e.targetRepo === repo)
       : graph.edges;
 
+    // Bug A: repoCount should be derived from filteredEdges, not repoPairs (which is unfiltered)
+    const filteredRepoCount = new Set(filteredEdges.flatMap((e) => [e.sourceRepo, e.targetRepo])).size;
+
+    // Bug B: when repo filter is active, restrict maps to only relevant entries
+    const downstreamEntries = [...graph.downstreamMap.entries()];
+    const upstreamEntries = [...graph.upstreamMap.entries()];
+    const filteredDownstream = repo
+      ? downstreamEntries.filter(([k, v]) => k === repo || v.has(repo))
+      : downstreamEntries;
+    const filteredUpstream = repo
+      ? upstreamEntries.filter(([k, v]) => k === repo || v.has(repo))
+      : upstreamEntries;
+
+    // Filter repoPairs to only include pairs visible in filteredEdges
+    const filteredRepoSet = new Set(filteredEdges.flatMap((e) => [e.sourceRepo, e.targetRepo]));
+    const filteredRepoPairs = repo
+      ? [...graph.repoPairs].filter((pair) => {
+          const [a, b] = pair.split("->");
+          return a && b && filteredRepoSet.has(a) && filteredRepoSet.has(b);
+        })
+      : [...graph.repoPairs];
+
+    // Build a scoped graph for path discovery when filtering by repo
+    const scopedGraph = repo
+      ? {
+          ...graph,
+          edges: filteredEdges,
+          repoPairs: new Set(filteredRepoPairs),
+          downstreamMap: new Map(filteredDownstream),
+          upstreamMap: new Map(filteredUpstream),
+        }
+      : graph;
+
     const result: Record<string, unknown> = {
-      repoCount: new Set([...graph.repoPairs].flatMap((p) => p.split("->"))).size,
+      repoCount: filteredRepoCount,
       edgeCount: filteredEdges.length,
-      repoPairs: [...graph.repoPairs],
+      repoPairs: filteredRepoPairs,
       edges: filteredEdges,
-      downstreamMap: [...graph.downstreamMap.entries()].map(([k, v]) => [k, [...v]]),
-      upstreamMap: [...graph.upstreamMap.entries()].map(([k, v]) => [k, [...v]]),
+      downstreamMap: Object.fromEntries(filteredDownstream.map(([k, v]) => [k, [...v]])),
+      upstreamMap: Object.fromEntries(filteredUpstream.map(([k, v]) => [k, [...v]])),
     };
 
-    if (includePaths && graph.edges.length > 0) {
-      const repoList = [...new Set(graph.edges.flatMap((e) => [e.sourceRepo, e.targetRepo]))];
+    if (includePaths && filteredEdges.length > 0) {
+      const repoList = [...filteredRepoSet];
       if (repoList.length > 20) {
         result["pathsSkipped"] = true;
         result["pathsSkippedReason"] =
@@ -259,7 +310,7 @@ export function registerTools(server: McpServer, stores: Stores): void {
         for (const src of repoList) {
           for (const tgt of repoList) {
             if (src !== tgt) {
-              const found = findDependencyPaths(src, tgt, graph);
+              const found = findDependencyPaths(src, tgt, scopedGraph);
               if (found.length > 0) {
                 paths[`${src}->${tgt}`] = found;
               }
@@ -275,10 +326,10 @@ export function registerTools(server: McpServer, stores: Stores): void {
 
   // 11. Cross-repo service correlation
   server.registerTool("get_service_correlation", {
-    description: "Get cross-repo service correlation: linchpin services with high cross-repo coupling and orphaned services",
+    description: "Get cross-repo service correlation: linchpin services/packages with high cross-repo coupling and orphaned services",
     inputSchema: {
-      endpoint: z.string().optional().describe("Filter by endpoint substring (case-insensitive)"),
-      kind: z.enum(["linchpins", "orphaned", "all"]).optional().describe("Which subset to return (default: all)"),
+      endpoint: z.string().optional().describe("Filter by endpoint or package name substring (case-insensitive)"),
+      kind: z.enum(["linchpins", "packages", "orphaned", "all"]).optional().describe("Which subset to return: linchpins (HTTP endpoints), packages (shared packages), orphaned, or all (default: all)"),
       limit: z.number().optional().describe("Max results to return (default 50)"),
       offset: z.number().optional().describe("Number of results to skip for pagination (default 0)"),
     },
@@ -290,15 +341,19 @@ export function registerTools(server: McpServer, stores: Stores): void {
     const parsed = JSON.parse(raw) as {
       links: unknown[];
       linchpins: Array<{ endpoint: string; [key: string]: unknown }>;
+      packageLinchpins?: Array<{ packageName: string; [key: string]: unknown }>;
       orphanedServices: Array<{ endpoint: string; [key: string]: unknown }>;
     };
 
-    let linchpins = parsed.linchpins;
-    let orphanedServices = parsed.orphanedServices;
+    // Filter template-literal URLs (test harness noise like ${MAILPIT_URL}/...)
+    let linchpins = parsed.linchpins.filter((l) => !l.endpoint.includes("${"));
+    let packageLinchpins = parsed.packageLinchpins ?? [];
+    let orphanedServices = parsed.orphanedServices.filter((o) => !o.endpoint.includes("${"));
 
     if (endpoint) {
       const lower = endpoint.toLowerCase();
       linchpins = linchpins.filter((l) => l.endpoint.toLowerCase().includes(lower));
+      packageLinchpins = packageLinchpins.filter((p) => p.packageName.toLowerCase().includes(lower));
       orphanedServices = orphanedServices.filter((o) => o.endpoint.toLowerCase().includes(lower));
     }
 
@@ -308,11 +363,20 @@ export function registerTools(server: McpServer, stores: Stores): void {
     if (selectedKind === "linchpins" || selectedKind === "all") {
       result["linchpins"] = paginated(linchpins, offset ?? 0, limit ?? 50);
     }
+    if (selectedKind === "packages" || selectedKind === "all") {
+      result["packageLinchpins"] = paginated(packageLinchpins, offset ?? 0, limit ?? 50);
+    }
     if (selectedKind === "orphaned" || selectedKind === "all") {
       result["orphanedServices"] = paginated(orphanedServices, offset ?? 0, limit ?? 50);
     }
     if (selectedKind === "all") {
-      result["links"] = parsed.links;
+      const MAX_LINKS = 100;
+      result["links"] = parsed.links.length > MAX_LINKS
+        ? parsed.links.slice(0, MAX_LINKS)
+        : parsed.links;
+      if (parsed.links.length > MAX_LINKS) {
+        result["linksTruncated"] = { shown: MAX_LINKS, total: parsed.links.length, note: "Truncated to 100 entries. Request a specific kind (linchpins, packages, orphaned) for focused results." };
+      }
     }
 
     return jsonResult(result);
@@ -330,6 +394,7 @@ export function registerTools(server: McpServer, stores: Stores): void {
     },
   }, async ({ files, repo, maxDepth, includeCallGraph, crossRepo }) => {
     let crossRepoGraph: CrossRepoGraph | undefined;
+    let crossRepoWarning: string | undefined;
     if (crossRepo) {
       const raw = await kvStore.get("correlation:graph");
       if (raw) {
@@ -340,6 +405,8 @@ export function registerTools(server: McpServer, stores: Stores): void {
           upstreamMap: [string, string[]][];
         };
         crossRepoGraph = deserializeGraph(parsed);
+      } else {
+        crossRepoWarning = "crossRepo=true but no correlation data found. Run 'mma index' with 2+ repos to enable cross-repo blast radius.";
       }
     }
     // Compute PageRank scores for blast radius annotation
@@ -350,10 +417,29 @@ export function registerTools(server: McpServer, stores: Stores): void {
       pageRankScores: prResult.scores,
     }, searchStore);
     // Sort by score descending
-    const sorted = {
-      ...result,
+    const sorted: Record<string, unknown> = {
+      changedFiles: result.changedFiles,
       affectedFiles: [...result.affectedFiles].sort((a, b) => (b.score ?? 0) - (a.score ?? 0)),
+      totalAffected: result.totalAffected,
+      maxDepth: result.maxDepth,
+      description: result.description,
     };
+    // Serialize crossRepoAffected Map as plain object
+    if (result.crossRepoAffected && result.crossRepoAffected.size > 0) {
+      const crossRepoObj: Record<string, unknown[]> = {};
+      for (const [r, affected] of result.crossRepoAffected) {
+        crossRepoObj[r] = affected;
+      }
+      sorted["crossRepoAffected"] = crossRepoObj;
+      const totalCross = [...result.crossRepoAffected.values()].reduce((s, a) => s + a.length, 0);
+      sorted["description"] = `${result.description} Plus ${totalCross} cross-repo files in ${result.crossRepoAffected.size} downstream repo(s).`;
+    } else if (crossRepo && crossRepoGraph) {
+      sorted["crossRepoAffected"] = {};
+      sorted["crossRepoNote"] = "Cross-repo graph available but no downstream files matched the changed files. The changed files may not be consumed by other repos.";
+    }
+    if (crossRepoWarning) {
+      sorted["crossRepoWarning"] = crossRepoWarning;
+    }
     return jsonResult(sorted);
   });
 
@@ -373,7 +459,7 @@ export function registerTools(server: McpServer, stores: Stores): void {
     // Collect vuln SARIF from matching repos
     const allResults: import("@mma/core").SarifResult[] = [];
     const indexJson = await kvStore.get("sarif:latest:index");
-    if (!indexJson) return jsonResult({ findings: [], total: 0 });
+    if (!indexJson) return jsonResult({ findings: [], total: 0, note: "No analysis data. Run 'mma index' first." });
 
     const index = JSON.parse(indexJson) as { repos: string[] };
     const targetRepos = repo ? [repo] : index.repos;
@@ -388,16 +474,23 @@ export function registerTools(server: McpServer, stores: Stores): void {
       }
     }
 
+    if (allResults.length === 0) {
+      return jsonResult({
+        findings: [], total: 0, offset: skip, limit: maxResults,
+        note: "No vulnerability findings. Ensure 'npm audit --json' data is available during indexing. Vulnerability reachability requires npm audit output to be present in the repo.",
+      });
+    }
+
     // Filter by minimum severity
     const severityOrder = ["low", "moderate", "high", "critical"];
     const minIdx = severity ? severityOrder.indexOf(severity) : 0;
     const filtered = severity
-      ? allResults.filter(r => severityOrder.indexOf(String((r.properties?.severity as string | undefined) ?? "low")) >= minIdx)
+      ? allResults.filter(r => severityOrder.indexOf(String((r.properties?.severity as string | undefined) ?? "low").toLowerCase()) >= minIdx)
       : allResults;
 
     // Paginate
-    const paginated = filtered.slice(skip, skip + maxResults);
-    return jsonResult({ findings: paginated, total: filtered.length, offset: skip, limit: maxResults });
+    const paginatedResults = filtered.slice(skip, skip + maxResults);
+    return jsonResult({ findings: paginatedResults, total: filtered.length, offset: skip, limit: maxResults });
   });
 
   // 13. Feature flag inventory
@@ -545,363 +638,474 @@ export function registerTools(server: McpServer, stores: Stores): void {
       reposReached: impact.reposReached,
     });
   });
-}
 
-function deserializeGraph(raw: {
-  edges: CrossRepoGraph["edges"];
-  repoPairs: string[];
-  downstreamMap: [string, string[]][];
-  upstreamMap: [string, string[]][];
-}): CrossRepoGraph {
-  return {
-    edges: raw.edges,
-    repoPairs: new Set(raw.repoPairs),
-    downstreamMap: new Map(raw.downstreamMap.map(([k, v]) => [k, new Set(v)])),
-    upstreamMap: new Map(raw.upstreamMap.map(([k, v]) => [k, new Set(v)])),
-  };
-}
+  // 15. Scan GitHub org for repo candidates
+  server.registerTool("scan_org", {
+    description: "Scan a GitHub organization to discover repositories. Results are cached in KV and repos are registered as indexing candidates.",
+    inputSchema: {
+      org: z.string().describe("GitHub organization name"),
+      excludeForks: z.boolean().optional().describe("Exclude forked repos (default: true)"),
+      excludeArchived: z.boolean().optional().describe("Exclude archived repos (default: true)"),
+      languages: z.array(z.string()).optional().describe("Filter to repos with these primary languages"),
+    },
+  }, async ({ org, excludeForks, excludeArchived, languages }) => {
+    const { scanGitHubOrg } = await import("@mma/ingestion");
+    const { RepoStateManager } = await import("@mma/correlation");
 
-/** Dispatch a routed query to the appropriate handler, returning structured data. */
-async function dispatchRoute(
-  route: string,
-  decision: { readonly strippedQuery: string; readonly extractedEntities: readonly string[]; readonly repo?: string },
-  stores: Stores,
-): Promise<unknown> {
-  const { graphStore, searchStore, kvStore } = stores;
-  const q = decision.strippedQuery.toLowerCase();
-  const repo = decision.repo;
+    const result = await scanGitHubOrg({ org, excludeForks, excludeArchived, languages });
 
-  switch (route) {
-    case "structural": {
-      if (/\bcircular\b/.test(q)) {
-        return await getCircularDeps(kvStore, repo);
+    // Cache the scan result
+    await kvStore.set(`org-scan:${org}`, JSON.stringify(result));
+
+    // Register all repos as candidates
+    const stateManager = new RepoStateManager(kvStore);
+    let newCount = 0;
+    for (const repo of result.repos) {
+      const existing = await stateManager.get(repo.name);
+      if (!existing) {
+        await stateManager.addCandidate(
+          { name: repo.name, url: repo.url, defaultBranch: repo.defaultBranch, language: repo.language ?? undefined },
+          "org-scan",
+        );
+        newCount++;
       }
-      if (decision.extractedEntities.length > 0) {
-        const entity = decision.extractedEntities[0];
-        if (!entity) {
-          return { error: "No entity could be extracted from the query." };
-        }
-        const isCallees = /\bcallees?\b/.test(q) || /\bwhat does .+ call\b/.test(q);
-        const isDeps = q.includes("depend");
-        if (isDeps) {
-          return await executeDependencyQuery(entity, graphStore, repo ? { maxDepth: 3, repo } : 3, searchStore);
-        }
-        if (isCallees) {
-          return await executeCalleesQuery(entity, graphStore, repo, searchStore);
-        }
-        return await executeCallersQuery(entity, graphStore, repo, searchStore);
-      }
-      return { error: "No entity found in query for structural lookup." };
     }
 
-    case "search": {
-      const result = await executeSearchQuery(decision.strippedQuery, searchStore);
-      const hits = repo
-        ? result.results.filter((h) => h.metadata?.["repo"] === repo)
-        : result.results;
-      return { description: result.description, results: hits };
+    return jsonResult({
+      org,
+      totalRepos: result.totalReposInOrg,
+      matchingRepos: result.repos.length,
+      newCandidates: newCount,
+      repos: result.repos.map(r => ({
+        name: r.name,
+        language: r.language,
+        stars: r.starCount,
+        updatedAt: r.updatedAt,
+      })),
+    });
+  });
+
+  // 16. Get repos in a given state (candidate, indexed, ignored, indexing)
+  server.registerTool("get_repo_candidates", {
+    description: "Get repos that are candidates for indexing, with their connection info and discovery source.",
+    inputSchema: {
+      status: z.enum(["candidate", "indexed", "ignored", "indexing"]).optional().describe("Filter by status (default: candidate)"),
+    },
+  }, async ({ status }) => {
+    const { RepoStateManager } = await import("@mma/correlation");
+    const stateManager = new RepoStateManager(kvStore);
+
+    const filterStatus = status ?? "candidate";
+    const repos = await stateManager.getByStatus(filterStatus as Parameters<typeof stateManager.getByStatus>[0]);
+    const summary = await stateManager.summary();
+
+    return jsonResult({
+      status: filterStatus,
+      count: repos.length,
+      summary,
+      repos: repos.map(r => ({
+        name: r.name,
+        url: r.url,
+        language: r.language,
+        discoveredVia: r.discoveredVia,
+        connectionCount: r.connectionCount,
+        discoveredAt: r.discoveredAt,
+        indexedAt: r.indexedAt,
+      })),
+    });
+  });
+
+  // 17. Index a single repository (clone + full pipeline)
+  server.registerTool("index_repo", {
+    description: "Index a single repository. Clones (if needed), runs the full analysis pipeline, and updates cross-repo correlations.",
+    inputSchema: {
+      name: z.string().describe("Repository name (must be a registered candidate or provide url)"),
+      url: z.string().optional().describe("Clone URL (uses stored URL if repo is already a candidate)"),
+      branch: z.string().optional().describe("Branch to index (default: main)"),
+    },
+  }, async ({ name, url, branch }) => {
+    const { RepoStateManager } = await import("@mma/correlation");
+    const stateManager = new RepoStateManager(kvStore);
+
+    // Get or create repo state
+    const state = await stateManager.get(name);
+    const repoUrl = url ?? state?.url;
+    if (!repoUrl) {
+      return jsonResult({ error: `No URL for repo "${name}". Provide url parameter or scan an org first.` });
     }
 
-    case "analytical": {
-      return await getDiagnosticsForAnalytical(kvStore, decision);
+    if (!state) {
+      await stateManager.addCandidate(
+        { name, url: repoUrl, defaultBranch: branch },
+        "user-selected",
+      );
+    } else if (state.status !== "candidate") {
+      return jsonResult({ error: `Repo "${name}" is in "${state.status}" state, not "candidate".` });
     }
 
-    case "architecture": {
-      return await executeArchitectureQuery(graphStore, kvStore, repo);
-    }
+    await stateManager.startIndexing(name);
 
-    case "pattern": {
-      return await getPatterns(kvStore, q, repo);
-    }
-
-    case "documentation": {
-      return await getDocumentation(kvStore, repo);
-    }
-
-    case "faulttree": {
-      return await getFaultTrees(kvStore, repo);
-    }
-
-    case "metrics": {
-      const moduleFilter = decision.extractedEntities.length > 0
-        ? decision.extractedEntities[0]
-        : undefined;
-      return await getMetrics(kvStore, moduleFilter, repo);
-    }
-
-    case "blastradius": {
-      if (decision.extractedEntities.length > 0) {
-        return await computeBlastRadiusFromDispatch(decision.extractedEntities, graphStore, searchStore, repo);
-      }
-      return { error: "No files specified for blast radius analysis." };
-    }
-
-    case "flagimpact": {
-      const entity = decision.extractedEntities[0];
-      if (entity && repo) {
-        return await computeFlagImpact(entity, repo, kvStore, graphStore);
-      }
-      return await getFlagInventory(kvStore, { repo, search: entity });
-    }
-
-    case "synthesis": {
-      const entity = decision.extractedEntities[0];
-      const entityLower = (entity ?? "").toLowerCase();
-      const wantArch    = entityLower.includes("arch");
-      const wantHealth  = entityLower.includes("health");
-      const wantCatalog = entityLower.includes("catalog") || entityLower.includes("service");
-      const wantSystem  = entityLower.includes("system") || entityLower.includes("overview");
-      const wantAll     = !wantArch && !wantHealth && !wantCatalog && !wantSystem;
-
-      type NarrationEntry = { key: string; kind: string; repo?: string; text: string };
-      const narrations: NarrationEntry[] = [];
-
-      const fetchKey = async (key: string, kind: string, repoName?: string): Promise<void> => {
-        const raw = await kvStore.get(key);
-        if (raw) narrations.push({ key, kind, repo: repoName, text: raw });
-      };
-
-      if (wantSystem || wantAll) {
-        await fetchKey("narration:system", "system");
-      }
-
-      if (repo) {
-        if (wantArch    || wantAll) await fetchKey(`narration:repo-arch:${repo}`, "repo-arch", repo);
-        if (wantHealth  || wantAll) await fetchKey(`narration:health:${repo}`,    "health",    repo);
-        if (wantCatalog || wantAll) await fetchKey(`narration:catalog:${repo}`,   "catalog",   repo);
-      } else {
-        // No repo filter — scan all keys for each kind
-        const allKeys = await kvStore.keys("narration:");
-        for (const key of allKeys) {
-          if (key === "narration:system") continue; // already handled above
-          const m = /^narration:(repo-arch|health|catalog):(.+)$/.exec(key);
-          if (!m) continue;
-          const kind = m[1]!;
-          const repoName = m[2]!;
-          const include =
-            wantAll ||
-            (wantArch    && kind === "repo-arch") ||
-            (wantHealth  && kind === "health")    ||
-            (wantCatalog && kind === "catalog");
-          if (!include) continue;
-          const raw = await kvStore.get(key);
-          if (raw) narrations.push({ key, kind, repo: repoName, text: raw });
-        }
-      }
-
-      if (narrations.length === 0) {
-        return {
-          narrations: [],
-          message: "No narrations found. Run 'mma index' with --api-key to generate narrations.",
-        };
-      }
-      return { narrations };
-    }
-
-    default:
-      return { error: `Unknown route: ${route}` };
-  }
-}
-
-async function getCircularDeps(kvStore: KVStore, repo?: string): Promise<unknown> {
-  const keys = await kvStore.keys("circularDeps:");
-  const results: Array<{ repo: string; cycles: Array<{ cycle: string[]; barrelMediated: boolean }> }> = [];
-  for (const key of keys) {
-    const r = key.replace("circularDeps:", "");
-    if (repo && r !== repo) continue;
-    const json = await kvStore.get(key);
-    if (!json) continue;
     try {
-      const cycles = JSON.parse(json) as string[][];
-      // Load barrel-mediation flags (may not exist for older indexes).
-      let barrelFlags: boolean[] = [];
-      const barrelJson = await kvStore.get(`circularDepsBarrel:${r}`);
-      if (barrelJson) {
-        try { barrelFlags = JSON.parse(barrelJson) as boolean[]; } catch { /* ignore */ }
+      const { cloneOrFetch } = await import("@mma/ingestion");
+      const resolvedMirrorDir = mirrorDir ?? "./mirrors";
+
+      // Clone or fetch the repository
+      await cloneOrFetch(repoUrl, name, { mirrorDir: resolvedMirrorDir, branch });
+      const localPath = join(resolvedMirrorDir, `${name}.git`);
+
+      // Run full pipeline if indexRepo callback is wired up by the CLI
+      if (indexRepo) {
+        const result = await indexRepo({ name, localPath, bare: true });
+        await stateManager.markIndexed(name);
+        return jsonResult({
+          status: "indexed",
+          name,
+          hadChanges: result.hadChanges,
+          totalFiles: result.totalFiles,
+          totalSarifResults: result.totalSarifResults,
+        });
       }
-      results.push({
-        repo: r,
-        cycles: cycles.map((cycle, i) => ({ cycle, barrelMediated: barrelFlags[i] === true })),
+
+      // Fallback: clone only (MCP server started without an indexRepo callback)
+      await stateManager.markIndexed(name);
+      return jsonResult({
+        status: "cloned",
+        name,
+        message: `Repository "${name}" cloned but full analysis requires the MCP server to be started with indexRepo support. Run "mma index" via CLI for complete analysis.`,
       });
-    } catch { /* skip corrupted */ }
-  }
-  const totalCycles = results.reduce((n, r) => n + r.cycles.length, 0);
-  const totalBarrel = results.reduce((n, r) => n + r.cycles.filter((c) => c.barrelMediated).length, 0);
-  return { totalCycles, totalBarrelMediated: totalBarrel, repos: results };
-}
+    } catch (err) {
+      // Reset state back to "candidate" so the repo can be retried
+      try {
+        await stateManager.resetToCandidate(name);
+      } catch { /* best-effort reset */ }
+      return jsonResult({
+        status: "failed",
+        name,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
 
-async function getPatterns(kvStore: KVStore, query: string, repo?: string): Promise<unknown> {
-  const kindMap: Record<string, string> = {
-    factory: "factory", factories: "factory",
-    singleton: "singleton", singletons: "singleton",
-    observer: "observer", observers: "observer",
-    adapter: "adapter", adapters: "adapter",
-    facade: "facade", facades: "facade",
-    repository: "repository", repositories: "repository",
-    middleware: "middleware", middlewares: "middleware",
-    decorator: "decorator", decorators: "decorator",
-  };
-  let kindFilter: string | null = null;
-  for (const [word, kind] of Object.entries(kindMap)) {
-    if (query.includes(word)) { kindFilter = kind; break; }
-  }
+  // 18. Mark a repo as ignored
+  server.registerTool("ignore_repo", {
+    description: "Mark a repository as ignored so it won't be suggested for indexing.",
+    inputSchema: {
+      name: z.string().describe("Repository name to ignore"),
+    },
+  }, async ({ name }) => {
+    const { RepoStateManager } = await import("@mma/correlation");
+    const stateManager = new RepoStateManager(kvStore);
 
-  const keys = await kvStore.keys("patterns:");
-  const results: Array<{ repo: string; patterns: DetectedPattern[] }> = [];
-  for (const key of keys) {
-    const r = key.replace("patterns:", "");
-    if (repo && r !== repo) continue;
-    const json = await kvStore.get(key);
-    if (!json) continue;
+    const state = await stateManager.get(name);
+    if (!state) {
+      return jsonResult({ error: `Repo "${name}" not found in state.` });
+    }
+
     try {
-      let patterns = JSON.parse(json) as DetectedPattern[];
-      if (kindFilter) patterns = patterns.filter((p) => p.kind === kindFilter);
-      if (patterns.length > 0) results.push({ repo: r, patterns });
-    } catch { /* skip corrupted */ }
-  }
-  return { kindFilter, total: results.reduce((n, r) => n + r.patterns.length, 0), repos: results };
-}
+      await stateManager.markIgnored(name);
+      return jsonResult({ status: "ignored", name });
+    } catch (err) {
+      return jsonResult({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
 
-async function getDocumentation(kvStore: KVStore, repo?: string): Promise<unknown> {
-  const keys = await kvStore.keys("docs:functional:");
-  const results: Array<{ repo: string; documentation: string }> = [];
-  for (const key of keys) {
-    const r = key.replace("docs:functional:", "");
-    if (repo && r !== repo) continue;
-    const docs = await kvStore.get(key);
-    if (docs) results.push({ repo: r, documentation: docs });
-  }
-  return { found: results.length > 0, repos: results };
-}
+  // 19. Full indexing state snapshot
+  server.registerTool("get_indexing_state", {
+    description: "Get the full indexing state machine snapshot: all repos with their status, discovery source, and connection counts.",
+    inputSchema: {},
+  }, async () => {
+    const { RepoStateManager } = await import("@mma/correlation");
+    const stateManager = new RepoStateManager(kvStore);
 
-async function getFaultTrees(kvStore: KVStore, repo?: string): Promise<unknown> {
-  const keys = await kvStore.keys("faultTrees:");
-  const results: Array<{ repo: string; trees: FaultTree[] }> = [];
-  for (const key of keys) {
-    const r = key.replace("faultTrees:", "");
-    if (repo && r !== repo) continue;
-    const json = await kvStore.get(key);
-    if (!json) continue;
-    try {
-      results.push({ repo: r, trees: JSON.parse(json) as FaultTree[] });
-    } catch { /* skip corrupted */ }
-  }
-  return { total: results.reduce((n, r) => n + r.trees.length, 0), repos: results };
-}
+    const all = await stateManager.getAll();
+    const summary = await stateManager.summary();
 
-async function getDiagnosticsForAnalytical(
-  kvStore: KVStore,
-  decision: { readonly strippedQuery: string; readonly extractedEntities: readonly string[]; readonly repo?: string },
-): Promise<unknown> {
-  const sarifJson = await kvStore.get("sarif:latest");
-  if (!sarifJson) return { error: "No analysis results available. Run 'mma index' first." };
+    return jsonResult({
+      summary,
+      repos: all.map(r => ({
+        name: r.name,
+        status: r.status,
+        discoveredVia: r.discoveredVia,
+        connectionCount: r.connectionCount,
+        discoveredAt: r.discoveredAt,
+        indexedAt: r.indexedAt,
+        ignoredAt: r.ignoredAt,
+      })),
+    });
+  });
 
-  let sarif: SarifLog;
-  try {
-    sarif = JSON.parse(sarifJson) as SarifLog;
-  } catch {
-    return { error: "Stored SARIF data is corrupted. Re-run 'mma index' to regenerate." };
-  }
+  // 20. Diff org scan against known state to find new repos
+  server.registerTool("check_new_repos", {
+    description: "Re-scan a GitHub org and diff against known state to find newly added repos.",
+    inputSchema: {
+      org: z.string().describe("GitHub organization name"),
+    },
+  }, async ({ org }) => {
+    const { diffOrgScan } = await import("./wake-up.js");
+    const result = await diffOrgScan(org, kvStore);
+    return jsonResult(result);
+  });
 
-  const stopWords = new Set([
-    "a", "an", "the", "is", "are", "was", "were", "be", "been",
-    "do", "does", "did", "have", "has", "had", "will", "would",
-    "can", "could", "should", "may", "might", "shall",
-    "what", "which", "who", "whom", "where", "when", "why", "how",
-    "that", "this", "these", "those", "it", "its",
-    "in", "on", "at", "to", "for", "of", "with", "by", "from",
-    "and", "or", "not", "no", "but", "if", "then", "so",
-    "about", "any", "all", "some", "there", "my", "me", "show",
-  ]);
-  const keywords = decision.strippedQuery.toLowerCase()
-    .split(/\s+/)
-    .filter((w) => w.length > 1 && !stopWords.has(w));
-  const entities = decision.extractedEntities;
+  // 21. Hotspot analysis (high-churn × high-complexity files)
+  server.registerTool("get_hotspots", {
+    description: "Get hotspot files ranked by churn × complexity score. Hotspots are the riskiest files to change — high change frequency combined with high complexity. Useful for prioritizing refactoring and code review.",
+    inputSchema: {
+      repo: z.string().optional().describe("Filter to a specific repository name"),
+      limit: z.number().optional().describe("Max results to return (default 20)"),
+      offset: z.number().optional().describe("Number of results to skip for pagination (default 0)"),
+    },
+  }, async ({ repo, limit, offset }) => {
+    const maxResults = limit ?? 20;
+    const skip = offset ?? 0;
+    const keys = await kvStore.keys("hotspots:");
+    const result: Array<Record<string, unknown>> = [];
 
-  const categoryLevelFilter = resolveCategoryFilter(keywords);
-  const categoryRuleFilter = resolveCategoryRuleFilter(keywords);
-  const broadTerms = /^(?:diagnostics?|issues?|findings?|results?|problems?)$/;
-  const isBroadQuery = !categoryLevelFilter && !categoryRuleFilter
-    && keywords.some((kw) => broadTerms.test(kw));
-
-  const matching = sarif.runs.flatMap((r) =>
-    r.results.filter((res) => {
-      if (decision.repo) {
-        const locRepo = res.locations?.[0]?.logicalLocations?.[0]?.properties?.["repo"];
-        if (locRepo !== decision.repo) return false;
+    for (const key of keys) {
+      const keyRepo = key.slice("hotspots:".length);
+      if (repo && keyRepo !== repo) continue;
+      const json = await kvStore.get(key);
+      if (json) {
+        try {
+          const hotspots = JSON.parse(json) as Array<Record<string, unknown>>;
+          for (const h of hotspots) {
+            result.push({ ...h, repo: keyRepo });
+          }
+        } catch { /* skip malformed */ }
       }
-      if (isBroadQuery) return true;
-      if (categoryLevelFilter && res.level !== categoryLevelFilter) return false;
-      if (categoryRuleFilter && !res.ruleId?.startsWith(categoryRuleFilter)) return false;
-      if (categoryLevelFilter || categoryRuleFilter) return true;
+    }
 
-      const text = `${res.ruleId} ${res.message.text}`.toLowerCase();
-      if (entities.some((e) => text.includes(e.toLowerCase()))) return true;
-      if (keywords.length === 0) return false;
-      const hits = keywords.filter((kw) => text.includes(kw)).length;
-      return hits >= Math.max(1, Math.ceil(keywords.length / 2));
-    }),
-  );
+    if (result.length === 0) {
+      return jsonResult({
+        results: [], total: 0, offset: skip, limit: maxResults,
+        note: repo
+          ? `No hotspot data for "${repo}". Run 'mma index' first.`
+          : "No hotspot data available. Run 'mma index' first.",
+      });
+    }
 
-  return { total: matching.length, results: matching.slice(0, 50) };
-}
+    result.sort((a, b) => (b["hotspotScore"] as number) - (a["hotspotScore"] as number));
+    return jsonResult(paginated(result, skip, maxResults));
+  });
 
-function resolveCategoryFilter(keywords: string[]): string | null {
-  for (const kw of keywords) {
-    if (/^warnings?$/.test(kw)) return "warning";
-    if (/^errors?$/.test(kw)) return "error";
-    if (/^notes?$/.test(kw)) return "note";
-  }
-  return null;
-}
+  // 22. Temporal coupling (files that change together without declared dependency)
+  server.registerTool("get_temporal_coupling", {
+    description: "Get temporally coupled file pairs — files that frequently change together in commits but may have no declared import dependency. Reveals hidden logical coupling and architectural drift.",
+    inputSchema: {
+      repo: z.string().optional().describe("Filter to a specific repository name"),
+      minCoChanges: z.number().optional().describe("Minimum co-change count to include (default 2)"),
+      limit: z.number().optional().describe("Max results to return (default 30)"),
+      offset: z.number().optional().describe("Number of results to skip for pagination (default 0)"),
+    },
+  }, async ({ repo, minCoChanges, limit, offset }) => {
+    const maxResults = limit ?? 30;
+    const skip = offset ?? 0;
+    const minCount = minCoChanges ?? 2;
 
-function resolveCategoryRuleFilter(keywords: string[]): string | null {
-  for (const kw of keywords) {
-    if (/^(?:faults?|unhandled|gaps?|missing)$/.test(kw)) return "fault/";
-    if (/^(?:configs?|flags?|interactions?|untested)$/.test(kw)) return "config/";
-  }
-  return null;
-}
-
-async function getMetrics(kvStore: KVStore, moduleFilter?: string, repo?: string): Promise<unknown> {
-  const keys = await kvStore.keys("metrics:");
-  // Filter to metrics keys (not metricsSummary keys)
-  const metricsKeys = keys.filter((k) => !k.startsWith("metricsSummary:"));
-  const results: Array<{ repo: string; modules?: ModuleMetrics[]; summary?: RepoMetricsSummary }> = [];
-
-  for (const key of metricsKeys) {
-    const r = key.replace("metrics:", "");
-    if (repo && r !== repo) continue;
-    const json = await kvStore.get(key);
-    if (!json) continue;
-    try {
-      let modules = JSON.parse(json) as ModuleMetrics[];
-      if (moduleFilter) {
-        modules = modules.filter((m) => m.module.includes(moduleFilter));
+    if (repo) {
+      const json = await kvStore.get(`temporal-coupling:${repo}`);
+      if (!json) {
+        return jsonResult({
+          ...paginated([], skip, maxResults),
+          commitsAnalyzed: 0,
+          note: `No temporal coupling data for "${repo}". Temporal coupling requires git history (not available for single-commit bare clones).`,
+        });
       }
-      const summaryJson = await kvStore.get(`metricsSummary:${r}`);
-      const summary = summaryJson ? (JSON.parse(summaryJson) as RepoMetricsSummary) : undefined;
-      results.push({ repo: r, modules: moduleFilter ? modules : undefined, summary });
-    } catch { /* skip corrupted */ }
-  }
+      try {
+        const data = JSON.parse(json) as { pairs: Array<Record<string, unknown>>; commitsAnalyzed?: number; commitsSkipped?: number };
+        const filtered = (data.pairs ?? []).filter((p) => (p["coChangeCount"] as number) >= minCount);
+        filtered.sort((a, b) => (b["coChangeCount"] as number) - (a["coChangeCount"] as number));
+        return jsonResult({
+          ...paginated(filtered, skip, maxResults),
+          commitsAnalyzed: data.commitsAnalyzed ?? 0,
+          commitsSkipped: data.commitsSkipped ?? 0,
+        });
+      } catch {
+        return jsonResult({ pairs: [], total: 0, error: "Could not parse temporal coupling data" });
+      }
+    }
 
-  if (moduleFilter) {
-    const allModules = results.flatMap((r) => r.modules ?? []);
-    return { moduleFilter, total: allModules.length, modules: allModules };
-  }
-  return { total: results.length, repos: results };
-}
+    // All repos
+    const keys = await kvStore.keys("temporal-coupling:");
+    const allPairs: Array<Record<string, unknown>> = [];
+    for (const key of keys) {
+      const keyRepo = key.slice("temporal-coupling:".length);
+      const json = await kvStore.get(key);
+      if (json) {
+        try {
+          const data = JSON.parse(json) as { pairs: Array<Record<string, unknown>> };
+          for (const p of data.pairs ?? []) {
+            if ((p["coChangeCount"] as number) >= minCount) {
+              allPairs.push({ ...p, repo: keyRepo });
+            }
+          }
+        } catch { /* skip malformed */ }
+      }
+    }
 
-async function computeBlastRadiusFromDispatch(
-  entities: readonly string[],
-  graphStore: GraphStore,
-  searchStore: SearchStore,
-  repo?: string,
-): Promise<unknown> {
-  return await computeBlastRadius(
-    [...entities],
-    graphStore,
-    { repo },
-    searchStore,
-  );
+    allPairs.sort((a, b) => (b["coChangeCount"] as number) - (a["coChangeCount"] as number));
+    return jsonResult(paginated(allPairs, skip, maxResults));
+  });
+
+  // 23. Design pattern detection results
+  server.registerTool("get_patterns", {
+    description: "Get detected design patterns (adapter, facade, observer, factory, singleton, repository, middleware, decorator) across indexed repositories.",
+    inputSchema: {
+      repo: z.string().optional().describe("Filter to a specific repository name"),
+      pattern: z.string().optional().describe("Filter by pattern type name (case-insensitive substring match)"),
+    },
+  }, async ({ repo, pattern }) => {
+    if (repo) {
+      const json = await kvStore.get(`patterns:${repo}`);
+      if (!json) {
+        return jsonResult({ repo, patterns: {}, note: `No pattern data for "${repo}". Run 'mma index' first.` });
+      }
+      try {
+        const data = JSON.parse(json) as Record<string, unknown>;
+        if (pattern) {
+          const lower = pattern.toLowerCase();
+          const filtered: Record<string, unknown> = {};
+          for (const [key, value] of Object.entries(data)) {
+            if (key.toLowerCase().includes(lower)) {
+              filtered[key] = value;
+            }
+          }
+          return jsonResult({ repo, patterns: filtered });
+        }
+        return jsonResult({ repo, patterns: data });
+      } catch {
+        return jsonResult({ repo, patterns: {}, error: "Could not parse pattern data" });
+      }
+    }
+
+    // All repos
+    const keys = await kvStore.keys("patterns:");
+    const result: Record<string, unknown> = {};
+    for (const key of keys) {
+      const keyRepo = key.slice("patterns:".length);
+      const json = await kvStore.get(key);
+      if (json) {
+        try {
+          const data = JSON.parse(json) as Record<string, unknown>;
+          if (pattern) {
+            const lower = pattern.toLowerCase();
+            const filtered: Record<string, unknown> = {};
+            for (const [k, v] of Object.entries(data)) {
+              if (k.toLowerCase().includes(lower)) {
+                filtered[k] = v;
+              }
+            }
+            if (Object.keys(filtered).length > 0) {
+              result[keyRepo] = filtered;
+            }
+          } else {
+            result[keyRepo] = data;
+          }
+        } catch { /* skip malformed */ }
+      }
+    }
+
+    if (Object.keys(result).length === 0) {
+      return jsonResult({
+        patterns: {},
+        note: "No pattern data available. Run 'mma index' first.",
+      });
+    }
+
+    return jsonResult({ repos: result });
+  });
+
+  // 24. Cross-repo symbol importers
+  server.registerTool("get_symbol_importers", {
+    description: "Find which repositories import a specific symbol from a package. Requires cross-repo correlation data with symbol resolution.",
+    inputSchema: {
+      symbol: z.string().describe("Symbol name to search for (e.g. 'createClient', 'SupabaseClient')"),
+      package: z.string().optional().describe("Package name to filter by (e.g. '@supabase/supabase-js')"),
+      repo: z.string().optional().describe("Filter to edges targeting this repo"),
+    },
+  }, async ({ symbol, package: pkg, repo }) => {
+    const raw = await kvStore.get("correlation:graph");
+    if (!raw) {
+      return jsonResult({ error: "No correlation data. Run 'mma index' with 2+ repos first." });
+    }
+    const parsed = JSON.parse(raw) as {
+      edges: CrossRepoGraph["edges"];
+      repoPairs: string[];
+      downstreamMap: [string, string[]][];
+      upstreamMap: [string, string[]][];
+    };
+    const graph = deserializeGraph(parsed);
+
+    const matches: Array<{
+      sourceRepo: string;
+      sourceFile: string;
+      targetRepo: string;
+      targetFile: string;
+      packageName: string;
+      resolvedSymbols: ResolvedImportedSymbol[];
+    }> = [];
+
+    for (const resolved of graph.edges) {
+      if (pkg && resolved.packageName !== pkg) continue;
+      if (repo && resolved.targetRepo !== repo) continue;
+
+      const syms = Array.isArray(resolved.edge.metadata?.resolvedSymbols)
+        ? (resolved.edge.metadata.resolvedSymbols as ResolvedImportedSymbol[])
+        : [];
+      const matching = syms.filter((s) => s.name === symbol);
+
+      if (matching.length > 0) {
+        matches.push({
+          sourceRepo: resolved.sourceRepo,
+          sourceFile: resolved.edge.source,
+          targetRepo: resolved.targetRepo,
+          targetFile: resolved.edge.target,
+          packageName: resolved.packageName,
+          resolvedSymbols: matching,
+        });
+        continue;
+      }
+
+      // Per-edge fallback: use importedNames when resolvedSymbols has no match.
+      const names = Array.isArray(resolved.edge.metadata?.importedNames)
+        ? (resolved.edge.metadata.importedNames as string[])
+        : [];
+      if (names.includes(symbol)) {
+        matches.push({
+          sourceRepo: resolved.sourceRepo,
+          sourceFile: resolved.edge.source,
+          targetRepo: resolved.targetRepo,
+          targetFile: resolved.edge.target,
+          packageName: resolved.packageName,
+          resolvedSymbols: [],
+        });
+      }
+    }
+
+    // Group by sourceRepo to avoid duplicates when multiple edges from the same
+    // repo import the same symbol.
+    const byRepo = new Map<string, typeof matches>();
+    for (const m of matches) {
+      const list = byRepo.get(m.sourceRepo) ?? [];
+      list.push(m);
+      byRepo.set(m.sourceRepo, list);
+    }
+
+    const importers = [...byRepo.entries()].map(([sourceRepo, edges]) => ({
+      repo: sourceRepo,
+      files: edges.map((e) => ({
+        sourceFile: e.sourceFile,
+        targetRepo: e.targetRepo,
+        targetFile: e.targetFile,
+        packageName: e.packageName,
+        resolvedSymbols: e.resolvedSymbols,
+      })),
+    }));
+
+    return jsonResult({
+      symbol,
+      package: pkg ?? null,
+      importerCount: importers.length,
+      importers,
+    });
+  });
 }

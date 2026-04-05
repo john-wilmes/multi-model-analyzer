@@ -54,6 +54,16 @@ interface RuleGroup {
   findings: Finding[];
 }
 
+function isFindingRecord(value: unknown): value is Finding {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const v = value as Record<string, unknown>;
+  if (v.ruleId !== undefined && typeof v.ruleId !== 'string') return false;
+  if (v.level !== undefined && typeof v.level !== 'string') return false;
+  if (v.location !== undefined && typeof v.location !== 'string') return false;
+  if (v.repo !== undefined && typeof v.repo !== 'string') return false;
+  return true;
+}
+
 function groupByRule(findings: Finding[]): RuleGroup[] {
   const map = new Map<string, RuleGroup>();
   for (const f of findings) {
@@ -150,7 +160,7 @@ export default function FindingsTable() {
 
     fetchFindings(qs)
       .then((data) => {
-        setFindings((data.results ?? []) as Finding[]);
+        setFindings(Array.isArray(data?.results) ? data.results.filter(isFindingRecord) : []);
         setTotal(data.total ?? 0);
       })
       .catch((err: unknown) => console.error('Failed to fetch findings:', err))
