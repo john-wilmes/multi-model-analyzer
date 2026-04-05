@@ -340,6 +340,30 @@ function handler() {
     expect(crossFile[0]!.target).toBe("test-repo:src/api.js#fetch");
   });
 
+  it("resolves var-assigned CJS namespace require: var api = require('./x'); api.fetch()", () => {
+    const source = `
+var api = require('./api.js');
+function handler() {
+  api.fetch('/endpoint');
+}
+`;
+    const tree = parseSource(source, "src/handler.js");
+    const importScope = buildImportScopeFromAst(
+      tree.rootNode as unknown as TsNode,
+      (specifier) => (specifier === "./api.js" ? "src/api.js" : undefined),
+    );
+    expect(importScope.get("api")).toMatchObject({ filePath: "src/api.js", isNamespace: true });
+    const edges = extractCallEdgesFromTreeSitter(
+      tree.rootNode as unknown as TsNode,
+      "src/handler.js",
+      "test-repo",
+      importScope,
+    );
+    const crossFile = edges.filter((e) => e.target.includes("src/api.js"));
+    expect(crossFile).toHaveLength(1);
+    expect(crossFile[0]!.target).toBe("test-repo:src/api.js#fetch");
+  });
+
   it("resolves CJS destructure require: const { a, b } = require('./x')", () => {
     const source = `
 const { fetchData, postData } = require('./http.js');

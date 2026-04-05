@@ -444,8 +444,10 @@ export function buildImportScopeFromAst(
   for (const child of rootNode.namedChildren) {
     if (child.type === "import_statement") {
       collectEsmImport(child, resolveSpecifier, scope);
-    } else if (child.type === "lexical_declaration" && child.children[0]?.text === "const") {
-      // Only immutable require() bindings are tracked; let/var may be reassigned
+    } else if (
+      (child.type === "lexical_declaration" && child.children[0]?.text === "const") ||
+      child.type === "variable_declaration" // var x = require(...) — top-level var is effectively immutable in CJS
+    ) {
       collectCjsRequire(child, resolveSpecifier, scope);
     }
   }
