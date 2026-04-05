@@ -171,6 +171,32 @@ function getAllowedOrigin(req: IncomingMessage, corsOrigins: ReadonlySet<string>
   return corsOrigins.has(origin) ? origin : undefined;
 }
 
+/** Parse and clamp a ?limit= query param to [1, 5000], defaulting to 1000. */
+function parseLimitParam(raw: string | undefined): number {
+  const parsed = Number.parseInt(raw ?? "", 10);
+  if (Number.isNaN(parsed)) return 1000;
+  return Math.min(Math.max(parsed, 1), 5000);
+}
+
+/** Shared logic for /api/metrics and /api/metrics-all. */
+async function fetchAllMetrics(kvStore: KVStore, limit: number): Promise<ModuleMetrics[]> {
+  const cacheKey = `metrics-all:${limit}`;
+  const cached = cacheGet(cacheKey);
+  if (cached !== undefined) return cached as ModuleMetrics[];
+  const entries = await kvStore.getByPrefix("metrics:");
+  const result: ModuleMetrics[] = [];
+  for (const json of entries.values()) {
+    if (result.length >= limit) break;
+    try {
+      const metrics = JSON.parse(json) as ModuleMetrics[];
+      const remaining = limit - result.length;
+      result.push(...metrics.slice(0, remaining));
+    } catch { /* skip malformed */ }
+  }
+  cacheSet(cacheKey, result);
+  return result;
+}
+
 export async function handleApi(
   req: IncomingMessage,
   res: ServerResponse,
@@ -204,27 +230,16 @@ export async function handleApi(
     return sendJson(res, result, 200, corsOrigin);
   }
 
+  // GET /api/metrics — alias for /api/metrics-all (no repo required)
+  if (path === "/api/metrics") {
+    const limit = parseLimitParam(query.single["limit"]);
+    return sendJson(res, await fetchAllMetrics(kvStore, limit), 200, corsOrigin);
+  }
+
   // GET /api/metrics-all?limit=1000
   if (path === "/api/metrics-all") {
-    const limit = Math.min(parseInt(query.single["limit"] ?? "1000", 10) || 1000, 5000);
-    const cacheKey = `metrics-all:${limit}`;
-    const cached = cacheGet(cacheKey);
-    if (cached !== undefined) return sendJson(res, cached, 200, corsOrigin);
-    const keys = await kvStore.keys("metrics:");
-    const result: ModuleMetrics[] = [];
-    for (const key of keys) {
-      if (result.length >= limit) break;
-      const json = await kvStore.get(key);
-      if (json) {
-        try {
-          const metrics = JSON.parse(json) as ModuleMetrics[];
-          const remaining = limit - result.length;
-          result.push(...metrics.slice(0, remaining));
-        } catch { /* skip malformed */ }
-      }
-    }
-    cacheSet(cacheKey, result);
-    return sendJson(res, result, 200, corsOrigin);
+    const limit = parseLimitParam(query.single["limit"]);
+    return sendJson(res, await fetchAllMetrics(kvStore, limit), 200, corsOrigin);
   }
 
   // GET /api/dsm/:repo

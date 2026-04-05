@@ -38,5 +38,6 @@ data-*/
 # Logs
 *.log
 
-# Test results
+# Playwright / test results
 test-results/
+playwright-report/

@@ -66,6 +66,8 @@
     "test": "node --import ./suppress-ipc-close.mjs node_modules/.bin/vitest run && cd apps/dashboard && npx vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
     "validate:models": "vitest run --config validation/vitest.validation.ts",
     "clean": "tsc --build --clean",
     "setup": "bash scripts/setup.sh",
@@ -73,6 +75,7 @@
     "prepublishOnly": "npm run build && npm run test"
   },
   "devDependencies": {
+    "@playwright/test": "^1.58.2",
     "@types/node": "^22.0.0",
     "@vitest/coverage-v8": "^3.2.4",
     "eslint": "^9.0.0",
