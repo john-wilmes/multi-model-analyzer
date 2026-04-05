@@ -383,6 +383,14 @@ const EXTENSIONS = [
 ];
 
 function probeExtensions(base: string, knownPaths: ReadonlySet<string>): string | undefined {
+  // When the specifier already ends in `.js` (common in CJS require and ESM with
+  // explicit extensions), also try the TypeScript source equivalents so that
+  // `require('./utils.js')` resolves to `utils.ts` when indexed as TypeScript.
+  if (base.endsWith(".js")) {
+    const stem = base.slice(0, -3);
+    if (knownPaths.has(stem + ".ts")) return stem + ".ts";
+    if (knownPaths.has(stem + ".tsx")) return stem + ".tsx";
+  }
   for (const ext of EXTENSIONS) {
     const candidate = base + ext;
     if (knownPaths.has(candidate)) return candidate;

@@ -84,6 +84,11 @@ describe("resolveImportSpecifier", () => {
   it("falls back to raw specifier when no match found", () => {
     expect(resolveImportSpecifier("./missing", "src/app.ts", known)).toBe("./missing");
   });
+
+  it("resolves CJS require with .js extension to .ts source", () => {
+    // require('./utils.js') should resolve to utils.ts when the .ts file is known
+    expect(resolveImportSpecifier("./utils.js", "src/app.ts", known)).toBe("src/utils.ts");
+  });
 });
 
 describe("resolveImportSpecifier with packageRoots", () => {
