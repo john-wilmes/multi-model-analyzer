@@ -37,8 +37,8 @@ describe("computeCrossRepoImpact", () => {
     const gs = new InMemoryGraphStore();
     // b imports a, c imports b — changing a affects b and c
     await gs.addEdges([
-      { source: "src/b.ts", target: "src/a.ts", kind: "imports", metadata: { repo: "repo-a" } },
-      { source: "src/c.ts", target: "src/b.ts", kind: "imports", metadata: { repo: "repo-a" } },
+      { source: "src/b.ts", target: "src/a.ts", kind: "imports", repo: "repo-a", metadata: { repo: "repo-a" } },
+      { source: "src/c.ts", target: "src/b.ts", kind: "imports", repo: "repo-a", metadata: { repo: "repo-a" } },
     ]);
     const graph = makeGraph([]);
 
@@ -55,11 +55,11 @@ describe("computeCrossRepoImpact", () => {
     const gs = new InMemoryGraphStore();
     // repo-a: b imports a
     await gs.addEdges([
-      { source: "src/b.ts", target: "src/a.ts", kind: "imports", metadata: { repo: "repo-a" } },
+      { source: "src/b.ts", target: "src/a.ts", kind: "imports", repo: "repo-a", metadata: { repo: "repo-a" } },
     ]);
     // repo-b: x imports shared-lib/index (mapped to repo-a/src/b.ts)
     await gs.addEdges([
-      { source: "src/x.ts", target: "lib/index.ts", kind: "imports", metadata: { repo: "repo-b" } },
+      { source: "src/x.ts", target: "lib/index.ts", kind: "imports", repo: "repo-b", metadata: { repo: "repo-b" } },
     ]);
 
     const crossEdge: ResolvedCrossRepoEdge = {
@@ -85,11 +85,11 @@ describe("computeCrossRepoImpact", () => {
     // repo-a: no intra deps on a.ts
     // repo-b: y imports api (cross from repo-a)
     await gs.addEdges([
-      { source: "src/y.ts", target: "api/index.ts", kind: "imports", metadata: { repo: "repo-b" } },
+      { source: "src/y.ts", target: "api/index.ts", kind: "imports", repo: "repo-b", metadata: { repo: "repo-b" } },
     ]);
     // repo-c: z imports pkg (cross from repo-b)
     await gs.addEdges([
-      { source: "src/z.ts", target: "pkg/index.ts", kind: "imports", metadata: { repo: "repo-c" } },
+      { source: "src/z.ts", target: "pkg/index.ts", kind: "imports", repo: "repo-c", metadata: { repo: "repo-c" } },
     ]);
 
     const crossEdges: ResolvedCrossRepoEdge[] = [

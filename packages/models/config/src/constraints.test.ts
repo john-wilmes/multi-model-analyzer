@@ -24,7 +24,7 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { initTreeSitter, parseSource } from "@mma/parsing";
 import type { TreeSitterTree } from "@mma/parsing";
-import type { FeatureFlag } from "@mma/core";
+import type { FeatureFlag, ConfigParameter } from "@mma/core";
 import { extractConstraintsFromCode } from "./constraints.js";
 
 // ---------------------------------------------------------------------------
@@ -706,12 +706,396 @@ describe("extractConstraintsFromCode", () => {
         `,
       });
 
-      const validKinds = new Set(["requires", "excludes", "implies", "mutex", "range"]);
+      const validKinds = new Set(["requires", "excludes", "implies", "mutex", "range", "conditional", "enum"]);
       const result = extractConstraintsFromCode(files, makeFlags("FEATURE_A", "FEATURE_B"));
 
       for (const entry of result) {
         expect(validKinds.has(entry.constraint.kind)).toBe(true);
       }
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Unified constraint extraction with ConfigParameter
+  // -------------------------------------------------------------------------
+
+  describe("unified constraint extraction with parameters", () => {
+    function makeParam(name: string, kind: "setting" | "credential" | "flag" = "setting"): ConfigParameter {
+      return { name, locations: [], kind };
+    }
+
+    it("detects mutex between a flag and a setting in an if-else chain", () => {
+      const files = makeFiles({
+        "src/router.ts": `
+          if (FEATURE_A) {
+            renderA();
+          } else if (timeout) {
+            renderTimeout();
+          }
+        `,
+      });
+
+      const result = extractConstraintsFromCode(
+        files,
+        makeFlags("FEATURE_A"),
+        [makeParam("timeout")],
+      );
+
+      const mutex = result.filter((c) => c.constraint.kind === "mutex");
+      expect(mutex).toHaveLength(1);
+      expect(mutex[0]!.constraint.flags).toContain("FEATURE_A");
+      expect(mutex[0]!.constraint.flags).toContain("timeout");
+    });
+
+    it("detects range check on a setting parameter", () => {
+      const files = makeFiles({
+        "src/validate.ts": `
+          if (maxRetries < 0) {
+            throw new Error("invalid");
+          }
+        `,
+      });
+
+      const result = extractConstraintsFromCode(
+        files,
+        [],
+        [makeParam("maxRetries")],
+      );
+
+      const range = result.filter((c) => c.constraint.kind === "range");
+      expect(range).toHaveLength(1);
+      expect(range[0]!.flagName).toBe("maxRetries");
+    });
+
+    it("works with empty parameters array (backward compatible)", () => {
+      const files = makeFiles({
+        "src/gate.ts": `
+          if (FEATURE_A) { doA(); } else if (FEATURE_B) { doB(); }
+        `,
+      });
+
+      const result = extractConstraintsFromCode(files, makeFlags("FEATURE_A", "FEATURE_B"), []);
+
+      const mutex = result.filter((c) => c.constraint.kind === "mutex");
+      expect(mutex).toHaveLength(1);
+    });
+
+    it("works without parameters argument (backward compatible)", () => {
+      const files = makeFiles({
+        "src/gate.ts": `
+          if (FEATURE_A) { doA(); } else if (FEATURE_B) { doB(); }
+        `,
+      });
+
+      const result = extractConstraintsFromCode(files, makeFlags("FEATURE_A", "FEATURE_B"));
+
+      const mutex = result.filter((c) => c.constraint.kind === "mutex");
+      expect(mutex).toHaveLength(1);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Guard clause detection
+  // -------------------------------------------------------------------------
+
+  describe("guard clause detection", () => {
+    it("detects requires constraint from guard clause with equality check", () => {
+      const files = makeFiles({
+        "src/config.ts": `
+          if (provider === "epic") {
+            const val = hl7Enabled;
+          }
+        `,
+      });
+
+      const result = extractConstraintsFromCode(
+        files,
+        [],
+        [
+          { name: "provider", locations: [], kind: "setting" },
+          { name: "hl7Enabled", locations: [], kind: "flag" },
+        ],
+      );
+
+      const requires = result.filter((c) => c.constraint.kind === "requires");
+      expect(requires.length).toBeGreaterThanOrEqual(1);
+      const guard = requires.find(
+        (c) => c.constraint.flags.includes("provider") && c.constraint.flags.includes("hl7Enabled"),
+      );
+      expect(guard).toBeDefined();
+      expect(guard!.constraint.condition).toEqual({ provider: "epic" });
+    });
+
+    it("does not detect guard clause without equality check", () => {
+      const files = makeFiles({
+        "src/config.ts": `
+          if (provider) {
+            doSomething();
+          }
+        `,
+      });
+
+      const result = extractConstraintsFromCode(
+        files,
+        [],
+        [{ name: "provider", locations: [], kind: "setting" }],
+      );
+
+      const requires = result.filter((c) => c.constraint.kind === "requires");
+      expect(requires).toHaveLength(0);
+    });
+
+    it("does not detect guard when body references no known parameters", () => {
+      const files = makeFiles({
+        "src/config.ts": `
+          if (provider === "epic") {
+            doSomething();
+          }
+        `,
+      });
+
+      const result = extractConstraintsFromCode(
+        files,
+        [],
+        [{ name: "provider", locations: [], kind: "setting" }],
+      );
+
+      const requires = result.filter((c) => c.constraint.kind === "requires");
+      expect(requires).toHaveLength(0);
+    });
+
+    it("detects credential requirement guard clause", () => {
+      const files = makeFiles({
+        "src/auth.ts": `
+          if (provider === "twilio") {
+            const sid = twilioSid;
+          }
+        `,
+      });
+
+      const result = extractConstraintsFromCode(
+        files,
+        [],
+        [
+          { name: "provider", locations: [], kind: "setting" },
+          { name: "twilioSid", locations: [], kind: "credential" },
+        ],
+      );
+
+      const requires = result.filter(
+        (c) => c.constraint.kind === "requires" &&
+               c.constraint.flags.includes("twilioSid"),
+      );
+      expect(requires.length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Switch dispatch detection
+  // -------------------------------------------------------------------------
+
+  describe("switch dispatch detection", () => {
+    it("detects enum constraint from switch with string cases", () => {
+      const files = makeFiles({
+        "src/dispatch.ts": `
+          switch (integrationType) {
+            case "fhir":
+              handleFhir();
+              break;
+            case "hl7":
+              handleHl7();
+              break;
+            case "csv":
+              handleCsv();
+              break;
+          }
+        `,
+      });
+
+      const result = extractConstraintsFromCode(
+        files,
+        [],
+        [{ name: "integrationType", locations: [], kind: "setting" }],
+      );
+
+      const enumConstraints = result.filter((c) => c.constraint.kind === "enum");
+      expect(enumConstraints).toHaveLength(1);
+      expect(enumConstraints[0]!.constraint.allowedValues).toEqual(["fhir", "hl7", "csv"]);
+      expect(enumConstraints[0]!.flagName).toBe("integrationType");
+    });
+
+    it("does not detect enum for switch with fewer than 2 string cases", () => {
+      const files = makeFiles({
+        "src/dispatch.ts": `
+          switch (mode) {
+            case "default":
+              handleDefault();
+              break;
+            default:
+              handleOther();
+          }
+        `,
+      });
+
+      const result = extractConstraintsFromCode(
+        files,
+        [],
+        [{ name: "mode", locations: [], kind: "setting" }],
+      );
+
+      const enumConstraints = result.filter((c) => c.constraint.kind === "enum");
+      expect(enumConstraints).toHaveLength(0);
+    });
+
+    it("does not detect enum when switch expression is not a known parameter", () => {
+      const files = makeFiles({
+        "src/dispatch.ts": `
+          switch (unknownVar) {
+            case "a": break;
+            case "b": break;
+          }
+        `,
+      });
+
+      const result = extractConstraintsFromCode(
+        files,
+        [],
+        [{ name: "mode", locations: [], kind: "setting" }],
+      );
+
+      const enumConstraints = result.filter((c) => c.constraint.kind === "enum");
+      expect(enumConstraints).toHaveLength(0);
+    });
+
+    it("detects enum on a flag name used in switch", () => {
+      const files = makeFiles({
+        "src/mode.ts": `
+          switch (FEATURE_MODE) {
+            case "dark": enableDark(); break;
+            case "light": enableLight(); break;
+          }
+        `,
+      });
+
+      const result = extractConstraintsFromCode(
+        files,
+        makeFlags("FEATURE_MODE"),
+      );
+
+      const enumConstraints = result.filter((c) => c.constraint.kind === "enum");
+      expect(enumConstraints).toHaveLength(1);
+      expect(enumConstraints[0]!.constraint.allowedValues).toEqual(["dark", "light"]);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Conditional default detection
+  // -------------------------------------------------------------------------
+
+  describe("conditional default detection", () => {
+    it("detects conditional constraint from ternary expression", () => {
+      const files = makeFiles({
+        "src/defaults.ts": `
+          const timeout = isProduction ? 30000 : 5000;
+        `,
+      });
+
+      const result = extractConstraintsFromCode(
+        files,
+        [],
+        [
+          { name: "isProduction", locations: [], kind: "setting" },
+          { name: "timeout", locations: [], kind: "setting" },
+        ],
+      );
+
+      const conditional = result.filter((c) => c.constraint.kind === "conditional");
+      expect(conditional).toHaveLength(1);
+      expect(conditional[0]!.constraint.flags).toContain("isProduction");
+      expect(conditional[0]!.constraint.flags).toContain("timeout");
+      expect(conditional[0]!.constraint.allowedValues).toContain(30000);
+      expect(conditional[0]!.constraint.allowedValues).toContain(5000);
+    });
+
+    it("does not detect conditional when ternary has no known parameters", () => {
+      const files = makeFiles({
+        "src/defaults.ts": `
+          const timeout = unknownVar ? 30000 : 5000;
+        `,
+      });
+
+      const result = extractConstraintsFromCode(
+        files,
+        [],
+        [{ name: "timeout", locations: [], kind: "setting" }],
+      );
+
+      const conditional = result.filter((c) => c.constraint.kind === "conditional");
+      expect(conditional).toHaveLength(0);
+    });
+
+    it("detects conditional with string values", () => {
+      const files = makeFiles({
+        "src/config.ts": `
+          const endpoint = useStaging ? "https://staging.api.com" : "https://api.com";
+        `,
+      });
+
+      const result = extractConstraintsFromCode(
+        files,
+        [],
+        [
+          { name: "useStaging", locations: [], kind: "flag" },
+          { name: "endpoint", locations: [], kind: "setting" },
+        ],
+      );
+
+      const conditional = result.filter((c) => c.constraint.kind === "conditional");
+      expect(conditional).toHaveLength(1);
+      expect(conditional[0]!.constraint.allowedValues).toEqual(
+        expect.arrayContaining(["https://staging.api.com", "https://api.com"]),
+      );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Combined patterns
+  // -------------------------------------------------------------------------
+
+  describe("combined constraint patterns", () => {
+    it("detects multiple constraint types in same file", () => {
+      const files = makeFiles({
+        "src/config.ts": `
+          if (provider === "twilio") {
+            const sid = twilioSid;
+          }
+
+          switch (mode) {
+            case "sms": break;
+            case "email": break;
+          }
+
+          if (FEATURE_A) { doA(); } else if (FEATURE_B) { doB(); }
+        `,
+      });
+
+      const result = extractConstraintsFromCode(
+        files,
+        makeFlags("FEATURE_A", "FEATURE_B"),
+        [
+          { name: "provider", locations: [], kind: "setting" },
+          { name: "twilioSid", locations: [], kind: "credential" },
+          { name: "mode", locations: [], kind: "setting" },
+        ],
+      );
+
+      const mutex = result.filter((c) => c.constraint.kind === "mutex");
+      const requires = result.filter((c) => c.constraint.kind === "requires");
+      const enumC = result.filter((c) => c.constraint.kind === "enum");
+
+      expect(mutex.length).toBeGreaterThanOrEqual(1);
+      expect(requires.length).toBeGreaterThanOrEqual(1);
+      expect(enumC.length).toBeGreaterThanOrEqual(1);
     });
   });
 });

@@ -84,7 +84,8 @@ describe("queryCommand", () => {
   let kvStore: InMemoryKVStore;
   let graphStore: InMemoryGraphStore;
   let searchStore: InMemorySearchStore;
-  let consoleSpy: ReturnType<typeof vi.spyOn>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let consoleSpy: { mock: { calls: any[][] } };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -308,7 +309,7 @@ describe("queryCommand", () => {
   // -------------------------------------------------------------------------
   describe("analytical route", () => {
     const sarifLog = {
-      $schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
+      $schema: "https://json.schemastore.org/sarif-2.1.0.json",
       version: "2.1.0",
       runs: [{
         tool: { driver: { name: "mma", version: "0.1.0", rules: [] } },

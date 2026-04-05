@@ -79,9 +79,8 @@ function resultTouchesChangedFiles(
       if (changedPaths.has(fqn)) return true;
       // Substring match: changedPath is a suffix of fqn (e.g. fqn = "repo/src/auth.ts", path = "src/auth.ts")
       for (const path of changedPaths) {
-        if (fqn.endsWith(path) || path.endsWith(fqn)) return true;
-        // Also handle path separator boundary
-        if (fqn.includes(`/${path}`)) return true;
+        if (fqn === path || path === fqn) return true;
+        if (fqn.endsWith(`/${path}`) || path.endsWith(`/${fqn}`)) return true;
       }
     }
   }

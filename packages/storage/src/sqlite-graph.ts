@@ -24,6 +24,8 @@ export class SqliteGraphStore implements GraphStore {
   private readonly stmtClearRepo: Database.Statement;
   private readonly stmtDeleteBySource: Database.Statement;
   private readonly stmtDeleteBySourcePrefix: Database.Statement;
+  private readonly stmtDeleteByTarget: Database.Statement;
+  private readonly stmtDeleteByTargetPrefix: Database.Statement;
   private readonly stmtBfsNoRepo: Database.Statement;
   private readonly stmtBfsWithRepo: Database.Statement;
   private readonly insertMany: Database.Transaction<
@@ -71,6 +73,13 @@ export class SqliteGraphStore implements GraphStore {
     this.stmtDeleteBySourcePrefix = db.prepare(
       "DELETE FROM edges WHERE source LIKE ? ESCAPE '\\' AND json_extract(metadata, '$.repo') = ?",
     );
+    // Target-side deletion: no metadata.repo filter — target column already encodes repo:path
+    this.stmtDeleteByTarget = db.prepare(
+      "DELETE FROM edges WHERE target = ?",
+    );
+    this.stmtDeleteByTargetPrefix = db.prepare(
+      "DELETE FROM edges WHERE target LIKE ? ESCAPE '\\'",
+    );
 
     // Recursive CTE for BFS traversal without repo filter
     // Params: (start, maxDepth, maxDepth)
@@ -112,7 +121,14 @@ export class SqliteGraphStore implements GraphStore {
 
     this.insertMany = db.transaction((edges: readonly GraphEdge[]) => {
       for (const edge of edges) {
-        const meta = edge.metadata ? JSON.stringify(edge.metadata) : null;
+        // Ensure edge.repo is reflected in metadata so that repo-filtered
+        // queries (which use json_extract(metadata, '$.repo')) can find this
+        // edge even when the caller sets only the top-level repo field.
+        let metadata = edge.metadata;
+        if (edge.repo && (!metadata || metadata["repo"] === undefined)) {
+          metadata = { ...metadata, repo: edge.repo };
+        }
+        const meta = metadata ? JSON.stringify(metadata) : null;
         this.stmtInsert.run(edge.source, edge.target, edge.kind, meta);
       }
     });
@@ -198,9 +214,13 @@ export class SqliteGraphStore implements GraphStore {
     const txn = db.transaction(() => {
       for (const fp of filePaths) {
         const canonicalFile = repo + ":" + fp;
-        this.stmtDeleteBySource.run(canonicalFile, repo);
         const escaped = canonicalFile.replace(/[%_\\]/g, "\\$&");
+        // Remove edges where this file is the source
+        this.stmtDeleteBySource.run(canonicalFile, repo);
         this.stmtDeleteBySourcePrefix.run(escaped + "#%", repo);
+        // Remove edges where this file is the target (cross-repo refs to a deleted file)
+        this.stmtDeleteByTarget.run(canonicalFile);
+        this.stmtDeleteByTargetPrefix.run(escaped + "#%");
       }
     });
     txn();
@@ -224,13 +244,15 @@ function toGraphEdge(row: RawEdgeRow): GraphEdge {
     try {
       metadata = JSON.parse(row.metadata) as Record<string, unknown>;
     } catch {
-      metadata = {};
+      metadata = undefined;
     }
   }
+  const repo = typeof metadata?.["repo"] === "string" ? metadata["repo"] : undefined;
   return {
     source: row.source,
     target: row.target,
     kind: row.kind as EdgeKind,
+    ...(repo ? { repo } : {}),
     ...(metadata ? { metadata } : {}),
   };
 }

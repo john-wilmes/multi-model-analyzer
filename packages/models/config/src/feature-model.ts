@@ -1,8 +1,10 @@
 /**
- * Feature model construction from flag inventory and dependency analysis.
+ * Feature model construction from flag inventory, config inventory,
+ * and dependency analysis.
  *
- * Builds a formal feature model: flags as features, detected dependencies
- * as constraints. Used as input to Z3 SAT solver for validation.
+ * Builds a formal feature model: flags as features, settings and credentials
+ * as parameters, detected dependencies as constraints.
+ * Used as input to Z3 SAT solver for validation.
  */
 
 import type {
@@ -10,36 +12,91 @@ import type {
   FeatureFlag,
   FeatureModel,
   FlagInventory,
+  ConfigInventory,
+  ConfigParameter,
   DependencyGraph,
 } from "@mma/core";
 
+export interface BuildFeatureModelOptions {
+  readonly inventory: FlagInventory;
+  readonly dependencyGraph: DependencyGraph;
+  readonly configInventory?: ConfigInventory;
+}
+
+/**
+ * Build a feature model from flag inventory, dependency graph, and optionally
+ * a config inventory. When configInventory is provided, constraints are
+ * inferred across the unified parameter set (flags + settings + credentials).
+ */
 export function buildFeatureModel(
   inventory: FlagInventory,
   dependencyGraph: DependencyGraph,
+  configInventory?: ConfigInventory,
 ): FeatureModel {
-  const constraints = inferConstraints(inventory.flags, dependencyGraph);
+  const constraints = inferConstraints(
+    inventory.flags,
+    dependencyGraph,
+    configInventory?.parameters,
+  );
 
   return {
     flags: inventory.flags,
     constraints,
+    ...(configInventory ? { parameters: configInventory.parameters } : {}),
   };
+}
+
+/** An item (flag or parameter) with optional scope for constraint scoping. */
+interface ScopedItem {
+  readonly name: string;
+  readonly locations: readonly { module: string }[];
+  readonly scope?: string;
+}
+
+/**
+ * Two items are scope-compatible if they could plausibly interact:
+ * - Either has no scope (flags, unscoped params) → always compatible
+ * - Both have the same scope → compatible
+ * - Different scopes → not compatible (e.g. integrator-config vs account-setting)
+ */
+function scopeCompatible(a: ScopedItem, b: ScopedItem): boolean {
+  if (!a.scope || !b.scope) return true;
+  return a.scope === b.scope;
 }
 
 function inferConstraints(
   flags: readonly FeatureFlag[],
   graph: DependencyGraph,
+  parameters?: readonly ConfigParameter[],
 ): FeatureConstraint[] {
   const constraints: FeatureConstraint[] = [];
 
-  // Strategy 1: co-located flags likely have dependencies
-  const flagsByFile = groupFlagsByFile(flags);
-  for (const [_file, fileFlags] of flagsByFile) {
-    if (fileFlags.length >= 2) {
-      for (let i = 0; i < fileFlags.length; i++) {
-        for (let j = i + 1; j < fileFlags.length; j++) {
+  // Build unified name set for co-location analysis, preserving scope
+  const allItems: ScopedItem[] = flags.map((f) => ({
+    name: f.name,
+    locations: f.locations,
+  }));
+  if (parameters) {
+    for (const p of parameters) {
+      allItems.push({ name: p.name, locations: p.locations, scope: p.scope });
+    }
+  }
+
+  // Strategy 1: co-located flags/parameters likely have dependencies
+  // Only infer between scope-compatible items to avoid cross-scope noise.
+  // Files with many flags are likely config definition files, not evidence of
+  // feature coupling. Skip them to avoid O(n²) spurious constraints.
+  const MAX_COLOCATION_FLAGS = 10;
+  const itemsByFile = groupByFile(allItems);
+  for (const [_file, fileItems] of itemsByFile) {
+    if (fileItems.length > MAX_COLOCATION_FLAGS) continue;
+    if (fileItems.length >= 2) {
+      for (let i = 0; i < fileItems.length; i++) {
+        for (let j = i + 1; j < fileItems.length; j++) {
+          if (!scopeCompatible(fileItems[i]!, fileItems[j]!)) continue;
           constraints.push({
             kind: "implies",
-            flags: [fileFlags[i]!.name, fileFlags[j]!.name],
+            flags: [fileItems[i]!.name, fileItems[j]!.name],
             description: `Co-located in same file, likely related`,
             source: "inferred",
           });
@@ -52,19 +109,20 @@ function inferConstraints(
   // Index edges for O(1) lookup instead of O(e) linear scan per pair
   const edgeSet = new Set(graph.edges.map((e) => `${e.source}\0${e.target}`));
 
-  for (const flag of flags) {
-    for (const otherFlag of flags) {
-      if (flag.name === otherFlag.name) continue;
+  for (const item of allItems) {
+    for (const otherItem of allItems) {
+      if (item.name === otherItem.name) continue;
+      if (!scopeCompatible(item, otherItem)) continue;
 
-      const flagModules = flag.locations.map((l) => l.module);
-      const otherModules = otherFlag.locations.map((l) => l.module);
+      const itemModules = item.locations.map((l) => l.module);
+      const otherModules = otherItem.locations.map((l) => l.module);
 
-      for (const fm of flagModules) {
+      for (const fm of itemModules) {
         for (const om of otherModules) {
           if (edgeSet.has(`${fm}\0${om}`)) {
             constraints.push({
               kind: "requires",
-              flags: [flag.name, otherFlag.name],
+              flags: [item.name, otherItem.name],
               description: `Module ${fm} depends on ${om}`,
               source: "inferred",
             });
@@ -74,17 +132,46 @@ function inferConstraints(
     }
   }
 
+  // Strategy 3: schema-derived constraints from config parameters
+  if (parameters) {
+    for (const param of parameters) {
+      // Enum constraint from validation schemas
+      if (param.enumValues && param.enumValues.length >= 2) {
+        constraints.push({
+          kind: "enum",
+          flags: [param.name],
+          description: `Schema-derived enum: ${param.name} must be one of [${param.enumValues.join(", ")}]`,
+          source: "schema",
+          allowedValues: param.enumValues,
+        });
+      }
+
+      // Range constraint from validation schemas
+      if (param.rangeMin !== undefined || param.rangeMax !== undefined) {
+        const rangeDesc = param.rangeMin !== undefined && param.rangeMax !== undefined
+          ? `${param.rangeMin}..${param.rangeMax}`
+          : param.rangeMin !== undefined ? `>= ${param.rangeMin}` : `<= ${param.rangeMax}`;
+        constraints.push({
+          kind: "range",
+          flags: [param.name],
+          description: `Schema-derived range: ${param.name} in ${rangeDesc}`,
+          source: "schema",
+        });
+      }
+    }
+  }
+
   return deduplicateConstraints(constraints);
 }
 
-function groupFlagsByFile(
-  flags: readonly FeatureFlag[],
-): Map<string, FeatureFlag[]> {
-  const map = new Map<string, FeatureFlag[]>();
-  for (const flag of flags) {
-    for (const loc of flag.locations) {
+function groupByFile(
+  items: readonly ScopedItem[],
+): Map<string, ScopedItem[]> {
+  const map = new Map<string, ScopedItem[]>();
+  for (const item of items) {
+    for (const loc of item.locations) {
       const existing = map.get(loc.module) ?? [];
-      existing.push(flag);
+      existing.push(item);
       map.set(loc.module, existing);
     }
   }

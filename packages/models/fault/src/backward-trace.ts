@@ -31,6 +31,14 @@ export interface CrossServiceCall {
   readonly targetMethod: string;
 }
 
+/** Maximum call-graph hops for inter-procedural tracing. */
+const MAX_INTERPROCEDURAL_DEPTH = 3;
+
+/** Escape special regex characters in a string. */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 export function traceBackwardFromLog(
   root: LogRoot,
   cfgs: ReadonlyMap<string, ControlFlowGraph>,
@@ -72,29 +80,105 @@ export function traceBackwardFromLog(
     return { root, steps: [], crossServiceCalls: [], tracedEdges: [], failReason };
   }
 
-  // Trace backward through CFG
+  // Trace backward through CFG, then follow callers inter-procedurally
   const visited = new Set<string>();
   traceBackwardDFS(logNode, cfg, visited, steps, tracedEdges);
 
-  // Find callers of this function for cross-service tracing
-  const callers = callGraph.edges.filter(
-    (e) => e.target === containingFunction,
+  // Inter-procedural: follow call graph edges backward into caller CFGs
+  const tracedFunctions = new Set<string>([containingFunction]);
+  traceCallers(
+    containingFunction,
+    root.location.repo,
+    cfgs,
+    callGraph,
+    visited,
+    steps,
+    tracedEdges,
+    crossServiceCalls,
+    tracedFunctions,
+    0,
   );
-  for (const caller of callers) {
-    const callerModule = caller.source.split("#")[0] ?? "";
-    const calleeModule = containingFunction.split("#")[0] ?? "";
-
-    if (callerModule !== calleeModule) {
-      crossServiceCalls.push({
-        callerService: callerModule,
-        calleeService: calleeModule,
-        callSite: { repo: root.location.repo, module: callerModule },
-        targetMethod: containingFunction,
-      });
-    }
-  }
 
   return { root, steps, crossServiceCalls, tracedEdges };
+}
+
+/**
+ * Recursively trace backward into caller functions up to MAX_INTERPROCEDURAL_DEPTH.
+ * For each caller, finds the call site in the caller's CFG and traces backward from it.
+ */
+function traceCallers(
+  functionId: string,
+  repo: string,
+  cfgs: ReadonlyMap<string, ControlFlowGraph>,
+  callGraph: CallGraph,
+  visited: Set<string>,
+  steps: TraceStep[],
+  tracedEdges: CfgEdge[],
+  crossServiceCalls: CrossServiceCall[],
+  tracedFunctions: Set<string>,
+  depth: number,
+): void {
+  if (depth >= MAX_INTERPROCEDURAL_DEPTH) return;
+
+  const callers = callGraph.edges.filter((e) => e.target === functionId);
+
+  for (const caller of callers) {
+    if (tracedFunctions.has(caller.source)) continue;
+    tracedFunctions.add(caller.source);
+
+    // Try to trace into caller's CFG
+    const callerCfg = cfgs.get(caller.source);
+    if (!callerCfg) continue;
+
+    // Find the call site node in the caller's CFG (statement containing the callee name)
+    const calleeName = functionId.split("#").pop() ?? "";
+    // Use word-boundary match to avoid substring false positives
+    // (e.g. "handleRequest" matching "handleRequestV2")
+    const calleeRe = new RegExp(`\\b${escapeRegExp(calleeName)}\\b`);
+    const callSiteNode = callerCfg.nodes.find(
+      (n) => n.kind === "statement" && calleeRe.test(n.label),
+    );
+
+    if (callSiteNode) {
+      // Record cross-service calls only when a verified call site exists
+      const callerModule = caller.source.split("#")[0] ?? "";
+      const calleeModule = functionId.split("#")[0] ?? "";
+      if (callerModule !== calleeModule) {
+        crossServiceCalls.push({
+          callerService: callerModule,
+          calleeService: calleeModule,
+          callSite: callSiteNode.location,
+          targetMethod: functionId,
+        });
+      }
+
+      // Add call step linking the two functions
+      steps.push({
+        nodeId: `interproc-${caller.source}->${functionId}`,
+        kind: "call",
+        description: `${caller.source} calls ${functionId}`,
+        location: callSiteNode.location,
+      });
+
+      // Add synthetic edge connecting caller call site to callee entry
+      // so classifyConditions sees conditions across functions as reachable
+      const calleeCfg = cfgs.get(functionId);
+      const calleeEntry = calleeCfg?.nodes.find((n) => n.kind === "entry");
+      if (calleeEntry) {
+        tracedEdges.push({ from: callSiteNode.id, to: calleeEntry.id, condition: "interproc" });
+      }
+
+      // Trace backward from the call site in the caller's CFG
+      traceBackwardDFS(callSiteNode.id, callerCfg, visited, steps, tracedEdges);
+    }
+
+    // Recurse into caller's callers
+    traceCallers(
+      caller.source, repo, cfgs, callGraph,
+      visited, steps, tracedEdges, crossServiceCalls,
+      tracedFunctions, depth + 1,
+    );
+  }
 }
 
 function findLogNode(

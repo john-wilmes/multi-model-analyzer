@@ -11,6 +11,7 @@ import {
   checkBlastRadius,
   validateCommand,
   resetCaches,
+  checkSanityConfigValidation,
 } from "./validate-cmd.js";
 
 vi.mock("@mma/ingestion", async () => {
@@ -122,9 +123,8 @@ describe("checkDeadExport", () => {
     await kv.set("sarif:deadExports:repo1", JSON.stringify(findings));
 
     // Only src/a.ts imports src/b.ts — orphan.ts is never a target
-    // repo is stored in metadata, not as a top-level field (InMemoryGraphStore filters on metadata.repo)
     await graph.addEdges([
-      { source: "src/a.ts", target: "src/b.ts", kind: "imports", metadata: { repo: "repo1" } },
+      { source: "src/a.ts", target: "src/b.ts", kind: "imports", repo: "repo1", metadata: { repo: "repo1" } },
     ]);
 
     await checkDeadExport(kv, graph, reporter, 50, makeRng());
@@ -149,7 +149,7 @@ describe("checkDeadExport", () => {
 
     // src/a.ts imports src/imported.ts — but we don't know if SomeExport is used
     await graph.addEdges([
-      { source: "src/a.ts", target: "src/imported.ts", kind: "imports", metadata: { repo: "repo1" } },
+      { source: "src/a.ts", target: "src/imported.ts", kind: "imports", repo: "repo1", metadata: { repo: "repo1" } },
     ]);
 
     await checkDeadExport(kv, graph, reporter, 50, makeRng());
@@ -196,15 +196,15 @@ describe("checkUnstableDependency", () => {
 
     await graph.addEdges([
       // stable imports unstable (the flagged dependency)
-      { source: "src/stable.ts", target: "src/unstable.ts", kind: "imports", metadata: { repo: "repo1" } },
+      { source: "src/stable.ts", target: "src/unstable.ts", kind: "imports", repo: "repo1", metadata: { repo: "repo1" } },
       // x,y,z import stable (gives stable ca=3)
-      { source: "src/x.ts", target: "src/stable.ts", kind: "imports", metadata: { repo: "repo1" } },
-      { source: "src/y.ts", target: "src/stable.ts", kind: "imports", metadata: { repo: "repo1" } },
-      { source: "src/z.ts", target: "src/stable.ts", kind: "imports", metadata: { repo: "repo1" } },
+      { source: "src/x.ts", target: "src/stable.ts", kind: "imports", repo: "repo1", metadata: { repo: "repo1" } },
+      { source: "src/y.ts", target: "src/stable.ts", kind: "imports", repo: "repo1", metadata: { repo: "repo1" } },
+      { source: "src/z.ts", target: "src/stable.ts", kind: "imports", repo: "repo1", metadata: { repo: "repo1" } },
       // unstable imports p,q,r (gives unstable ce=3)
-      { source: "src/unstable.ts", target: "src/p.ts", kind: "imports", metadata: { repo: "repo1" } },
-      { source: "src/unstable.ts", target: "src/q.ts", kind: "imports", metadata: { repo: "repo1" } },
-      { source: "src/unstable.ts", target: "src/r.ts", kind: "imports", metadata: { repo: "repo1" } },
+      { source: "src/unstable.ts", target: "src/p.ts", kind: "imports", repo: "repo1", metadata: { repo: "repo1" } },
+      { source: "src/unstable.ts", target: "src/q.ts", kind: "imports", repo: "repo1", metadata: { repo: "repo1" } },
+      { source: "src/unstable.ts", target: "src/r.ts", kind: "imports", repo: "repo1", metadata: { repo: "repo1" } },
     ]);
 
     await checkUnstableDependency(kv, graph, reporter, 50, makeRng());
@@ -226,7 +226,7 @@ describe("checkUnstableDependency", () => {
 
     // b imports a; b has Ce=1, Ca=0 => I(b)=1.0 (not 0.10 as reported)
     await graph.addEdges([
-      { source: "src/b.ts", target: "src/a.ts", kind: "imports", metadata: { repo: "repo1" } },
+      { source: "src/b.ts", target: "src/a.ts", kind: "imports", repo: "repo1", metadata: { repo: "repo1" } },
     ]);
 
     await checkUnstableDependency(kv, graph, reporter, 50, makeRng());
@@ -330,7 +330,7 @@ describe("checkFault", () => {
 
     const findings = [
       {
-        ruleId: "structural/fault",
+        ruleId: "fault/unhandled-error-path",
         level: "error",
         message: { text: "Silent catch block" },
         locations: [
@@ -365,7 +365,7 @@ describe("checkFault", () => {
 
     const findings = [
       {
-        ruleId: "structural/fault",
+        ruleId: "fault/unhandled-error-path",
         level: "error",
         message: { text: "Silent catch block" },
         locations: [
@@ -452,6 +452,7 @@ describe("checkFault", () => {
         source: "src/flagged.ts",
         target: "src/other.ts",
         kind: "imports",
+        repo: "repo1",
         metadata: { repo: "repo1" },
       },
     ]);
@@ -492,17 +493,18 @@ describe("checkBlastRadius", () => {
     // Build a hub: src/core.ts is imported by many files => highest PageRank.
     // All nodes (src/core.ts + a-e) will appear in top-10.
     // Seed findings for every node so the recall loop also passes.
+    // Node IDs use "repo:path" format matching the real indexing pipeline (makeFileId).
     const edges = [
-      { source: "src/a.ts", target: "src/core.ts", kind: "imports" as const, metadata: { repo: "repo1" } },
-      { source: "src/b.ts", target: "src/core.ts", kind: "imports" as const, metadata: { repo: "repo1" } },
-      { source: "src/c.ts", target: "src/core.ts", kind: "imports" as const, metadata: { repo: "repo1" } },
-      { source: "src/d.ts", target: "src/core.ts", kind: "imports" as const, metadata: { repo: "repo1" } },
-      { source: "src/e.ts", target: "src/core.ts", kind: "imports" as const, metadata: { repo: "repo1" } },
+      { source: "repo1:src/a.ts", target: "repo1:src/core.ts", kind: "imports" as const, repo: "repo1", metadata: { repo: "repo1" } },
+      { source: "repo1:src/b.ts", target: "repo1:src/core.ts", kind: "imports" as const, repo: "repo1", metadata: { repo: "repo1" } },
+      { source: "repo1:src/c.ts", target: "repo1:src/core.ts", kind: "imports" as const, repo: "repo1", metadata: { repo: "repo1" } },
+      { source: "repo1:src/d.ts", target: "repo1:src/core.ts", kind: "imports" as const, repo: "repo1", metadata: { repo: "repo1" } },
+      { source: "repo1:src/e.ts", target: "repo1:src/core.ts", kind: "imports" as const, repo: "repo1", metadata: { repo: "repo1" } },
     ];
     await graph.addEdges(edges);
 
     // Flag all 6 nodes that will appear in PageRank results
-    const allNodes = ["src/core.ts", "src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts", "src/e.ts"];
+    const allNodes = ["repo1:src/core.ts", "repo1:src/a.ts", "repo1:src/b.ts", "repo1:src/c.ts", "repo1:src/d.ts", "repo1:src/e.ts"];
     const findings = allNodes.map((node) => ({
       ruleId: "structural/high-pagerank",
       level: "warning",
@@ -520,18 +522,19 @@ describe("checkBlastRadius", () => {
   it("fails when flagged module is NOT in PageRank top-10", async () => {
     // Graph of 3 nodes; src/leaf.ts is not in this graph at all.
     // repo stored in metadata so InMemoryGraphStore can filter correctly.
+    // Node IDs use "repo:path" format matching the real indexing pipeline.
     await graph.addEdges([
-      { source: "src/a.ts", target: "src/b.ts", kind: "imports" as const, metadata: { repo: "repo1" } },
-      { source: "src/b.ts", target: "src/c.ts", kind: "imports" as const, metadata: { repo: "repo1" } },
+      { source: "repo1:src/a.ts", target: "repo1:src/b.ts", kind: "imports" as const, repo: "repo1", metadata: { repo: "repo1" } },
+      { source: "repo1:src/b.ts", target: "repo1:src/c.ts", kind: "imports" as const, repo: "repo1", metadata: { repo: "repo1" } },
     ]);
 
-    // Flag src/leaf.ts which is not in the graph — cannot be in top-10
+    // Flag repo1:src/leaf.ts which is not in the graph — cannot be in top-10
     const findings = [
       {
         ruleId: "structural/high-pagerank",
         level: "warning",
         message: { text: "High blast radius" },
-        locations: [{ logicalLocations: [{ fullyQualifiedName: "src/leaf.ts" }] }],
+        locations: [{ logicalLocations: [{ fullyQualifiedName: "repo1:src/leaf.ts" }] }],
       },
     ];
     await kv.set("sarif:blastRadius:repo1", JSON.stringify(findings));
@@ -637,5 +640,122 @@ describe("validateCommand output formats", () => {
     } finally {
       console.log = origLog;
     }
+  });
+});
+
+// ─── checkSanityConfigValidation ────────────────────────────
+
+describe("checkSanityConfigValidation", () => {
+  const validParam = {
+    name: "db.host",
+    kind: "setting",
+    locations: [{ repo: "repo1", module: "src/config.ts" }],
+  };
+
+  const validInventory = {
+    repo: "repo1",
+    parameters: [validParam],
+  };
+
+  const validConstraint = {
+    kind: "implies",
+    flags: ["db.host", "db.port"],
+    description: "co-located settings",
+    source: "inferred",
+  };
+
+  const validModel = {
+    flags: [],
+    constraints: [validConstraint],
+    parameters: [validParam],
+  };
+
+  const validFinding = {
+    ruleId: "config/dead-flag",
+    level: "warning",
+    message: { text: "Flag FEATURE_X can never be enabled" },
+  };
+
+  it("skips when no config-inventory keys", async () => {
+    const kv = new InMemoryKVStore();
+    const graph = new InMemoryGraphStore();
+    const reporter = new ValidationReporter();
+
+    await checkSanityConfigValidation(kv, graph, reporter);
+
+    expect(reporter.counts.skip).toBeGreaterThanOrEqual(1);
+    expect(reporter.counts.fail).toBe(0);
+    expect(reporter.counts.pass).toBe(0);
+  });
+
+  it("passes with valid config inventory, model, and SARIF findings", async () => {
+    const kv = new InMemoryKVStore();
+    const graph = new InMemoryGraphStore();
+    const reporter = new ValidationReporter();
+
+    await kv.set("config-inventory:repo1", JSON.stringify(validInventory));
+    await kv.set("config-model:repo1", JSON.stringify(validModel));
+    await kv.set("sarif:config:repo1", JSON.stringify([validFinding]));
+    await graph.addEdges([
+      { source: "src/a.ts", target: "src/b.ts", kind: "imports", repo: "repo1", metadata: { repo: "repo1" } },
+    ]);
+
+    await checkSanityConfigValidation(kv, graph, reporter);
+
+    expect(reporter.counts.fail).toBe(0);
+    expect(reporter.counts.pass).toBeGreaterThanOrEqual(4); // inventory, model, sarif, cross-consistency
+  });
+
+  it("fails when a parameter is missing name", async () => {
+    const kv = new InMemoryKVStore();
+    const graph = new InMemoryGraphStore();
+    const reporter = new ValidationReporter();
+
+    const badInventory = {
+      repo: "repo1",
+      parameters: [{ kind: "setting", locations: [{ repo: "repo1", module: "src/config.ts" }] }],
+    };
+    await kv.set("config-inventory:repo1", JSON.stringify(badInventory));
+    await kv.set("config-model:repo1", JSON.stringify(validModel));
+
+    await checkSanityConfigValidation(kv, graph, reporter);
+
+    const failLabels = reporter.failures.map((f) => f.label);
+    expect(failLabels.some((l) => l.includes("config inventory"))).toBe(true);
+  });
+
+  it("fails when a constraint has an invalid kind", async () => {
+    const kv = new InMemoryKVStore();
+    const graph = new InMemoryGraphStore();
+    const reporter = new ValidationReporter();
+
+    const badModel = {
+      flags: [],
+      constraints: [{ kind: "bogus", flags: ["db.host"], description: "bad", source: "inferred" }],
+    };
+    await kv.set("config-inventory:repo1", JSON.stringify(validInventory));
+    await kv.set("config-model:repo1", JSON.stringify(badModel));
+
+    await checkSanityConfigValidation(kv, graph, reporter);
+
+    const failLabels = reporter.failures.map((f) => f.label);
+    expect(failLabels.some((l) => l.includes("config model"))).toBe(true);
+  });
+
+  it("fails cross-consistency when inventory has params but no config-model", async () => {
+    const kv = new InMemoryKVStore();
+    const graph = new InMemoryGraphStore();
+    const reporter = new ValidationReporter();
+
+    await kv.set("config-inventory:repo1", JSON.stringify(validInventory));
+    // no config-model:repo1 — but repo has import edges (dep graph exists)
+    await graph.addEdges([
+      { source: "src/a.ts", target: "src/b.ts", kind: "imports", repo: "repo1", metadata: { repo: "repo1" } },
+    ]);
+
+    await checkSanityConfigValidation(kv, graph, reporter);
+
+    const failLabels = reporter.failures.map((f) => f.label);
+    expect(failLabels.some((l) => l.includes("cross-consistency"))).toBe(true);
   });
 });

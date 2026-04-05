@@ -5,6 +5,7 @@
  * the classes/interfaces they extend or implement.
  */
 
+import { makeSymbolId } from "@mma/core";
 import type { GraphEdge } from "@mma/core";
 import type { TreeSitterNode, TreeSitterTree } from "@mma/parsing";
 
@@ -16,7 +17,7 @@ import type { TreeSitterNode, TreeSitterTree } from "@mma/parsing";
  * extends_clause and one "implements" edge per name in the
  * implements_clause.
  *
- * Edge source: `${filePath}:${className}`
+ * Edge source: `makeSymbolId(repo, filePath, className)` → `repo:filePath#className`
  * Edge target: the raw name being extended/implemented (may be unqualified)
  */
 export function extractHeritageEdges(
@@ -48,7 +49,7 @@ function extractFromNode(
       );
       if (nameNode) {
         const className = nameNode.text;
-        const source = `${filePath}:${className}`;
+        const source = makeSymbolId(repo, filePath, className);
 
         // extends_clause and implements_clause are nested under class_heritage
         const heritage = node.namedChildren.find(
@@ -68,6 +69,7 @@ function extractFromNode(
                   source,
                   target: typeNode.text,
                   kind: "extends",
+                  repo,
                   metadata: { repo, file: filePath },
                 });
                 // Only one base class per extends clause
@@ -85,6 +87,7 @@ function extractFromNode(
                   source,
                   target: typeNode.text,
                   kind: "implements",
+                  repo,
                   metadata: { repo, file: filePath },
                 });
               }

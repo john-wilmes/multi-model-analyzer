@@ -9,6 +9,7 @@
     { "path": "../core" },
     { "path": "../correlation" },
     { "path": "../ingestion" },
+    { "path": "../models/config" },
     { "path": "../query" },
     { "path": "../storage" }
   ]

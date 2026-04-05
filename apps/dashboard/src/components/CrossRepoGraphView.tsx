@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import cytoscape from 'cytoscape';
-import cytoscapeDagre from 'cytoscape-dagre';
+import { cytoscape, ensureDagreRegistered } from '../lib/cytoscape-setup.ts';
 import { fetchCrossRepoGraph, fetchAtdi, fetchRepoStates, type CrossRepoGraphData, type AtdiRepoScore, type RepoStateInfo } from '../api/client.ts';
+import { GraphControls } from './shared/GraphControls.tsx';
 
 // Debounce helper (avoids external deps)
 function useDebounce<T>(value: T, delay: number): T {
@@ -14,7 +14,7 @@ function useDebounce<T>(value: T, delay: number): T {
   return debounced;
 }
 
-cytoscapeDagre(cytoscape);
+ensureDagreRegistered();
 
 interface RepoPairStats {
   source: string;
@@ -203,17 +203,16 @@ export default function CrossRepoGraphView() {
     });
   }, []);
 
+  // Graph creation effect — rebuilds the graph when structure changes
   useEffect(() => {
     const hasGhostNodes = repoStates.some((rs) => rs.status === 'candidate' || rs.status === 'indexing');
     if (!cyRef.current || !data || (data.edges.length === 0 && !hasGhostNodes)) return;
     const { repos, pairs } = aggregateEdges(data);
     const repoNames = [...repos.keys()];
 
-    // Build lookup for tooltip on hover
     const pairLookup = new Map<string, RepoPairStats>();
     for (const p of pairs) pairLookup.set(`${p.source}→${p.target}`, p);
 
-    // B4: Compute node sizes from chosen metric
     const sizes = computeNodeSizes(repoNames, sizeMetric, repos, atdiByRepo);
 
     let elements: cytoscape.ElementDefinition[];
@@ -226,7 +225,6 @@ export default function CrossRepoGraphView() {
       const clusters = clusterRepos(repoNames);
 
       elements = [];
-      // Parent (cluster) nodes
       for (const [clusterName, members] of clusters) {
         const clusterId = `cluster:${clusterName}`;
         const isExpanded = expandedClusters.has(clusterId);
@@ -243,7 +241,6 @@ export default function CrossRepoGraphView() {
         });
 
         if (isExpanded) {
-          // Show member nodes as children of the cluster compound node
           for (const member of members) {
             const sz = sizes.get(member) ?? NODE_MIN;
             elements.push({
@@ -259,8 +256,6 @@ export default function CrossRepoGraphView() {
         }
       }
 
-      // Inter-cluster edges (aggregate)
-      // Map each repo to its effective node ID (cluster ID if collapsed, repo ID if expanded)
       const clusterOf = new Map<string, string>();
       for (const [clusterName, members] of clusters) {
         const clusterId = `cluster:${clusterName}`;
@@ -269,17 +264,33 @@ export default function CrossRepoGraphView() {
         }
       }
 
-      const clusterEdgeMap = new Map<string, number>();
+      const clusterEdgeMap = new Map<string, { count: number; packages: string[] }>();
       for (const p of pairs) {
         const src = clusterOf.get(p.source) ?? p.source;
         const tgt = clusterOf.get(p.target) ?? p.target;
-        if (src === tgt) continue; // skip intra-cluster edges
+        if (src === tgt) continue;
         const key = `${src}→${tgt}`;
-        clusterEdgeMap.set(key, (clusterEdgeMap.get(key) ?? 0) + p.count);
+        let entry = clusterEdgeMap.get(key);
+        if (!entry) {
+          entry = { count: 0, packages: [] };
+          clusterEdgeMap.set(key, entry);
+        }
+        entry.count += p.count;
+        for (const pkg of p.packages) {
+          if (!entry.packages.includes(pkg)) entry.packages.push(pkg);
+        }
+      }
+
+      // Add cluster-level entries to pairLookup for tooltip resolution
+      for (const [key, entry] of clusterEdgeMap) {
+        const arrowIdx = key.indexOf('→');
+        const src = key.slice(0, arrowIdx);
+        const tgt = key.slice(arrowIdx + 1);
+        pairLookup.set(key, { source: src, target: tgt, count: entry.count, packages: entry.packages });
       }
 
       let edgeIdx = 0;
-      for (const [key, count] of clusterEdgeMap) {
+      for (const [key, entry] of clusterEdgeMap) {
         const arrowIdx = key.indexOf('→');
         const src = key.slice(0, arrowIdx);
         const tgt = key.slice(arrowIdx + 1);
@@ -288,16 +299,16 @@ export default function CrossRepoGraphView() {
             id: `ce-${edgeIdx++}`,
             source: src,
             target: tgt,
-            label: String(count),
-            weight: count,
+            label: String(entry.count),
+            weight: entry.count,
+            pairKey: key,
           },
         });
       }
 
-      // B7: Add ghost nodes for candidate/indexing repos not already in the graph
       for (const rs of repoStates) {
         if (rs.status === 'ignored' || rs.status === 'indexed') continue;
-        if (repos.has(rs.name)) continue; // already in the graph from edges
+        if (repos.has(rs.name)) continue;
         elements.push({
           data: {
             id: rs.name,
@@ -313,7 +324,6 @@ export default function CrossRepoGraphView() {
       layoutName = 'cose';
       layoutOpts = { animate: false, nodeRepulsion: 4000, idealEdgeLength: 100 };
     } else {
-      // Flat mode (original behavior, enhanced with B4 sizing and health color)
       elements = repoNames.map((name) => {
         const sz = sizes.get(name) ?? NODE_MIN;
         return {
@@ -337,10 +347,9 @@ export default function CrossRepoGraphView() {
         })),
       );
 
-      // B7: Add ghost nodes for candidate/indexing repos not already in the graph
       for (const rs of repoStates) {
         if (rs.status === 'ignored' || rs.status === 'indexed') continue;
-        if (repos.has(rs.name)) continue; // already in the graph from edges
+        if (repos.has(rs.name)) continue;
         elements.push({
           data: {
             id: rs.name,
@@ -360,7 +369,6 @@ export default function CrossRepoGraphView() {
     const cy = cytoscape({
       container: cyRef.current,
       elements,
-      // B3: Performance hardening
       pixelRatio: 1,
       textureOnViewport: true,
       hideEdgesOnViewport: true,
@@ -372,19 +380,18 @@ export default function CrossRepoGraphView() {
             label: 'data(label)',
             width: 'data(size)',
             height: 'data(size)',
-            'font-size': '11px',
+            'font-size': '12px',
             color: '#e2e8f0',
             'text-valign': 'bottom',
             'text-outline-color': '#0f172a',
-            'text-outline-width': 1,
+            'text-outline-width': 2,
             'text-margin-y': 6,
             'border-width': 2,
             'border-color': '#2563eb',
-            'min-zoomed-font-size': 14,
+            'min-zoomed-font-size': 6,
           } as cytoscape.Css.Node,
         },
         {
-          // B1: Cluster parent nodes — larger, distinct style
           selector: 'node.cluster',
           style: {
             'background-color': '#334155',
@@ -419,7 +426,6 @@ export default function CrossRepoGraphView() {
           } as cytoscape.Css.Edge,
         },
         {
-          // B7: Candidate repos — ghost appearance
           selector: 'node.candidate-node',
           style: {
             'background-color': '#475569',
@@ -431,7 +437,6 @@ export default function CrossRepoGraphView() {
           } as cytoscape.Css.Node,
         },
         {
-          // B7: Indexing repos — pulsing blue appearance
           selector: 'node.indexing-node',
           style: {
             'background-color': '#3b82f6',
@@ -476,7 +481,6 @@ export default function CrossRepoGraphView() {
       maxZoom: 3,
     });
 
-    // B7: Pulsing animation for indexing nodes
     const indexingNodes = cy.nodes('.indexing-node');
     if (indexingNodes.length > 0) {
       let pulseState = true;
@@ -484,14 +488,12 @@ export default function CrossRepoGraphView() {
         pulseState = !pulseState;
         indexingNodes.style('opacity', pulseState ? 1 : 0.4);
       }, 800);
-      // Clean up interval on destroy
       cy.on('destroy', () => clearInterval(pulseInterval));
     }
 
-    // Hover: highlight connected edges (use batch for performance)
     cy.on('mouseover', 'node', (evt) => {
       const node = evt.target as cytoscape.NodeSingular;
-      if (node.data('isCluster') as boolean) return; // skip dim for cluster parents
+      if (node.data('isCluster') as boolean) return;
       const connected = node.connectedEdges();
       const connectedNodes = connected.connectedNodes();
       cy.batch(() => {
@@ -508,11 +510,10 @@ export default function CrossRepoGraphView() {
       });
     });
 
-    // Hover edge: show tooltip
     cy.on('mouseover', 'edge', (evt) => {
       const edge = evt.target as cytoscape.EdgeSingular;
-      const edgeId = edge.data('id') as string;
-      const pair = pairLookup.get(edgeId);
+      const lookupKey = (edge.data('pairKey') as string | undefined) ?? (edge.data('id') as string);
+      const pair = pairLookup.get(lookupKey);
       if (pair) {
         const pos = evt.renderedPosition ?? edge.renderedMidpoint();
         setHoveredEdge(pair);
@@ -524,7 +525,6 @@ export default function CrossRepoGraphView() {
       setHoveredEdge(null);
     });
 
-    // Click: cluster node toggles expand/collapse; repo node navigates
     cy.on('tap', 'node', (evt) => {
       const node = evt.target as cytoscape.NodeSingular;
       if (isClusterMode && (node.data('isCluster') as boolean)) {
@@ -536,7 +536,27 @@ export default function CrossRepoGraphView() {
 
     cyInstanceRef.current = cy;
     return () => { cy.destroy(); cyInstanceRef.current = undefined; };
-  }, [data, navigate, viewMode, sizeMetric, atdiByRepo, expandedClusters, toggleCluster, repoStates]);
+  }, [data, navigate, viewMode, expandedClusters, toggleCluster, repoStates]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Style update effect — updates node sizes/colors without recreating the graph
+  useEffect(() => {
+    const cy = cyInstanceRef.current;
+    if (!cy || !data) return;
+    const { repos } = aggregateEdges(data);
+    const repoNames = [...repos.keys()];
+    const sizes = computeNodeSizes(repoNames, sizeMetric, repos, atdiByRepo);
+
+    cy.batch(() => {
+      for (const node of cy.nodes().toArray()) {
+        if (node.data('isCluster') as boolean) continue;
+        if (node.data('repoStatus')) continue;
+        const name = node.data('id') as string;
+        const sz = sizes.get(name) ?? NODE_MIN;
+        node.data('size', sz);
+        node.data('color', healthColor(atdiByRepo.get(name)));
+      }
+    });
+  }, [sizeMetric, atdiByRepo, data]);
 
   // B2: Search-to-focus — filter node opacity based on debounced search query
   useEffect(() => {
@@ -591,7 +611,7 @@ export default function CrossRepoGraphView() {
   const resolutionPct = totalEdges > 0 ? Math.round((resolvedEdges / totalEdges) * 100) : 0;
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 min-w-0">
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-semibold text-slate-800 dark:text-slate-100">
           Cross-Repo Dependency Graph
@@ -612,9 +632,9 @@ export default function CrossRepoGraphView() {
           No cross-repo dependency data available. Run <code className="font-mono text-xs bg-slate-100 dark:bg-slate-700 px-1 rounded">mma index</code> with 2+ repos to generate correlation data.
         </div>
       ) : (
-        <div className="flex gap-4">
+        <div className="flex gap-4 min-w-0 overflow-x-auto">
           {/* Graph */}
-          <div className="flex-1 bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 relative" style={{ minHeight: 500 }}>
+          <div className="flex-1 min-w-0 bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 relative" style={{ minHeight: 500 }}>
 
             {/* Controls toolbar */}
             <div className="flex items-center gap-3 p-2 border-b border-slate-200 dark:border-slate-700 flex-wrap">
@@ -707,6 +727,7 @@ export default function CrossRepoGraphView() {
             )}
 
             <div ref={cyRef} style={{ width: '100%', height: 500 }} />
+            <GraphControls cyInstanceRef={cyInstanceRef} />
 
             {hoveredEdge && (
               <div

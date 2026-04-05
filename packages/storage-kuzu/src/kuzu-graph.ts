@@ -40,7 +40,7 @@ const TABLE_TO_KIND: Record<string, EdgeKind> = Object.fromEntries(
 const ALL_LABELS = ALL_EDGE_KINDS.map((k) => EDGE_TABLE[k]).join("|");
 
 /** Base return columns (kind is added per-query as a literal). */
-const RETURN_BASE = "s.id AS source, t.id AS target, r.metadata AS metadata";
+const RETURN_BASE = "s.id AS source, t.id AS target, r.metadata AS metadata, r.repo AS repo";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -56,10 +56,14 @@ function toGraphEdge(row: Record<string, unknown>): GraphEdge {
     }
   }
   const rawKind = row["kind"] as string;
+  const repo = typeof row["repo"] === "string" && row["repo"].length > 0
+    ? row["repo"]
+    : undefined;
   return {
     source: row["source"] as string,
     target: row["target"] as string,
     kind: (TABLE_TO_KIND[rawKind] ?? rawKind) as EdgeKind,
+    ...(repo ? { repo } : {}),
     ...(metadata ? { metadata } : {}),
   };
 }
@@ -222,10 +226,7 @@ export class KuzuGraphStore implements GraphStore {
 
       // Pass 2: CREATE relationships dispatched by kind
       for (const edge of edges) {
-        const repo =
-          typeof edge.metadata?.["repo"] === "string"
-            ? edge.metadata["repo"]
-            : "";
+        const repo = edge.repo ?? "";
         const meta = edge.metadata ? JSON.stringify(edge.metadata) : "";
         const stmt = this.stmtInsertEdge.get(edge.kind)!;
         this.conn.executeSync(stmt, {

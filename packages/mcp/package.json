@@ -20,6 +20,7 @@
     "@mma/core": "*",
     "@mma/correlation": "*",
     "@mma/ingestion": "*",
+    "@mma/model-config": "*",
     "@mma/query": "*",
     "@mma/storage": "*",
     "@modelcontextprotocol/sdk": "^1.12.0",

@@ -3,7 +3,7 @@ import type { SearchStore } from "./search.js";
 import type { KVStore } from "./kv.js";
 import { createSqliteStores as _createSqliteStores } from "./sqlite-common.js";
 
-export type { GraphStore, GraphStoreOptions, TraversalOptions, EdgeQueryOptions } from "./graph.js";
+export type { GraphStore, TraversalOptions, EdgeQueryOptions } from "./graph.js";
 export { InMemoryGraphStore } from "./graph.js";
 
 export type { SearchDocument, SearchResult, SearchStore } from "./search.js";

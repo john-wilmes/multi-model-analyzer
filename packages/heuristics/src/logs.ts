@@ -158,6 +158,7 @@ function drainParse(
   options: DrainOptions,
 ): DrainCluster[] {
   const clusters: DrainCluster[] = [];
+  let overflowWarned = false;
 
   for (let i = 0; i < logMessages.length; i++) {
     const tokens = tokenize(logMessages[i]!);
@@ -175,17 +176,40 @@ function drainParse(
     }
 
     if (!matched) {
-      clusters.push({
-        id: `cluster-${clusters.length}`,
-        template: [...tokens],
-        logIds: [String(i)],
-      });
+      if (clusters.length < options.maxChildren) {
+        clusters.push({
+          id: `cluster-${clusters.length}`,
+          template: [...tokens],
+          logIds: [String(i)],
+        });
+      } else {
+        // Cluster limit reached — assign to the best-matching existing cluster
+        // rather than silently dropping the message. This preserves approximate
+        // coverage at the cost of some template precision.
+        let bestCluster: DrainCluster | null = null;
+        let bestSimilarity = -1;
 
-      if (clusters.length >= options.maxChildren) {
-        console.warn(
-          `[logs] Drain cluster limit reached (${options.maxChildren}); ${logMessages.length - i - 1} log messages not clustered`,
-        );
-        break;
+        for (const cluster of clusters) {
+          if (cluster.template.length !== tokens.length) continue;
+          const similarity = computeSimilarity(cluster.template, tokens);
+          if (similarity > bestSimilarity) {
+            bestSimilarity = similarity;
+            bestCluster = cluster;
+          }
+        }
+
+        if (bestCluster !== null) {
+          bestCluster.template = mergeTemplates(bestCluster.template, tokens);
+          bestCluster.logIds.push(String(i));
+        }
+        // If no cluster has the same token length, the message is truly
+        // unclassifiable within current clusters; emit a one-time warning.
+        else if (!overflowWarned) {
+          overflowWarned = true;
+          console.warn(
+            `[logs] Drain cluster limit (${options.maxChildren}) reached; some messages assigned to nearest cluster or skipped`,
+          );
+        }
       }
     }
   }

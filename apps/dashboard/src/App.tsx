@@ -11,6 +11,10 @@ import CrossRepoView from './components/CrossRepoView.tsx';
 import TemporalCouplingView from './views/TemporalCouplingView.tsx';
 import HotspotsView from './views/HotspotsView.tsx';
 import PatternsView from './views/PatternsView.tsx';
+import ConstraintsView from './views/ConstraintsView.tsx';
+import ConstraintDetailView from './views/ConstraintDetailView.tsx';
+import CrossEntityView from './views/CrossEntityView.tsx';
+import ConfigValidatorView from './views/ConfigValidatorView.tsx';
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -65,6 +69,10 @@ export default function App() {
             <Route path="/temporal-coupling" element={<TemporalCouplingView />} />
             <Route path="/hotspots" element={<HotspotsView />} />
             <Route path="/patterns" element={<PatternsView />} />
+            <Route path="/constraints" element={<ConstraintsView />} />
+            <Route path="/constraints/:type" element={<ConstraintDetailView />} />
+            <Route path="/cross-entity" element={<CrossEntityView />} />
+            <Route path="/validate" element={<ConfigValidatorView />} />
           </Route>
         </Routes>
       </BrowserRouter>

@@ -44,7 +44,7 @@ function makeSarifLog(
 ): SarifLog {
   return {
     $schema:
-      "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
+      "https://json.schemastore.org/sarif-2.1.0.json",
     version: "2.1.0",
     runs: [
       {

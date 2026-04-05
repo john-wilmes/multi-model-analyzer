@@ -17,7 +17,7 @@ import { getChangedFilesInRange } from "@mma/ingestion";
 const mockGetChangedFiles = vi.mocked(getChangedFilesInRange);
 
 function importEdge(source: string, target: string, repo = ""): GraphEdge {
-  return { source, target, kind: "imports", metadata: { repo } };
+  return { source, target, kind: "imports", repo, metadata: { repo } };
 }
 
 describe("computeAffected", () => {

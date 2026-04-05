@@ -147,10 +147,10 @@ describe("routeQuery", () => {
     expect(routeQuery("show cross-repo dependency graph").route).toBe("architecture");
   });
 
-  it("routes complexity queries to analytical", () => {
-    expect(routeQuery("most complex files").route).toBe("analytical");
-    expect(routeQuery("show file complexity").route).toBe("analytical");
-    expect(routeQuery("highest complexity modules").route).toBe("analytical");
+  it("routes complexity queries to blastradius (hotspots)", () => {
+    expect(routeQuery("most complex files").route).toBe("blastradius");
+    expect(routeQuery("show file complexity").route).toBe("blastradius");
+    expect(routeQuery("highest complexity modules").route).toBe("blastradius");
   });
 
   it("routes 'repository pattern' to pattern, not structural", () => {

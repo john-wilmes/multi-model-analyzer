@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  "include": ["src"],
+  // Test files: config-schema-extractor.test.ts, credential-access-extractor.test.ts, constraint-builder.test.ts, config-validator.test.ts (vitest, see vitest.config.ts)
+  "references": [
+    { "path": "../core" },
+    { "path": "../parsing" }
+  ]
+}

@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { KVStore } from "@mma/storage";
 import type { SarifLog, DetectedPattern, ModuleMetrics, RepoMetricsSummary } from "@mma/core";
+import { registerGuide } from "./guide.js"; // guide.ts
 
 export function registerResources(server: McpServer, kvStore: KVStore): void {
   // Static resource: list of all indexed repos
@@ -137,4 +138,6 @@ export function registerResources(server: McpServer, kvStore: KVStore): void {
       }],
     };
   });
+
+  registerGuide(server);
 }

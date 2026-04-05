@@ -109,6 +109,7 @@ describe("auditCommand — with indexed repos", () => {
         source: `${repo}/src/app.ts`,
         target: "lodash",
         kind: "imports",
+        repo,
         metadata: { repo },
       },
     ]);
@@ -181,6 +182,7 @@ describe("auditCommand — with indexed repos", () => {
         source: "repo-a/src/app.ts",
         target: "lodash",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
     ]);

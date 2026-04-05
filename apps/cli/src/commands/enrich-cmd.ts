@@ -15,8 +15,10 @@ import {
   shouldEscalateToTier3,
   tier3Summarize as ollamaTier3Summarize,
   isOllamaAvailable,
+  tier3SummarizeLlmApi,
+  isLlmApiAvailable,
 } from "@mma/summarization";
-import type { OllamaOptions } from "@mma/summarization";
+import type { OllamaOptions, LlmProvider } from "@mma/summarization";
 import type { Summary } from "@mma/core";
 
 export interface EnrichOptions {
@@ -28,6 +30,10 @@ export interface EnrichOptions {
   readonly verbose: boolean;
   readonly ollamaUrl?: string;
   readonly ollamaModel?: string;
+  /** Use cloud LLM instead of Ollama (anthropic or openai). */
+  readonly llmProvider?: LlmProvider;
+  readonly llmApiKey?: string;
+  readonly llmModel?: string;
 }
 
 export interface EnrichResult {
@@ -58,13 +64,31 @@ function extractRepoNames(keys: string[]): string[] {
 export async function enrichCommand(options: EnrichOptions): Promise<EnrichResult> {
   const log = options.verbose ? console.log.bind(console) : () => {};
 
-  // Ollama availability check
-  const ollamaUrl = options.ollamaUrl ?? "http://localhost:11434";
-  const available = await isOllamaAvailable(ollamaUrl);
-  if (!available) {
-    throw new Error(`Ollama is not reachable at ${ollamaUrl}. Start Ollama or specify --ollama-url.`);
+  const cloudProvider = options.llmProvider === "anthropic" || options.llmProvider === "openai"
+    ? options.llmProvider
+    : undefined;
+  const useCloudLlm = cloudProvider !== undefined;
+
+  if (useCloudLlm) {
+    const envKey = cloudProvider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
+    const apiKey = options.llmApiKey ?? process.env[envKey] ?? "";
+    if (!apiKey) {
+      throw new Error(`No API key for ${cloudProvider}. Set --llm-api-key or ${envKey} env var.`);
+    }
+    const available = await isLlmApiAvailable({ provider: cloudProvider, apiKey, timeout: 5_000 });
+    if (!available) {
+      throw new Error(`${options.llmProvider} API is not reachable. Check your API key and network.`);
+    }
+    log(`[enrich] ${options.llmProvider} API available`);
+  } else {
+    // Ollama availability check
+    const ollamaUrl = options.ollamaUrl ?? "http://localhost:11434";
+    const available = await isOllamaAvailable(ollamaUrl);
+    if (!available) {
+      throw new Error(`Ollama is not reachable at ${ollamaUrl}. Start Ollama or specify --ollama-url.`);
+    }
+    log(`[enrich] Ollama available at ${ollamaUrl}`);
   }
-  log(`[enrich] Ollama available at ${ollamaUrl}`);
 
   // Discover all repos that have been indexed (have t1 cache entries)
   const allT1Keys = await options.kvStore.keys(T1_PREFIX);
@@ -117,20 +141,43 @@ export async function enrichCommand(options: EnrichOptions): Promise<EnrichResul
 
     log(`[enrich]   Loaded ${summaryMap.size} tier-1 summaries`);
 
+    // Merge any previously persisted tier-3 results into summaryMap so the
+    // escalation filter below correctly skips already-enriched entities.
+    const repoT3Keys = await options.kvStore.keys(`${T3_PREFIX}${repoName}:`);
+    for (const key of repoT3Keys) {
+      const raw = await options.kvStore.get(key);
+      if (!raw) continue;
+      try {
+        const s = JSON.parse(raw) as Summary;
+        const existing = summaryMap.get(s.entityId);
+        if (!existing || s.tier > existing.tier) {
+          summaryMap.set(s.entityId, s);
+        }
+      } catch { /* skip corrupted */ }
+    }
+
+    // Build a set of entity IDs that have tier-3 cache entries (any hash variant)
+    const t3CachedEntities = new Set<string>();
+    for (const key of repoT3Keys) {
+      // Key format: summary:t3:<repo>:<entityId> or summary:t3:<repo>:<entityId>:<hash>
+      const withoutPrefix = key.slice(`${T3_PREFIX}${repoName}:`.length);
+      // entityId is path#symbol — strip optional trailing :hash
+      const lastColon = withoutPrefix.lastIndexOf(":");
+      const hashPart = lastColon > 0 ? withoutPrefix.slice(lastColon + 1) : "";
+      // Content hashes are 64-char hex SHA-256 strings
+      const entityId = hashPart.length === 64 && /^[0-9a-f]+$/.test(hashPart)
+        ? withoutPrefix.slice(0, lastColon)
+        : withoutPrefix;
+      t3CachedEntities.add(entityId);
+    }
+
     // Tier 3: Ollama for low-confidence entities not already t3-cached
     let tier3Count = 0;
     if (budgetRemaining === undefined || budgetRemaining > 0) {
-      const tier3Candidates = (
-        await Promise.all(
-          [...summaryMap.entries()]
-            .filter(([, s]) => shouldEscalateToTier3(s, undefined))
-            .map(async ([entityId, s]) => {
-              const alreadyCached = await options.kvStore.has(T3_PREFIX + entityId);
-              if (alreadyCached) return null;
-              return { entityId, description: s.description, context: entityId };
-            }),
-        )
-      ).filter((c): c is NonNullable<typeof c> => c !== null);
+      const tier3Candidates = [...summaryMap.entries()]
+        .filter(([, s]) => shouldEscalateToTier3(s, undefined))
+        .filter(([entityId]) => !t3CachedEntities.has(entityId))
+        .map(([entityId, s]) => ({ entityId, description: s.description, context: entityId }));
 
       const capped =
         budgetRemaining !== undefined
@@ -138,23 +185,42 @@ export async function enrichCommand(options: EnrichOptions): Promise<EnrichResul
           : tier3Candidates;
 
       if (capped.length > 0) {
-        log(`[enrich]   Tier 3 (Ollama): upgrading ${capped.length} low-confidence summaries`);
-        const ollamaOpts: Partial<OllamaOptions> = {
-          ...(options.ollamaUrl ? { baseUrl: options.ollamaUrl } : {}),
-          ...(options.ollamaModel ? { model: options.ollamaModel } : {}),
-        };
-        const ollamaEntities = capped.map((c) => ({
+        const entities = capped.map((c) => ({
           entityId: c.entityId,
           sourceCode: c.description,
           context: c.context,
         }));
-        const tier3Results = await ollamaTier3Summarize(ollamaEntities, ollamaOpts);
-        for (const s of tier3Results) {
+        let tier3Results;
+        if (useCloudLlm) {
+          log(`[enrich]   Tier 3 (${cloudProvider}): upgrading ${capped.length} low-confidence summaries`);
+          const envKey = cloudProvider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
+          const apiKey = options.llmApiKey ?? process.env[envKey] ?? "";
+          const DEFAULT_MODELS: Record<LlmProvider, string> = {
+            anthropic: "claude-haiku-4-5-20251001",
+            openai: "gpt-4o-mini",
+          };
+          tier3Results = await tier3SummarizeLlmApi(entities, {
+            provider: cloudProvider,
+            apiKey,
+            model: options.llmModel ?? DEFAULT_MODELS[cloudProvider],
+            timeout: 30_000,
+            maxTokens: 256,
+          }, 20);
+        } else {
+          log(`[enrich]   Tier 3 (Ollama): upgrading ${capped.length} low-confidence summaries`);
+          const ollamaOpts: Partial<OllamaOptions> = {
+            ...(options.ollamaUrl ? { baseUrl: options.ollamaUrl } : {}),
+            ...(options.ollamaModel ? { model: options.ollamaModel } : {}),
+          };
+          tier3Results = await ollamaTier3Summarize(entities, ollamaOpts);
+        }
+        await Promise.all(tier3Results.map(async (s) => {
           if (s.confidence > 0) {
             summaryMap.set(s.entityId, s);
             tier3Count++;
+            await options.kvStore.set(`${T3_PREFIX}${repoName}:${s.entityId}`, JSON.stringify(s));
           }
-        }
+        }));
         if (budgetRemaining !== undefined) {
           budgetRemaining = Math.max(0, budgetRemaining - capped.length);
         }

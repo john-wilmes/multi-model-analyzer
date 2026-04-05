@@ -1,8 +1,7 @@
 /**
  * Tier 3 summarization: cloud LLM API (Anthropic Claude or OpenAI-compatible).
  *
- * Fast (~0.5-1s per call with batching), requires API key.
- * Uses the same prompt template as Ollama for consistent output.
+ * Tier 3: Fast (~0.5-1s per call with batching), requires API key.
  */
 
 import type { Summary } from "@mma/core";

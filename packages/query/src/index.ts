@@ -19,6 +19,6 @@ export type { PageRankResult, PageRankOptions, RankedFile } from "./pagerank.js"
 export { findCrossRepoDependencies, executeMultiRepoQuery } from "./multi-repo.js";
 export type { CrossRepoDependency, CrossRepoDependencyResult, MultiRepoQueryResult } from "./multi-repo.js";
 
-export { getFlagInventory, computeFlagImpact } from "./flag-impact.js";
-export type { FlagInventoryResult, FlagInventoryEntry, FlagImpactResult, AffectedService } from "./flag-impact.js";
+export { getFlagInventory, computeFlagImpact, getConfigInventory, getConfigModel } from "./flag-impact.js";
+export type { FlagInventoryResult, FlagInventoryEntry, FlagImpactResult, AffectedService, ConfigInventoryResult, ConfigInventoryEntry } from "./flag-impact.js";
 

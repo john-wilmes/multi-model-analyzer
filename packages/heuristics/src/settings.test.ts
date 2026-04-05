@@ -1,0 +1,849 @@
+import { describe, it, expect, beforeAll } from "vitest";
+import { initTreeSitter, parseSource } from "@mma/parsing";
+import type { TreeSitterTree } from "@mma/parsing";
+import { scanForSettings, findEjsSettingsAccesses } from "./settings.js";
+
+function makeFiles(entries: Record<string, string>): Map<string, TreeSitterTree> {
+  const map = new Map<string, TreeSitterTree>();
+  for (const [path, code] of Object.entries(entries)) {
+    map.set(path, parseSource(code, path));
+  }
+  return map;
+}
+
+describe("scanForSettings", () => {
+  beforeAll(async () => {
+    await initTreeSitter();
+  }, 15_000);
+
+  it("returns empty inventory for empty input", () => {
+    const result = scanForSettings(new Map(), "repo");
+    expect(result.repo).toBe("repo");
+    expect(result.parameters).toHaveLength(0);
+  });
+
+  it("returns empty inventory for code with no settings", () => {
+    const files = makeFiles({
+      "src/math.ts": `export function add(a: number, b: number) { return a + b; }`,
+    });
+    const result = scanForSettings(files, "repo");
+    expect(result.parameters).toHaveLength(0);
+  });
+
+  it("detects config object property access", () => {
+    const files = makeFiles({
+      "src/app.ts": `
+        const timeout = config.timeout;
+        const retries = config.maxRetries;
+      `,
+    });
+    const result = scanForSettings(files, "repo");
+    const names = result.parameters.map((p) => p.name);
+    expect(names).toContain("timeout");
+    expect(names).toContain("maxRetries");
+  });
+
+  it("detects settings object property access", () => {
+    const files = makeFiles({
+      "src/app.ts": `
+        const limit = settings.rateLimit;
+        const host = settings.host;
+      `,
+    });
+    const result = scanForSettings(files, "repo");
+    const names = result.parameters.map((p) => p.name);
+    expect(names).toContain("rateLimit");
+    expect(names).toContain("host");
+  });
+
+  it("detects options and opts object property accesses", () => {
+    const files = makeFiles({
+      "src/client.ts": `
+        const pool = options.poolSize;
+        const conn = opts.connectionTimeout;
+      `,
+    });
+    const result = scanForSettings(files, "repo");
+    const names = result.parameters.map((p) => p.name);
+    expect(names).toContain("poolSize");
+    expect(names).toContain("connectionTimeout");
+  });
+
+  it("detects env var with known prefix as setting", () => {
+    const files = makeFiles({
+      "src/db.ts": `const url = process.env.DATABASE_URL;`,
+    });
+    const result = scanForSettings(files, "repo");
+    const param = result.parameters.find((p) => p.name === "DATABASE_URL");
+    expect(param).toBeDefined();
+    expect(param!.kind).toBe("setting");
+    expect(param!.source).toBe("process.env");
+  });
+
+  it("detects env var with API_ prefix as setting", () => {
+    const files = makeFiles({
+      "src/api.ts": `const baseUrl = process.env.API_BASE_URL;`,
+    });
+    const result = scanForSettings(files, "repo");
+    const param = result.parameters.find((p) => p.name === "API_BASE_URL");
+    expect(param).toBeDefined();
+    expect(param!.kind).toBe("setting");
+  });
+
+  it("detects credential env var by _KEY suffix", () => {
+    const files = makeFiles({
+      "src/auth.ts": `const key = process.env.API_KEY;`,
+    });
+    const result = scanForSettings(files, "repo");
+    const param = result.parameters.find((p) => p.name === "API_KEY");
+    expect(param).toBeDefined();
+    expect(param!.kind).toBe("credential");
+  });
+
+  it("detects credential env var by _PASSWORD suffix", () => {
+    const files = makeFiles({
+      "src/db.ts": `const pw = process.env.DB_PASSWORD;`,
+    });
+    const result = scanForSettings(files, "repo");
+    const param = result.parameters.find((p) => p.name === "DB_PASSWORD");
+    expect(param).toBeDefined();
+    expect(param!.kind).toBe("credential");
+  });
+
+  it("detects credential env var by _SECRET suffix", () => {
+    const files = makeFiles({
+      "src/auth.ts": `const secret = process.env.JWT_SECRET;`,
+    });
+    const result = scanForSettings(files, "repo");
+    const param = result.parameters.find((p) => p.name === "JWT_SECRET");
+    expect(param).toBeDefined();
+    expect(param!.kind).toBe("credential");
+  });
+
+  it("detects credential env var by _TOKEN suffix", () => {
+    const files = makeFiles({
+      "src/auth.ts": `const token = process.env.GITHUB_TOKEN;`,
+    });
+    const result = scanForSettings(files, "repo");
+    const param = result.parameters.find((p) => p.name === "GITHUB_TOKEN");
+    expect(param).toBeDefined();
+    expect(param!.kind).toBe("credential");
+  });
+
+  it("skips feature flag env vars", () => {
+    const files = makeFiles({
+      "src/config.ts": `
+        const x = process.env.FEATURE_NEW_UI;
+        const y = process.env.FF_DARK_MODE;
+        const z = process.env.FLAG_BETA;
+        const a = process.env.ENABLE_CACHE;
+      `,
+    });
+    const result = scanForSettings(files, "repo");
+    expect(result.parameters).toHaveLength(0);
+  });
+
+  it("skips env vars without known prefix (not credentials, not known prefix)", () => {
+    const files = makeFiles({
+      "src/config.ts": `const port = process.env.PORT;`,
+    });
+    const result = scanForSettings(files, "repo");
+    // PORT has no known prefix and no credential suffix — should be skipped
+    expect(result.parameters.find((p) => p.name === "PORT")).toBeUndefined();
+  });
+
+  it("extracts default value from nullish coalescing operator", () => {
+    const files = makeFiles({
+      "src/app.ts": `const timeout = config.timeout ?? 5000;`,
+    });
+    const result = scanForSettings(files, "repo");
+    const param = result.parameters.find((p) => p.name === "timeout");
+    expect(param).toBeDefined();
+    expect(param!.defaultValue).toBe(5000);
+    expect(param!.valueType).toBe("number");
+  });
+
+  it("extracts string default value from nullish coalescing operator", () => {
+    const files = makeFiles({
+      "src/app.ts": `const host = config.host ?? 'localhost';`,
+    });
+    const result = scanForSettings(files, "repo");
+    const param = result.parameters.find((p) => p.name === "host");
+    expect(param).toBeDefined();
+    expect(param!.defaultValue).toBe("localhost");
+    expect(param!.valueType).toBe("string");
+  });
+
+  it("skips test files", () => {
+    const files = makeFiles({
+      "src/config.test.ts": `const x = config.timeout;`,
+      "src/config.spec.ts": `const y = settings.maxRetries;`,
+      "__tests__/setup.ts": `const z = process.env.DATABASE_URL;`,
+    });
+    const result = scanForSettings(files, "repo");
+    expect(result.parameters).toHaveLength(0);
+  });
+
+  it("skips fixture and helper directories", () => {
+    const files = makeFiles({
+      "test/fixtures/db.ts": `const url = process.env.DATABASE_URL;`,
+      "test/helpers/config.ts": `const x = config.timeout;`,
+      "src/__mocks__/env.ts": `const y = process.env.API_KEY;`,
+    });
+    const result = scanForSettings(files, "repo");
+    expect(result.parameters).toHaveLength(0);
+  });
+
+  it("deduplicates same setting accessed across multiple files", () => {
+    const files = makeFiles({
+      "src/a.ts": `const x = config.timeout;`,
+      "src/b.ts": `const y = config.timeout;`,
+      "src/c.ts": `const z = config.timeout;`,
+    });
+    const result = scanForSettings(files, "repo");
+    const timeouts = result.parameters.filter((p) => p.name === "timeout");
+    expect(timeouts).toHaveLength(1);
+    expect(timeouts[0]!.locations).toHaveLength(3);
+  });
+
+  it("records correct repo and module in location", () => {
+    const files = makeFiles({
+      "src/service.ts": `const x = config.retryLimit;`,
+    });
+    const result = scanForSettings(files, "my-repo");
+    const param = result.parameters.find((p) => p.name === "retryLimit");
+    expect(param).toBeDefined();
+    expect(param!.locations[0]!.repo).toBe("my-repo");
+    expect(param!.locations[0]!.module).toBe("src/service.ts");
+  });
+
+  it("detects zod schema properties", () => {
+    const files = makeFiles({
+      "src/schema.ts": `
+        import { z } from "zod";
+        const schema = z.object({
+          host: z.string(),
+          port: z.number().min(0).max(65535),
+          enabled: z.boolean(),
+        });
+      `,
+    });
+    const result = scanForSettings(files, "repo");
+    const names = result.parameters.map((p) => p.name);
+    expect(names).toContain("host");
+    expect(names).toContain("port");
+    expect(names).toContain("enabled");
+  });
+
+  it("extracts value types from zod schema", () => {
+    const files = makeFiles({
+      "src/schema.ts": `
+        import { z } from "zod";
+        const schema = z.object({
+          timeout: z.number(),
+          name: z.string(),
+          active: z.boolean(),
+        });
+      `,
+    });
+    const result = scanForSettings(files, "repo");
+    const timeout = result.parameters.find((p) => p.name === "timeout");
+    const name = result.parameters.find((p) => p.name === "name");
+    const active = result.parameters.find((p) => p.name === "active");
+    expect(timeout?.valueType).toBe("number");
+    expect(name?.valueType).toBe("string");
+    expect(active?.valueType).toBe("boolean");
+  });
+
+  it("extracts range constraints from zod schema", () => {
+    const files = makeFiles({
+      "src/schema.ts": `
+        import { z } from "zod";
+        const schema = z.object({
+          port: z.number().min(1).max(65535),
+        });
+      `,
+    });
+    const result = scanForSettings(files, "repo");
+    const port = result.parameters.find((p) => p.name === "port");
+    expect(port).toBeDefined();
+    expect(port!.rangeMin).toBe(1);
+    expect(port!.rangeMax).toBe(65535);
+  });
+
+  it("does not scan validator schemas when no import present", () => {
+    // Without import, the object({}) detection should not fire
+    const files = makeFiles({
+      "src/app.ts": `
+        const schema = someLib.object({
+          port: someLib.number(),
+        });
+      `,
+    });
+    const result = scanForSettings(files, "repo");
+    // No zod/joi import — should not detect schema properties
+    expect(result.parameters.find((p) => p.name === "port")).toBeUndefined();
+  });
+
+  it("respects custom configObjectNames option", () => {
+    const files = makeFiles({
+      "src/app.ts": `
+        const x = myConf.retryCount;
+        const y = config.retryCount;
+      `,
+    });
+    const result = scanForSettings(files, "repo", {
+      configObjectNames: ["myConf"],
+    });
+    const names = result.parameters.map((p) => p.name);
+    expect(names).toContain("retryCount");
+    // Only one location (config.retryCount skipped since "config" not in custom list)
+    const param = result.parameters.find((p) => p.name === "retryCount");
+    expect(param!.locations).toHaveLength(1);
+  });
+
+  it("respects custom excludePaths option", () => {
+    const files = makeFiles({
+      "src/generated/config.ts": `const x = config.timeout;`,
+      "src/app.ts": `const y = config.timeout;`,
+    });
+    const result = scanForSettings(files, "repo", {
+      excludePaths: [/\/generated\//],
+    });
+    const param = result.parameters.find((p) => p.name === "timeout");
+    expect(param).toBeDefined();
+    expect(param!.locations).toHaveLength(1);
+    expect(param!.locations[0]!.module).toBe("src/app.ts");
+  });
+
+  describe("mongoose-style config definitions", () => {
+    it("detects JS assignment form with bare type identifiers", () => {
+      const files = makeFiles({
+        "src/client.js": `
+          AthenaHealth.configuration = {
+            username: String,
+            skipSync: Boolean,
+            maxRetries: Number,
+          };
+        `,
+      });
+      const result = scanForSettings(files, "repo");
+      expect(result.parameters).toHaveLength(3);
+      expect(result.parameters.find(p => p.name === "username")).toMatchObject({
+        valueType: "string", kind: "setting",
+      });
+      expect(result.parameters.find(p => p.name === "skipSync")).toMatchObject({
+        valueType: "boolean",
+      });
+      expect(result.parameters.find(p => p.name === "maxRetries")).toMatchObject({
+        valueType: "number",
+      });
+    });
+
+    it("extracts nested object metadata (type, default, description, required)", () => {
+      const files = makeFiles({
+        "src/client.js": `
+          MyClient.configuration = {
+            practiceId: { type: String, required: true },
+            importWhitespace: { type: Boolean, default: false, description: 'Enable whitespace import' },
+            maxConnections: { type: Number, default: 10, required: false },
+          };
+        `,
+      });
+      const result = scanForSettings(files, "repo");
+      expect(result.parameters).toHaveLength(3);
+
+      const practiceId = result.parameters.find(p => p.name === "practiceId");
+      expect(practiceId).toMatchObject({
+        valueType: "string", required: true,
+      });
+
+      const importWs = result.parameters.find(p => p.name === "importWhitespace");
+      expect(importWs).toMatchObject({
+        valueType: "boolean", defaultValue: false, description: "Enable whitespace import",
+      });
+
+      const maxConn = result.parameters.find(p => p.name === "maxConnections");
+      expect(maxConn).toMatchObject({
+        valueType: "number", defaultValue: 10, required: false,
+      });
+    });
+
+    it("detects variable declaration form", () => {
+      const files = makeFiles({
+        "src/config.ts": `
+          export const configuration = {
+            practiceId: { type: String, required: true },
+            showFrozenSlots: { type: Boolean, default: true },
+          };
+        `,
+      });
+      const result = scanForSettings(files, "repo");
+      expect(result.parameters).toHaveLength(2);
+      expect(result.parameters.find(p => p.name === "practiceId")).toBeDefined();
+      expect(result.parameters.find(p => p.name === "showFrozenSlots")).toMatchObject({
+        defaultValue: true,
+      });
+    });
+
+    it("classifies credential properties by name", () => {
+      const files = makeFiles({
+        "src/client.js": `
+          Client.configuration = {
+            password: String,
+            apiKey: String,
+            secretToken: { type: String, required: true },
+            normalSetting: Boolean,
+          };
+        `,
+      });
+      const result = scanForSettings(files, "repo");
+      expect(result.parameters.find(p => p.name === "password")?.kind).toBe("credential");
+      expect(result.parameters.find(p => p.name === "apiKey")?.kind).toBe("credential");
+      expect(result.parameters.find(p => p.name === "secretToken")?.kind).toBe("credential");
+      expect(result.parameters.find(p => p.name === "normalSetting")?.kind).toBe("setting");
+    });
+
+    it("respects custom configDefinitionNames option", () => {
+      const files = makeFiles({
+        "src/client.js": `
+          Client.myConfig = { host: String };
+          Client.configuration = { port: Number };
+        `,
+      });
+      const result = scanForSettings(files, "repo", {
+        configDefinitionNames: ["myConfig"],
+      });
+      expect(result.parameters.find(p => p.name === "host")).toBeDefined();
+      expect(result.parameters.find(p => p.name === "port")).toBeUndefined();
+    });
+
+    it("does not match arbitrary variable names against default", () => {
+      const files = makeFiles({
+        "src/app.ts": `
+          const otherName = { username: String };
+        `,
+      });
+      const result = scanForSettings(files, "repo");
+      expect(result.parameters.find(p => p.name === "username")).toBeUndefined();
+    });
+
+    it("excludes test files", () => {
+      const files = makeFiles({
+        "src/client.test.ts": `
+          Client.configuration = { host: String };
+        `,
+      });
+      const result = scanForSettings(files, "repo");
+      expect(result.parameters).toHaveLength(0);
+    });
+
+    it("merges definition with runtime access", () => {
+      const files = makeFiles({
+        "src/config.ts": `
+          Client.configuration = {
+            practiceId: { type: String, required: true },
+          };
+        `,
+        "src/service.ts": `
+          const x = credentials.practiceId;
+        `,
+      });
+      const result = scanForSettings(files, "repo", {
+        configObjectNames: ["credentials"],
+      });
+      // Should be merged into one parameter with two locations
+      const params = result.parameters.filter(p => p.name === "practiceId");
+      expect(params).toHaveLength(1);
+      expect(params[0]!.locations).toHaveLength(2);
+      expect(params[0]!.valueType).toBe("string"); // from the definition
+    });
+
+    it("handles Array and Object types as unknown", () => {
+      const files = makeFiles({
+        "src/client.js": `
+          Client.configuration = {
+            tags: Array,
+            metadata: { type: Object, default: {} },
+          };
+        `,
+      });
+      const result = scanForSettings(files, "repo");
+      expect(result.parameters.find(p => p.name === "tags")?.valueType).toBe("unknown");
+      expect(result.parameters.find(p => p.name === "metadata")?.valueType).toBe("unknown");
+    });
+  });
+
+  describe("configScopes", () => {
+    it("objectNames scope matching assigns scope to params from named object", () => {
+      const files = makeFiles({
+        "src/app.ts": `
+          const url = credentials.dbURL;
+        `,
+      });
+      const result = scanForSettings(files, "repo", {
+        configObjectNames: ["credentials"],
+        configScopes: [{ name: "integrator-config", objectNames: ["credentials"] }],
+      });
+      const param = result.parameters.find((p) => p.name === "dbURL");
+      expect(param).toBeDefined();
+      expect(param!.scope).toBe("integrator-config");
+    });
+
+    it("accessPatterns scope matching assigns scope for chained access paths", () => {
+      const files = makeFiles({
+        "src/app.ts": `
+          const window = settings.integrator.syncWindow;
+          const enabled = settings.reminder.enabled;
+        `,
+      });
+      const result = scanForSettings(files, "repo", {
+        configScopes: [
+          { name: "integrator-setting", accessPatterns: ["settings.integrator.*"] },
+          { name: "account-setting", accessPatterns: ["settings.reminder.*"] },
+        ],
+      });
+      const intParam = result.parameters.find((p) => p.name === "syncWindow");
+      expect(intParam).toBeDefined();
+      expect(intParam!.scope).toBe("integrator-setting");
+
+      const acctParam = result.parameters.find((p) => p.name === "enabled");
+      expect(acctParam).toBeDefined();
+      expect(acctParam!.scope).toBe("account-setting");
+    });
+
+    it("definitionNames scope matching assigns scope from mongoose-style definition", () => {
+      const files = makeFiles({
+        "src/client.js": `
+          Foo.configuration = { myProp: { type: Boolean, default: false } };
+        `,
+      });
+      const result = scanForSettings(files, "repo", {
+        configDefinitionNames: ["configuration"],
+        configScopes: [{ name: "integrator-config", definitionNames: ["configuration"] }],
+      });
+      const param = result.parameters.find((p) => p.name === "myProp");
+      expect(param).toBeDefined();
+      expect(param!.scope).toBe("integrator-config");
+    });
+
+    it("scope and kind are orthogonal — password from definition gets credential kind and scope", () => {
+      const files = makeFiles({
+        "src/client.js": `
+          Foo.configuration = { password: String };
+        `,
+      });
+      const result = scanForSettings(files, "repo", {
+        configDefinitionNames: ["configuration"],
+        configScopes: [{ name: "integrator-config", definitionNames: ["configuration"] }],
+      });
+      const param = result.parameters.find((p) => p.name === "password");
+      expect(param).toBeDefined();
+      expect(param!.kind).toBe("credential");
+      expect(param!.scope).toBe("integrator-config");
+    });
+
+    it("no scope when no rules match", () => {
+      const files = makeFiles({
+        "src/app.ts": `
+          const t = config.timeout;
+        `,
+      });
+      const result = scanForSettings(files, "repo", {
+        configScopes: [{ name: "other-scope", objectNames: ["otherObj"] }],
+      });
+      const param = result.parameters.find((p) => p.name === "timeout");
+      expect(param).toBeDefined();
+      expect(param!.scope).toBeUndefined();
+    });
+
+    it("multiple scopes — first match wins when both objectNames rules could match", () => {
+      const files = makeFiles({
+        "src/app.ts": `
+          const x = credentials.apiHost;
+        `,
+      });
+      const result = scanForSettings(files, "repo", {
+        configObjectNames: ["credentials"],
+        configScopes: [
+          { name: "first-scope", objectNames: ["credentials"] },
+          { name: "second-scope", objectNames: ["credentials"] },
+        ],
+      });
+      const param = result.parameters.find((p) => p.name === "apiHost");
+      expect(param).toBeDefined();
+      expect(param!.scope).toBe("first-scope");
+    });
+
+    it("merge preserves scope — first non-undefined scope wins across files", () => {
+      const files = makeFiles({
+        "src/definition.ts": `
+          Client.configuration = { retryCount: Number };
+        `,
+        "src/usage.ts": `
+          const x = config.retryCount;
+        `,
+      });
+      const result = scanForSettings(files, "repo", {
+        configDefinitionNames: ["configuration"],
+        configScopes: [{ name: "integrator-config", definitionNames: ["configuration"] }],
+      });
+      const params = result.parameters.filter((p) => p.name === "retryCount");
+      expect(params).toHaveLength(1);
+      expect(params[0]!.locations).toHaveLength(2);
+      expect(params[0]!.scope).toBe("integrator-config");
+    });
+  });
+
+  describe("built-in property exclusions", () => {
+    it("excludes JS built-in methods on config objects", () => {
+      const files = makeFiles({
+        "src/app.ts": `
+          const items = options.map(x => x.id);
+          const hasIt = options.includes("foo");
+          const len = options.length;
+          const lower = config.toLowerCase();
+          const parts = settings.split(",");
+          const str = opts.toString();
+        `,
+      });
+      const result = scanForSettings(files, "repo");
+      const names = result.parameters.map((p) => p.name);
+      expect(names).not.toContain("map");
+      expect(names).not.toContain("includes");
+      expect(names).not.toContain("length");
+      expect(names).not.toContain("toLowerCase");
+      expect(names).not.toContain("split");
+      expect(names).not.toContain("toString");
+    });
+
+    it("excludes HTTP request option properties", () => {
+      const files = makeFiles({
+        "src/client.ts": `
+          const h = options.headers;
+          const m = options.method;
+          const d = options.data;
+          const p = options.params;
+        `,
+      });
+      const result = scanForSettings(files, "repo");
+      const names = result.parameters.map((p) => p.name);
+      expect(names).not.toContain("headers");
+      expect(names).not.toContain("method");
+      expect(names).not.toContain("data");
+      expect(names).not.toContain("params");
+    });
+
+    it("excludes method-like names (getXxx, setXxx, etc.)", () => {
+      const files = makeFiles({
+        "src/service.ts": `
+          const p = options.getPatient;
+          const c = config.getWhitespacesFromCache;
+          const s = settings.setLogLevel;
+          const h = opts.handleRequest;
+        `,
+      });
+      const result = scanForSettings(files, "repo");
+      const names = result.parameters.map((p) => p.name);
+      expect(names).not.toContain("getPatient");
+      expect(names).not.toContain("getWhitespacesFromCache");
+      expect(names).not.toContain("setLogLevel");
+      expect(names).not.toContain("handleRequest");
+    });
+
+    it("scope objectNames matches root of chained access", () => {
+      const files = makeFiles({
+        "src/app.ts": `
+          const m = credentials.insurance.relationshipMapping;
+          const w = options.whitespace.enabled;
+        `,
+      });
+      const result = scanForSettings(files, "repo", {
+        configObjectNames: ["credentials", "options"],
+        configScopes: [
+          { name: "integrator-config", objectNames: ["credentials", "options"] },
+        ],
+      });
+      const names = result.parameters.map((p) => p.name);
+      expect(names).toContain("relationshipMapping");
+      expect(names).toContain("enabled");
+      for (const p of result.parameters) {
+        expect(p.scope).toBe("integrator-config");
+      }
+    });
+
+    it("does NOT exclude legitimate config names", () => {
+      const files = makeFiles({
+        "src/app.ts": `
+          const t = config.timeout;
+          const r = options.maxRetries;
+          const s = settings.syncWindow;
+          const w = options.whitespaces;
+        `,
+      });
+      const result = scanForSettings(files, "repo");
+      const names = result.parameters.map((p) => p.name);
+      expect(names).toContain("timeout");
+      expect(names).toContain("maxRetries");
+      expect(names).toContain("syncWindow");
+      expect(names).toContain("whitespaces");
+    });
+  });
+
+  describe("config.get() call expression detection", () => {
+    it("detects config.get('redis.port') as a setting param", () => {
+      const files = makeFiles({
+        "src/db.ts": `const port = config.get('redis.port');`,
+      });
+      const result = scanForSettings(files, "repo", {
+        configGetObjectNames: ["config"],
+      });
+      const param = result.parameters.find((p) => p.name === "redis.port");
+      expect(param).toBeDefined();
+      expect(param!.kind).toBe("setting");
+    });
+
+    it("detects nconf.get('db.host') when configGetObjectNames includes nconf", () => {
+      const files = makeFiles({
+        "src/db.ts": `const host = nconf.get('db.host');`,
+      });
+      const result = scanForSettings(files, "repo", {
+        configGetObjectNames: ["nconf"],
+      });
+      const param = result.parameters.find((p) => p.name === "db.host");
+      expect(param).toBeDefined();
+      expect(param!.kind).toBe("setting");
+    });
+
+    it("ignores config.get() with no arguments", () => {
+      const files = makeFiles({
+        "src/app.ts": `const all = config.get();`,
+      });
+      const result = scanForSettings(files, "repo", {
+        configGetObjectNames: ["config"],
+      });
+      // Should not detect anything from a no-arg get()
+      expect(result.parameters).toHaveLength(0);
+    });
+
+    it("ignores foo.get('key') when foo is not in configGetObjectNames", () => {
+      const files = makeFiles({
+        "src/app.ts": `const val = foo.get('some.key');`,
+      });
+      const result = scanForSettings(files, "repo", {
+        configGetObjectNames: ["config"],
+      });
+      expect(result.parameters.find((p) => p.name === "some.key")).toBeUndefined();
+    });
+
+    it("applies scope via configScopes accessPatterns", () => {
+      const files = makeFiles({
+        "src/infra.ts": `
+          const rPort = config.get('redis.port');
+          const rmqHost = config.get('rabbitmq.host');
+          const apiUrl = config.get('api.baseUrl');
+        `,
+      });
+      const result = scanForSettings(files, "repo", {
+        configGetObjectNames: ["config"],
+        configScopes: [
+          { name: "infrastructure-config", accessPatterns: ["config.redis.*", "config.rabbitmq.*"] },
+          { name: "api-config", accessPatterns: ["config.api.*"] },
+        ],
+      });
+      expect(result.parameters.find((p) => p.name === "redis.port")?.scope).toBe("infrastructure-config");
+      expect(result.parameters.find((p) => p.name === "rabbitmq.host")?.scope).toBe("infrastructure-config");
+      expect(result.parameters.find((p) => p.name === "api.baseUrl")?.scope).toBe("api-config");
+    });
+
+    it("detects config.has('feature.enabled') as a setting param", () => {
+      const files = makeFiles({
+        "src/features.ts": `if (config.has('feature.enabled')) { ... }`,
+      });
+      const result = scanForSettings(files, "repo", {
+        configGetObjectNames: ["config"],
+      });
+      const param = result.parameters.find((p) => p.name === "feature.enabled");
+      expect(param).toBeDefined();
+      expect(param!.kind).toBe("setting");
+    });
+
+    it("does not emit spurious 'has' param from config.has() call", () => {
+      const files = makeFiles({
+        "src/app.ts": `if (config.has('feature.enabled')) { doSomething(); }`,
+      });
+      const result = scanForSettings(files, "repo", {
+        configGetObjectNames: ["config"],
+      });
+      expect(result.parameters.find((p) => p.name === "has")).toBeUndefined();
+      expect(
+        result.parameters.find((p) => p.name === "feature.enabled"),
+      ).toBeDefined();
+    });
+  });
+
+  describe("findEjsSettingsAccesses", () => {
+    it("extracts reminder.enabled from item.settings.reminder.enabled", () => {
+      const text = `<% if(item.settings.reminder.enabled) { %>`;
+      const result = findEjsSettingsAccesses(text, "views/email.ejs", "repo");
+      const param = result.find((p) => p.name === "reminder.enabled");
+      expect(param).toBeDefined();
+      expect(param!.kind).toBe("setting");
+    });
+
+    it("extracts feedback.promoter.url from user.owner.settings.feedback.promoter.url", () => {
+      const text = `<%= user.owner.settings.feedback.promoter.url %>`;
+      const result = findEjsSettingsAccesses(text, "views/feedback.ejs", "repo");
+      const param = result.find((p) => p.name === "feedback.promoter.url");
+      expect(param).toBeDefined();
+    });
+
+    it("extracts dbURL from integrator.credentials.dbURL with kind credential", () => {
+      const text = `<%= integrator.credentials.dbURL %>`;
+      const result = findEjsSettingsAccesses(text, "views/admin.ejs", "repo");
+      const param = result.find((p) => p.name === "dbURL");
+      expect(param).toBeDefined();
+      expect(param!.kind).toBe("credential");
+    });
+
+    it("strips trailing method calls from param path", () => {
+      const text = `<%= item.settings.site.name.toLowerCase() %>`;
+      const result = findEjsSettingsAccesses(text, "views/site.ejs", "repo");
+      const param = result.find((p) => p.name === "site.name");
+      expect(param).toBeDefined();
+      // Should NOT have a param named "site.name.toLowerCase"
+      expect(result.find((p) => p.name === "site.name.toLowerCase")).toBeUndefined();
+    });
+
+    it("strips built-in property tails like .length", () => {
+      const text = `<%= item.settings.site.name.length %>`;
+      const result = findEjsSettingsAccesses(text, "views/site.ejs", "repo");
+      const param = result.find((p) => p.name === "site.name");
+      expect(param).toBeDefined();
+      expect(result.find((p) => p.name === "site.name.length")).toBeUndefined();
+    });
+
+    it("matches arbitrary object prefixes before .settings", () => {
+      const text = `<%= org.account.settings.billing.enabled %>`;
+      const result = findEjsSettingsAccesses(text, "views/billing.ejs", "repo");
+      const param = result.find((p) => p.name === "billing.enabled");
+      expect(param).toBeDefined();
+    });
+
+    it("applies scope resolution", () => {
+      const text = `<%= item.settings.reminder.enabled %>`;
+      const result = findEjsSettingsAccesses(text, "views/email.ejs", "repo", [
+        { name: "account-setting", accessPatterns: ["settings.reminder.*"] },
+      ]);
+      const param = result.find((p) => p.name === "reminder.enabled");
+      expect(param).toBeDefined();
+      expect(param!.scope).toBe("account-setting");
+    });
+
+    it("returns empty for EJS with no settings references", () => {
+      const text = `<h1>Hello <%= user.name %></h1>`;
+      const result = findEjsSettingsAccesses(text, "views/hello.ejs", "repo");
+      expect(result).toHaveLength(0);
+    });
+  });
+});

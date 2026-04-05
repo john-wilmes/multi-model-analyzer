@@ -1,5 +1,8 @@
 export type {
   // Repository & Ingestion
+  CustomQueueFramework,
+  ConfigScopeRule,
+  FlagDefaults,
   RepoConfig,
   ChangeSet,
   FileKind,
@@ -28,6 +31,10 @@ export type {
   PatternKind,
   FeatureFlag,
   FlagInventory,
+  ConfigParameter,
+  ConfigParameterKind,
+  ConfigValueType,
+  ConfigInventory,
   LogTemplate,
   LogSeverity,
   LogTemplateIndex,

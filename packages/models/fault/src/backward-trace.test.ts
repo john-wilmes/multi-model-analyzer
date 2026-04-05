@@ -206,7 +206,19 @@ describe("traceBackwardFromLog", () => {
   it("detects cross-service calls from call graph", () => {
     const root = makeLogRoot();
     const cfg = makeCfg("src/handler.ts#handleRequest");
-    const cfgs = new Map([["src/handler.ts#handleRequest", cfg]]);
+    // Caller CFG must exist with a statement mentioning the callee name
+    const callerCfg: ControlFlowGraph = {
+      functionId: "src/api.ts#processRequest",
+      nodes: [
+        { id: "c1", kind: "entry", label: "function entry", location: { repo: "test-repo", module: "src/api.ts" }, line: 1 },
+        { id: "c2", kind: "statement", label: "handleRequest(req)", location: { repo: "test-repo", module: "src/api.ts" }, line: 5 },
+      ],
+      edges: [{ from: "c1", to: "c2" }],
+    };
+    const cfgs = new Map([
+      ["src/handler.ts#handleRequest", cfg],
+      ["src/api.ts#processRequest", callerCfg],
+    ]);
 
     const callGraph: CallGraph = {
       repo: "test-repo",
@@ -221,6 +233,66 @@ describe("traceBackwardFromLog", () => {
     expect(trace.crossServiceCalls).toHaveLength(1);
     expect(trace.crossServiceCalls[0]!.callerService).toBe("src/api.ts");
     expect(trace.crossServiceCalls[0]!.calleeService).toBe("src/handler.ts");
+  });
+
+  it("does not record cross-service calls without verified call site", () => {
+    const root = makeLogRoot();
+    const cfg = makeCfg("src/handler.ts#handleRequest");
+    // Caller CFG exists but has no statement mentioning callee
+    const callerCfg: ControlFlowGraph = {
+      functionId: "src/api.ts#processRequest",
+      nodes: [
+        { id: "c1", kind: "entry", label: "function entry", location: { repo: "test-repo", module: "src/api.ts" }, line: 1 },
+        { id: "c2", kind: "statement", label: "doSomethingElse()", location: { repo: "test-repo", module: "src/api.ts" }, line: 5 },
+      ],
+      edges: [{ from: "c1", to: "c2" }],
+    };
+    const cfgs = new Map([
+      ["src/handler.ts#handleRequest", cfg],
+      ["src/api.ts#processRequest", callerCfg],
+    ]);
+
+    const callGraph: CallGraph = {
+      repo: "test-repo",
+      edges: [
+        { source: "src/api.ts#processRequest", target: "src/handler.ts#handleRequest", kind: "calls" },
+      ],
+      nodeCount: 2,
+    };
+
+    const trace = traceBackwardFromLog(root, cfgs, callGraph);
+
+    expect(trace.crossServiceCalls).toHaveLength(0);
+  });
+
+  it("does not match substring-similar call sites (e.g. handleRequestV2 vs handleRequest)", () => {
+    const root = makeLogRoot();
+    const cfg = makeCfg("src/handler.ts#handleRequest");
+    const callerCfg: ControlFlowGraph = {
+      functionId: "src/api.ts#processRequest",
+      nodes: [
+        { id: "c1", kind: "entry", label: "function entry", location: { repo: "test-repo", module: "src/api.ts" }, line: 1 },
+        { id: "c2", kind: "statement", label: "handleRequestV2(req)", location: { repo: "test-repo", module: "src/api.ts" }, line: 5 },
+      ],
+      edges: [{ from: "c1", to: "c2" }],
+    };
+    const cfgs = new Map([
+      ["src/handler.ts#handleRequest", cfg],
+      ["src/api.ts#processRequest", callerCfg],
+    ]);
+
+    const callGraph: CallGraph = {
+      repo: "test-repo",
+      edges: [
+        { source: "src/api.ts#processRequest", target: "src/handler.ts#handleRequest", kind: "calls" },
+      ],
+      nodeCount: 2,
+    };
+
+    const trace = traceBackwardFromLog(root, cfgs, callGraph);
+
+    expect(trace.crossServiceCalls).toHaveLength(0);
+    expect(trace.steps.filter(s => s.kind === "call")).toHaveLength(0);
   });
 
   it("does not report same-module calls as cross-service", () => {

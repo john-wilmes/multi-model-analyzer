@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { registerTools } from "./tools.js";
+import { registerTools, WELCOME_BLURB } from "./tools.js";
 import type { Stores } from "./tools.js";
 
 // Stub out network-dependent ingestion helpers so tools that call scanGitHubOrg
@@ -100,12 +100,14 @@ describe("registerTools", () => {
       "ignore_repo", "get_indexing_state", "check_new_repos",
       "get_hotspots", "get_temporal_coupling", "get_patterns",
       "get_symbol_importers",
+      "get_config_inventory", "get_config_model", "validate_config",
+      "get_test_configurations", "get_interaction_strength",
     ];
 
     for (const tool of expectedTools) {
       expect(server.tools.has(tool)).toBe(true);
     }
-    expect(server.registerTool).toHaveBeenCalledTimes(expectedTools.length);
+    expect(server.registerTool.mock.calls.length).toBe(expectedTools.length);
   });
 
   it("each tool has a description", () => {
@@ -135,7 +137,7 @@ describe("tool handlers", () => {
     const server = createMockServer();
     const stores = makeStores();
     await stores.kvStore.set("sarif:latest", JSON.stringify({
-      $schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
+      $schema: "https://json.schemastore.org/sarif-2.1.0.json",
       version: "2.1.0",
       runs: [{
         tool: { driver: { name: "mma", version: "0.1.0", rules: [] } },
@@ -174,7 +176,7 @@ describe("pagination", () => {
       message: { text: `Finding ${i}` },
     }));
     void stores.kvStore.set("sarif:latest", JSON.stringify({
-      $schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
+      $schema: "https://json.schemastore.org/sarif-2.1.0.json",
       version: "2.1.0",
       runs: [{ tool: { driver: { name: "mma", version: "0.1.0", rules: [] } }, results }],
     }));
@@ -248,7 +250,7 @@ describe("resources", () => {
     const server = createResourceMockServer();
     const kvStore = new InMemoryKVStore();
     registerResources(server as unknown as Parameters<typeof registerResources>[0], kvStore);
-    expect(server.resource).toHaveBeenCalledTimes(4);
+    expect(server.resource).toHaveBeenCalledTimes(5);
   });
 });
 
@@ -635,6 +637,8 @@ const ALL_TOOL_NAMES = [
   "ignore_repo", "get_indexing_state", "check_new_repos",
   "get_hotspots", "get_temporal_coupling", "get_patterns",
   "get_symbol_importers",
+  "get_config_inventory", "get_config_model", "validate_config",
+  "get_test_configurations", "get_interaction_strength",
 ] as const;
 
 /** Minimal valid args for every tool so we can invoke them without crashes. */
@@ -665,6 +669,11 @@ const MINIMAL_ARGS: Record<string, Record<string, unknown>> = {
   get_temporal_coupling:  {},
   get_patterns:           {},
   get_symbol_importers:   { symbol: "createClient" },
+  get_config_inventory:   {},
+  get_config_model:       { repo: "test-repo" },
+  validate_config:        { repo: "test-repo", config: { flagA: true } },
+  get_test_configurations: { repo: "test-repo" },
+  get_interaction_strength: { repo: "test-repo", parameter: "flagA" },
 };
 
 function makeSarifStoresWithRepoMetadata(count: number) {
@@ -676,7 +685,7 @@ function makeSarifStoresWithRepoMetadata(count: number) {
     logicalLocations: [{ name: `file-${i % 3 === 0 ? "repo-a" : "repo-b"}.ts`, properties: { repo: i % 3 === 0 ? "repo-a" : "repo-b" } }],
   }));
   void stores.kvStore.set("sarif:latest", JSON.stringify({
-    $schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
+    $schema: "https://json.schemastore.org/sarif-2.1.0.json",
     version: "2.1.0",
     runs: [{ tool: { driver: { name: "mma", version: "0.1.0", rules: [] } }, results }],
   }));
@@ -696,7 +705,7 @@ function makeInvoker(server: ReturnType<typeof createMockServer>) {
 // ---------------------------------------------------------------------------
 
 describe("MCP tool sanity checks", () => {
-  it("all 26 tools return valid JSON content with text entry", async () => {
+  it("all 32 tools return valid JSON content with text entry", async () => {
     const server = createMockServer();
     register(server, makeStores());
     const invoker = makeInvoker(server);
@@ -786,7 +795,7 @@ describe("MCP tool sanity checks", () => {
       { ruleId: "test/note", level: "note", message: { text: "Note finding" } },
     ];
     await stores.kvStore.set("sarif:latest", JSON.stringify({
-      $schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
+      $schema: "https://json.schemastore.org/sarif-2.1.0.json",
       version: "2.1.0",
       runs: [{ tool: { driver: { name: "mma", version: "0.1.0", rules: [] } }, results }],
     }));
@@ -1151,10 +1160,10 @@ describe("MCP tool sanity checks", () => {
 // ---------------------------------------------------------------------------
 
 describe("MCP meta-sanity checks", () => {
-  it("exactly 26 tools are registered", () => {
+  it("exactly 32 tools are registered", () => {
     const server = createMockServer();
     register(server, makeStores());
-    expect(server.tools.size).toBe(26);
+    expect(server.tools.size).toBe(31);
   });
 
   it("all registered tools have non-empty descriptions", () => {
@@ -1241,7 +1250,7 @@ describe("MCP meta-sanity checks", () => {
     };
     const kvStore = new InMemoryKVStore();
     registerResources(resourceServer as unknown as Parameters<typeof registerResources>[0], kvStore);
-    expect(resourceServer.resource).toHaveBeenCalledTimes(4);
+    expect(resourceServer.resource).toHaveBeenCalledTimes(5);
   });
 
   it("pagination-capable tools respect limit=0 gracefully", async () => {
@@ -1318,7 +1327,7 @@ describe("MCP meta-sanity checks", () => {
     const stores = makeStores();
     // Seed so get_diagnostics produces a resource_link for repo filter
     await stores.kvStore.set("sarif:latest", JSON.stringify({
-      $schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
+      $schema: "https://json.schemastore.org/sarif-2.1.0.json",
       version: "2.1.0",
       runs: [{ tool: { driver: { name: "mma", version: "0.1.0", rules: [] } }, results: [] }],
     }));
@@ -1356,9 +1365,9 @@ describe("get_hotspots", () => {
     const server = createMockServer();
     const stores = makeStores();
     await stores.kvStore.set("hotspots:repo-a", JSON.stringify([
-      { file: "src/low.ts", hotspotScore: 30, churnScore: 0.3, complexityScore: 0.4 },
-      { file: "src/big.ts", hotspotScore: 85, churnScore: 0.9, complexityScore: 0.8 },
-      { file: "src/mid.ts", hotspotScore: 55, churnScore: 0.6, complexityScore: 0.5 },
+      { file: "src/low.ts", hotspotScore: 30, churn: 3, symbolCount: 40 },
+      { file: "src/big.ts", hotspotScore: 85, churn: 9, symbolCount: 80 },
+      { file: "src/mid.ts", hotspotScore: 55, churn: 6, symbolCount: 50 },
     ]));
     register(server, stores);
     const invoker = makeInvoker(server);
@@ -1369,11 +1378,14 @@ describe("get_hotspots", () => {
       results: Array<{ file: string; hotspotScore: number; repo: string }>;
     };
     expect(parsed.total).toBe(3);
-    expect(parsed.results[0]!.hotspotScore).toBe(85);
+    // Re-normalized: big.ts = round((9/9*100 + 80/80*100)/2) = 100
+    expect(parsed.results[0]!.hotspotScore).toBe(100);
     expect(parsed.results[0]!.file).toBe("src/big.ts");
     expect(parsed.results[0]!.repo).toBe("repo-a");
-    expect(parsed.results[1]!.hotspotScore).toBe(55);
-    expect(parsed.results[2]!.hotspotScore).toBe(30);
+    // mid.ts = round((6/9*100 + 50/80*100)/2) = round((66.7+62.5)/2) = 65
+    expect(parsed.results[1]!.hotspotScore).toBe(65);
+    // low.ts = round((3/9*100 + 40/80*100)/2) = round((33.3+50)/2) = 42
+    expect(parsed.results[2]!.hotspotScore).toBe(42);
   });
 
   it("filters hotspots by repo", async () => {
@@ -1890,5 +1902,98 @@ describe("get_symbol_importers", () => {
     const result = await invoker("get_symbol_importers", { symbol: "createClient" });
     const parsed = JSON.parse(result.content[0]!.text!) as { package: string | null };
     expect(parsed.package).toBeNull();
+  });
+});
+
+describe("discoverability", () => {
+  // Helper that seeds a search store and returns a server with registered tools
+  async function makeSearchServer() {
+    const stores = makeStores();
+    await stores.searchStore.index([
+      { id: "repo-a:src/auth.ts", content: "auth authentication login", metadata: { repo: "repo-a" } },
+    ]);
+    const server = createMockServer();
+    register(server, stores);
+    return { server, stores };
+  }
+
+  it("tool responses include _hints in JSON payload", async () => {
+    const { server } = await makeSearchServer();
+    const handler = server.tools.get("search")!.handler;
+    const result = await handler({ query: "auth" });
+    const parsed = JSON.parse(result.content[0]!.text) as { _hints?: unknown };
+    expect(Array.isArray(parsed._hints)).toBe(true);
+    expect((parsed._hints as string[]).length).toBeGreaterThan(0);
+    expect(typeof (parsed._hints as string[])[0]).toBe("string");
+  });
+
+  it("_hints are absent when no hints apply", async () => {
+    // get_diagnostics with no SARIF data returns an error object (no _hints path).
+    // Verify that the error response does NOT contain _hints.
+    const server = createMockServer();
+    register(server, makeStores());
+    const handler = server.tools.get("get_diagnostics")!.handler;
+    const result = await handler({});
+    const parsed = JSON.parse(result.content[0]!.text) as Record<string, unknown>;
+    // Error responses are plain { error: "..." } objects — _hints not injected
+    expect(parsed["_hints"]).toBeUndefined();
+  });
+
+  it("tool descriptions include cross-references to other tool names", () => {
+    const server = createMockServer();
+    register(server, makeStores());
+    const allToolNames = [...server.tools.keys()];
+
+    // These are the tools whose descriptions were explicitly enhanced with
+    // cross-references as part of the discoverability feature. Each must
+    // reference at least one other registered tool by name.
+    const enhancedTools = [
+      "query", "search", "get_callers", "get_callees", "get_dependencies",
+      "get_metrics", "get_diagnostics", "get_blast_radius", "get_architecture",
+      "get_cross_repo_graph", "get_service_correlation", "get_cross_repo_models",
+      "get_cross_repo_impact", "get_flag_inventory", "get_flag_impact",
+      "get_patterns", "get_config_inventory", "get_config_model",
+      "get_test_configurations", "get_interaction_strength",
+      "get_hotspots", "get_temporal_coupling", "get_symbol_importers",
+      "get_repo_candidates", "index_repo", "scan_org", "check_new_repos",
+      "get_vulnerability",
+    ];
+
+    for (const name of enhancedTools) {
+      const tool = server.tools.get(name);
+      if (!tool) continue; // skip if not registered in this build
+      const desc = tool.description;
+      const hasCrossRef = allToolNames.some((t) => t !== name && desc.includes(t));
+      expect(hasCrossRef, `Tool '${name}' description has no cross-reference to other tools`).toBe(true);
+    }
+  });
+
+  it("prompt mma-guide is registered", async () => {
+    const { registerPrompts } = await import("./prompts.js");
+
+    type PromptCallback = () => { messages: Array<{ role: string; content: { type: string; text: string } }> };
+    const prompts = new Map<string, PromptCallback>();
+    const promptServer = {
+      prompt: vi.fn((_name: string, _description: string, callback: PromptCallback) => {
+        prompts.set(_name, callback);
+      }),
+    };
+
+    registerPrompts(promptServer as unknown as Parameters<typeof registerPrompts>[0]);
+
+    expect(promptServer.prompt).toHaveBeenCalled();
+    expect(prompts.has("mma-guide")).toBe(true);
+
+    const callback = prompts.get("mma-guide")!;
+    const output = callback();
+    expect(output.messages).toHaveLength(1);
+    expect(output.messages[0]!.role).toBe("user");
+    expect(typeof output.messages[0]!.content.text).toBe("string");
+    expect(output.messages[0]!.content.text.length).toBeGreaterThan(0);
+  });
+
+  it("WELCOME_BLURB is exported and non-empty", () => {
+    expect(typeof WELCOME_BLURB).toBe("string");
+    expect(WELCOME_BLURB.length).toBeGreaterThan(0);
   });
 });

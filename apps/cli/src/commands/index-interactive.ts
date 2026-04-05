@@ -6,6 +6,7 @@
  */
 
 import { input, select, checkbox, confirm } from "@inquirer/prompts";
+import { execFile } from "node:child_process";
 import type { KVStore, GraphStore, SearchStore } from "@mma/storage";
 import {
   scanGitHubOrg,
@@ -184,10 +185,10 @@ async function indexSingleRepo(
         {
           name: repo.name,
           url: repo.url,
-          branch: repo.defaultBranch,
+          branch: repo.defaultBranch || undefined,
           // For local repos the url is the filesystem path; for remote repos
-          // the mirror dir will be used by the ingestion layer.
-          localPath: repo.url,
+          // omit localPath so index-cmd falls back to mirrorDir.
+          localPath: repo.url.startsWith("/") ? repo.url : undefined,
         },
       ],
       mirrorDir,
@@ -211,7 +212,7 @@ async function indexSingleRepo(
     console.error(
       `  \u2717 Failed to index ${repo.name}: ${err instanceof Error ? err.message : String(err)}`,
     );
-    // State remains "indexing" — user can retry by re-running explore
+    await stateManager.resetToCandidate(repo.name);
     return false;
   }
 }
@@ -384,25 +385,40 @@ async function handleCandidates(
   }
 }
 
-/** Detect the default branch of a remote git repo via ls-remote. Falls back to "main". */
-async function detectDefaultBranch(url: string): Promise<string> {
-  try {
-    const { execFileSync } = await import("node:child_process");
-    const out = execFileSync("git", ["ls-remote", "--symref", url, "HEAD"], { encoding: "utf-8", timeout: 10_000 });
-    const match = out.match(/ref: refs\/heads\/(\S+)\s+HEAD/);
-    return match?.[1] ?? "main";
-  } catch {
-    return "main";
+/**
+ * Derive a stable, org-qualified identifier from a clone URL.
+ * Returns "owner/repo" when the URL has at least two path segments, otherwise
+ * falls back to just the repo basename.  Always strips .git and query/hash.
+ */
+function repoNameFromUrl(url: string): string {
+  const cleaned = (url.replace(/\.git$/, "").split(/[?#]/)[0] ?? "").replace(/\/$/, "");
+  // Strip scheme + host to get the path segments (works for https:// and git@)
+  const path = cleaned.replace(/^(?:https?:\/\/|git@)[^/:]+[/:]/, "");
+  const parts = path.split("/").filter(Boolean);
+  if (parts.length >= 2) {
+    return `${parts[parts.length - 2]}/${parts[parts.length - 1]}`;
   }
+  const name = parts[parts.length - 1] ?? "";
+  if (!name) throw new Error(`Could not derive repo name from URL: ${url}`);
+  return name;
 }
 
-/** Derive a repo name from a clone URL using the last two path segments (org--repo). */
-function repoNameFromUrl(url: string): string {
-  const stripped = url.replace(/\.git$/, "").replace(/\/+$/, "");
-  const parts = stripped.split(/[/:]/).filter(Boolean);
-  return parts.length >= 2
-    ? `${parts[parts.length - 2]}--${parts[parts.length - 1]}`
-    : parts[parts.length - 1] ?? stripped;
+/**
+ * Probe the remote to detect its default branch.
+ * Uses `git ls-remote --symref <url> HEAD` and parses the `ref: refs/heads/<branch>` line.
+ * Falls back to "main" if the probe fails or the output is unparseable.
+ */
+async function detectDefaultBranch(url: string): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    execFile("git", ["ls-remote", "--symref", url, "HEAD"], { timeout: 10_000 }, (err, stdout) => {
+      if (err) {
+        resolve(undefined);
+        return;
+      }
+      const match = /^ref: refs\/heads\/(\S+)\tHEAD$/m.exec(stdout);
+      resolve(match?.[1]);
+    });
+  });
 }
 
 /**
@@ -415,18 +431,25 @@ async function exploreSeedUrl(
   options: ExploreCommandOptions,
 ): Promise<void> {
   const { mirrorDir, verbose } = options;
-  const name = repoNameFromUrl(seedUrl);
+  let name: string;
+  try {
+    name = repoNameFromUrl(seedUrl);
+  } catch (err) {
+    console.error(`Invalid repo URL: ${err instanceof Error ? err.message : String(err)}`);
+    return;
+  }
 
   console.log(`\nStarting from ${name} (${seedUrl})`);
-
-  const defaultBranch = await detectDefaultBranch(seedUrl);
+  console.log("  Detecting default branch...");
+  const detectedBranch = await detectDefaultBranch(seedUrl);
+  console.log(detectedBranch ? `  Default branch: ${detectedBranch}` : "  Default branch: (not detected, will use remote HEAD)");
 
   const seed: DiscoveredRepo = {
     name,
     fullName: name,
     url: seedUrl,
     sshUrl: seedUrl,
-    defaultBranch,
+    defaultBranch: detectedBranch ?? "",
     language: null,
     updatedAt: new Date().toISOString(),
     archived: false,
@@ -437,11 +460,10 @@ async function exploreSeedUrl(
 
   const existing = await stateManager.get(name);
   if (existing?.status !== "indexed") {
-    await stateManager.addCandidate({ name, url: seedUrl, defaultBranch }, "user-selected");
-    const ok = await indexSingleRepo(seed, stateManager, options, mirrorDir, verbose);
-    if (!ok) {
-      console.warn(`  Warning: seed repo indexing failed — discovery will proceed without seed data.`);
-    }
+    await stateManager.addCandidate({ name, url: seedUrl, defaultBranch: detectedBranch ?? "" }, "user-selected");
+    await indexSingleRepo(seed, stateManager, options, mirrorDir, verbose);
+    const postIndex = await stateManager.get(name);
+    if (postIndex?.status !== "indexed") return;
   } else {
     console.log(`  ${name} is already indexed.`);
   }
@@ -521,7 +543,9 @@ async function lazyDiscoveryLoop(
         const knownRepo = allRepos.find((r) => r.name === repoName);
         if (knownRepo) {
           await indexSingleRepo(knownRepo, stateManager, options, mirrorDir, verbose);
-          lastSuccessful = knownRepo;
+          if ((await stateManager.get(knownRepo.name))?.status === "indexed") {
+            lastSuccessful = knownRepo;
+          }
         } else {
           // Connection resolved by name but no URL yet — prompt user
           const added = await promptForRepoUrl(repoName, stateManager, options);
@@ -561,6 +585,14 @@ async function lazyDiscoveryLoop(
     });
 
     if (chosen.includes("__done__") || chosen.length === 0) break;
+
+    // Mark packages the user skipped as ignored so they don't resurface
+    for (const pkg of unresolved) {
+      if (!chosen.includes(pkg)) {
+        try { await stateManager.addCandidate({ name: pkg, url: "" }, "user-selected"); } catch { /* already in state machine */ }
+        try { await stateManager.markIgnored(pkg); } catch { /* skip */ }
+      }
+    }
 
     let lastSuccessful: DiscoveredRepo | undefined;
     for (const pkg of chosen) {
@@ -648,19 +680,29 @@ async function promptForRepoUrl(
 
   if (!url) {
     // Mark as ignored so it doesn't keep appearing
-    await stateManager.addCandidate({ name: packageOrRepoName, url: "" }, "user-selected");
+    try {
+      await stateManager.addCandidate({ name: packageOrRepoName, url: "" }, "user-selected");
+    } catch {
+      // already known — just mark ignored
+    }
     await stateManager.markIgnored(packageOrRepoName);
     return undefined;
   }
 
-  const name = repoNameFromUrl(url);
-  const defaultBranch = await detectDefaultBranch(url);
+  let name: string;
+  try {
+    name = repoNameFromUrl(url);
+  } catch {
+    console.error(`  Invalid URL: ${url}`);
+    return undefined;
+  }
+  const detectedBranch = await detectDefaultBranch(url);
   const repo: DiscoveredRepo = {
     name,
     fullName: name,
     url,
     sshUrl: url,
-    defaultBranch,
+    defaultBranch: detectedBranch ?? "",
     language: null,
     updatedAt: new Date().toISOString(),
     archived: false,
@@ -669,11 +711,12 @@ async function promptForRepoUrl(
     description: null,
   };
 
-  await stateManager.addCandidate({ name, url, defaultBranch }, "user-selected");
-  const ok = await indexSingleRepo(repo, stateManager, options, mirrorDir, verbose);
-  if (!ok) {
-    console.warn(`  Warning: failed to index ${name} — skipping.`);
-    return undefined;
+  const existing = await stateManager.get(name);
+  if (existing?.status !== "indexed") {
+    await stateManager.addCandidate({ name, url, defaultBranch: detectedBranch ?? "" }, "user-selected");
+    await indexSingleRepo(repo, stateManager, options, mirrorDir, verbose);
+    const postIndex = await stateManager.get(name);
+    if (postIndex?.status !== "indexed") return undefined;
   }
   return repo;
 }

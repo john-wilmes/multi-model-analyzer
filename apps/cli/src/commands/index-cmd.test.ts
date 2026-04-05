@@ -35,6 +35,8 @@ vi.mock("@mma/ingestion", () => ({
   detectChanges: vi.fn(),
   classifyFiles: vi.fn().mockReturnValue([]),
   isBareRepo: vi.fn().mockResolvedValue(false),
+  isExcludedPath: vi.fn().mockReturnValue(false),
+  getCommitHistory: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("@mma/parsing", () => ({
@@ -46,6 +48,11 @@ vi.mock("@mma/structural", () => ({
   buildControlFlowGraph: vi.fn(),
   createCfgIdCounter: vi.fn().mockReturnValue({ next: () => 0 }),
   extractCallEdgesFromTreeSitter: vi.fn().mockReturnValue([]),
+  buildImportScopeFromAst: vi.fn().mockReturnValue(new Map()),
+  resolveImportSpecifier: vi.fn().mockReturnValue(undefined),
+  extractHeritageEdges: vi.fn().mockReturnValue([]),
+  tagBarrelMediatedCycles: vi.fn().mockReturnValue([]),
+  getBarrelPaths: vi.fn().mockReturnValue([]),
   computeModuleMetrics: vi.fn().mockReturnValue([]),
   summarizeRepoMetrics: vi.fn().mockReturnValue({
     repo: "", moduleCount: 0, avgInstability: 0, avgAbstractness: 0,
@@ -59,6 +66,8 @@ vi.mock("@mma/heuristics", () => ({
   inferServicesWithMeta: vi.fn().mockReturnValue({ data: [], meta: { repo: "", heuristic: "inferServices", durationMs: 0, itemCount: 0 } }),
   detectPatternsWithMeta: vi.fn().mockReturnValue({ data: [], meta: { repo: "", heuristic: "detectPatterns", durationMs: 0, itemCount: 0 } }),
   scanForFlags: vi.fn().mockReturnValue({ flags: [] }),
+  scanForSettings: vi.fn().mockReturnValue({ parameters: [], repo: "" }),
+  extractFlagRegistry: vi.fn().mockReturnValue([]),
   extractLogStatements: vi.fn().mockReturnValue({ repo: "", templates: [] }),
   analyzeNamingWithMeta: vi.fn().mockReturnValue({ data: { methods: [] }, meta: { repo: "", heuristic: "analyzeNaming", durationMs: 0, itemCount: 0 } }),
   extractServiceTopology: vi.fn().mockReturnValue([]),
@@ -272,6 +281,7 @@ describe("indexCommand", () => {
       source: "src/index.ts",
       target: "src/utils.ts",
       kind: "imports",
+      repo: "repo-a",
       metadata: { repo: "repo-a" },
     };
     mockExtractDepGraph.mockReturnValue({
@@ -308,7 +318,7 @@ describe("indexCommand", () => {
   it("cleans up stale data for deleted files", async () => {
     // Pre-populate stores with data for the file that will be deleted
     await graphStore.addEdges([
-      { source: "repo-a:src/old.ts", target: "src/dep.ts", kind: "imports", metadata: { repo: "repo-a" } },
+      { source: "repo-a:src/old.ts", target: "src/dep.ts", kind: "imports", repo: "repo-a", metadata: { repo: "repo-a" } },
     ]);
     // Phase 0 cleanup calls searchStore.delete() with file paths as IDs.
     // Index a doc with file-path ID to verify it gets cleaned up.
@@ -512,7 +522,7 @@ describe("indexCommand", () => {
       JSON.stringify({ symbols: [{ name: "main", kind: "function", path: "src/main.ts", line: 1 }], contentHash: "h1" }),
     );
     await graphStore.addEdges([
-      { source: "src/main.ts", target: "src/util.ts", kind: "imports", metadata: { repo: "repo-a" } },
+      { source: "src/main.ts", target: "src/util.ts", kind: "imports", repo: "repo-a", metadata: { repo: "repo-a" } },
     ]);
     // pipelineComplete is intentionally NOT set
 
@@ -608,8 +618,8 @@ describe("indexCommand", () => {
       makeParseResult(parsedFiles1, ["src/a.ts", "src/b.ts", "src/c.ts"]),
     );
 
-    const edgeAB: GraphEdge = { source: "repo-a:src/a.ts", target: "repo-a:src/b.ts", kind: "imports", metadata: { repo: "repo-a" } };
-    const edgeBC: GraphEdge = { source: "repo-a:src/b.ts", target: "repo-a:src/c.ts", kind: "imports", metadata: { repo: "repo-a" } };
+    const edgeAB: GraphEdge = { source: "repo-a:src/a.ts", target: "repo-a:src/b.ts", kind: "imports", repo: "repo-a", metadata: { repo: "repo-a" } };
+    const edgeBC: GraphEdge = { source: "repo-a:src/b.ts", target: "repo-a:src/c.ts", kind: "imports", repo: "repo-a", metadata: { repo: "repo-a" } };
     mockExtractDepGraph.mockReturnValue({
       repo: "repo-a",
       edges: [edgeAB, edgeBC],
@@ -650,7 +660,7 @@ describe("indexCommand", () => {
     );
 
     // extractDependencyGraph returns new edge for the changed file only
-    const edgeAC: GraphEdge = { source: "repo-a:src/a.ts", target: "repo-a:src/c.ts", kind: "imports", metadata: { repo: "repo-a" } };
+    const edgeAC: GraphEdge = { source: "repo-a:src/a.ts", target: "repo-a:src/c.ts", kind: "imports", repo: "repo-a", metadata: { repo: "repo-a" } };
     mockExtractDepGraph.mockReturnValue({
       repo: "repo-a",
       edges: [edgeAC],
@@ -742,8 +752,8 @@ describe("indexCommand", () => {
     mockExtractDepGraph.mockReturnValue({
       repo: "repo-a",
       edges: [
-        { source: "repo-a:src/a.ts", target: "repo-a:src/b.ts", kind: "imports", metadata: { repo: "repo-a" } },
-        { source: "repo-a:src/b.ts", target: "repo-a:src/c.ts", kind: "imports", metadata: { repo: "repo-a" } },
+        { source: "repo-a:src/a.ts", target: "repo-a:src/b.ts", kind: "imports", repo: "repo-a", metadata: { repo: "repo-a" } },
+        { source: "repo-a:src/b.ts", target: "repo-a:src/c.ts", kind: "imports", repo: "repo-a", metadata: { repo: "repo-a" } },
       ],
       circularDependencies: [],
     });

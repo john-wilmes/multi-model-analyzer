@@ -84,6 +84,11 @@ describe("resolveImportSpecifier", () => {
   it("falls back to raw specifier when no match found", () => {
     expect(resolveImportSpecifier("./missing", "src/app.ts", known)).toBe("./missing");
   });
+
+  it("resolves CJS require with .js extension to .ts source", () => {
+    // require('./utils.js') should resolve to utils.ts when the .ts file is known
+    expect(resolveImportSpecifier("./utils.js", "src/app.ts", known)).toBe("src/utils.ts");
+  });
 });
 
 describe("resolveImportSpecifier with packageRoots", () => {
@@ -250,6 +255,24 @@ describe("findCircularDependencies", () => {
     ]));
     expect(cycles.length).toBeGreaterThanOrEqual(1);
     const hasCycle = cycles.some((c) => c.includes("b") && c.includes("c"));
+    expect(hasCycle).toBe(true);
+  });
+
+  it("detects cycle B->C->D->B when A->C creates a shared non-cyclic entry point", () => {
+    // Regression test for the naive DFS bug: adding nodes to `visited` on entry
+    // (before processing neighbors) would mark C as BLACK when A visits it first.
+    // Then when B->C->D->B is traversed, C appears BLACK and the DFS short-circuits,
+    // missing the cycle entirely.
+    //
+    // Edges: A->C, B->C, C->D, D->B
+    // Only cycle: B->C->D->B (A is not part of any cycle)
+    const cycles = findCircularDependencies(makeEdges([
+      ["a", "c"], ["b", "c"], ["c", "d"], ["d", "b"],
+    ]));
+    expect(cycles.length).toBeGreaterThanOrEqual(1);
+    const hasCycle = cycles.some(
+      (c) => c.includes("b") && c.includes("c") && c.includes("d") && !c.includes("a"),
+    );
     expect(hasCycle).toBe(true);
   });
 });
