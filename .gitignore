@@ -41,8 +41,9 @@ data-*/
 # Logs
 *.log
 
-# Test results
+# Playwright / test results
 test-results/
+playwright-report/
 
 # Local analysis databases (root-level)
 /*.db

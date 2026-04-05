@@ -29,6 +29,12 @@ export interface ExploreCommandOptions {
   readonly mirrorDir: string;
   readonly verbose?: boolean;
   readonly seedUrl?: string;
+  readonly enrich?: boolean;
+  readonly llmProvider?: "anthropic" | "openai" | "ollama";
+  readonly llmApiKey?: string;
+  readonly llmModel?: string;
+  readonly ollamaUrl?: string;
+  readonly ollamaModel?: string;
 }
 
 export async function exploreCommand(options: ExploreCommandOptions): Promise<void> {
@@ -165,7 +171,7 @@ async function indexSingleRepo(
   options: ExploreCommandOptions,
   mirrorDir: string,
   verbose?: boolean,
-): Promise<void> {
+): Promise<boolean> {
   const { kvStore, graphStore, searchStore } = options;
 
   console.log(`\nIndexing ${repo.name}...`);
@@ -191,15 +197,23 @@ async function indexSingleRepo(
       searchStore,
       verbose: verbose ?? false,
       rules: [],
+      enrich: options.enrich,
+      llmProvider: options.llmProvider,
+      llmApiKey: options.llmApiKey,
+      llmModel: options.llmModel,
+      ollamaUrl: options.ollamaUrl,
+      ollamaModel: options.ollamaModel,
     });
 
     await stateManager.markIndexed(repo.name);
     console.log(`  \u2713 ${repo.name} indexed successfully`);
+    return true;
   } catch (err) {
     console.error(
       `  \u2717 Failed to index ${repo.name}: ${err instanceof Error ? err.message : String(err)}`,
     );
     await stateManager.resetToCandidate(repo.name);
+    return false;
   }
 }
 

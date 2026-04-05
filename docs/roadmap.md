@@ -34,7 +34,19 @@ Implemented in PR #76. A new `suppressBarrelCycles` option filters circular depe
 
 ### Interactive Indexing ✓
 
-Implemented as `mma explore`. Guided repo discovery with incremental indexing — add and index repos one at a time without a full config file. Useful for exploratory analysis.
+Implemented as `mma explore`. Guided repo discovery with incremental indexing — add and index repos one at a time without a full config file. Supports `--enrich` and all LLM provider flags (`--llm-provider`, `--llm-api-key`, `--llm-model`, `--ollama-url`, `--ollama-model`). Useful for exploratory analysis.
+
+### GitHub Org Indexing ✓
+
+Implemented as `mma index-org <org>`. Scans a GitHub org via the API, clones all matching repos, indexes in batches, and runs cross-repo correlation. Resumable: already-indexed repos are skipped; repos stuck in `"indexing"` state are reset on restart. Supports `--concurrency`, `--batch-size`, `--language`, `--force-full-reindex`, and all LLM enrichment flags.
+
+### LLM Provider Config File Support ✓
+
+`llmProvider`, `llmApiKey`, and `llmModel` can now be set in `mma.config.json`. Precedence: CLI flags > config file > defaults. API keys should still be passed via environment variables rather than committed to the config file.
+
+### Progress Tracking with ETA ✓
+
+A `ProgressTracker` utility displays estimated time remaining during the clone phase, batch indexing, tier-1 summarization, and tier-3 LLM summarization phases.
 
 ### Instability Metrics ✓
 
