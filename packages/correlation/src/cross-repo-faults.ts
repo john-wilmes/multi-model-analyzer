@@ -95,7 +95,7 @@ export async function detectCrossRepoFaults(
   }
 
   // 3. Fallback: use cross-repo import edges when no service-call producer/consumer pairs exist
-  if (graphStore) {
+  if (graphStore && faultLinks.length === 0) {
     const importEdges = await graphStore.getEdgesByKind("imports");
     // Count imports per (sourceRepo, targetRepo) pair
     const importCounts = new Map<string, number>();
@@ -106,6 +106,9 @@ export async function detectCrossRepoFaults(
       const pairKey = `${sourceRepo}:${targetRepo}`;
       importCounts.set(pairKey, (importCounts.get(pairKey) ?? 0) + 1);
     }
+
+    // Build a set of already-covered pairs for O(1) lookup
+    const coveredPairs = new Set(faultLinks.map((fl) => `${fl.sourceRepo}:${fl.targetRepo}`));
 
     for (const [pairKey, importCount] of importCounts) {
       const colonIdx = pairKey.indexOf(":");
@@ -118,10 +121,7 @@ export async function detectCrossRepoFaults(
       if (!targetTrees) continue;
 
       // Skip if already covered by a service-call link
-      const alreadyCovered = faultLinks.some(
-        (fl) => fl.sourceRepo === sourceRepo && fl.targetRepo === targetRepo,
-      );
-      if (alreadyCovered) continue;
+      if (coveredPairs.has(pairKey)) continue;
 
       faultLinks.push({
         endpoint: targetRepo,
