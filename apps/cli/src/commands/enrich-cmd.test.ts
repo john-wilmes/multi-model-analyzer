@@ -133,6 +133,14 @@ describe("enrichCommand", () => {
     expect(tier3Mock).toHaveBeenCalledOnce();
     expect(result.tier3Count).toBe(1);
     expect(result.reposEnriched).toBe(1);
+
+    // Verify tier-3 result was persisted to KV cache
+    const cached = await kvStore.get(`summary:t3:${entityId}`);
+    expect(cached).toBeDefined();
+    const parsed = JSON.parse(cached!) as Summary;
+    expect(parsed.tier).toBe(3);
+    expect(parsed.confidence).toBe(0.85);
+    expect(parsed.description).toBe("My upgraded desc");
   });
 
   // -------------------------------------------------------------------------

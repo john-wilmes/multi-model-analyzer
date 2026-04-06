@@ -152,6 +152,7 @@ export async function enrichCommand(options: EnrichOptions): Promise<EnrichResul
         for (const s of tier3Results) {
           if (s.confidence > 0) {
             summaryMap.set(s.entityId, s);
+            await options.kvStore.set(`${T3_PREFIX}${s.entityId}`, JSON.stringify(s));
             tier3Count++;
           }
         }

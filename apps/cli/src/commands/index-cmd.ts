@@ -1221,6 +1221,21 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
         if (options.enrich && (!sharedApiBudget || sharedApiBudget.remaining > 0)) {
           let tier3Candidates = [...summaryMap.entries()]
             .filter(([, s]) => shouldEscalateToTier3(s, undefined));
+          // Serve tier-3 results from KV cache (avoids redundant API calls on re-index)
+          const tier3Uncached: typeof tier3Candidates = [];
+          for (const entry of tier3Candidates) {
+            const cached = await kvStore.get(`summary:t3:${entry[0]}`);
+            if (cached) {
+              try {
+                const s = JSON.parse(cached) as Summary;
+                summaryMap.set(s.entityId, s);
+                tier3Count++;
+              } catch { /* corrupted cache entry — re-generate */ }
+            } else {
+              tier3Uncached.push(entry);
+            }
+          }
+          tier3Candidates = tier3Uncached;
           // Atomically reserve budget before async work
           if (sharedApiBudget) {
             const granted = sharedApiBudget.reserve(tier3Candidates.length);
@@ -1335,6 +1350,7 @@ export async function indexCommand(options: IndexOptions): Promise<IndexResult> 
               for (const s of tier3Results) {
                 if (s.confidence > 0) {
                   summaryMap.set(s.entityId, s);
+                  await kvStore.set(`summary:t3:${s.entityId}`, JSON.stringify(s));
                   tier3Count++;
                 }
               }
