@@ -16,11 +16,11 @@ export async function runCrossRepoModels(
   kvStore: KVStore,
   options: CrossRepoModelsOptions,
 ): Promise<CrossRepoModelsResult> {
-  const { repos, crossRepoGraph, serviceCorrelation, verbose } = options;
+  const { repos, crossRepoGraph, serviceCorrelation, graphStore, verbose } = options;
 
   // Run all three detectors
   const features = await detectCrossRepoFeatures(kvStore, repos, crossRepoGraph);
-  const faults = await detectCrossRepoFaults(kvStore, repos, serviceCorrelation);
+  const faults = await detectCrossRepoFaults(kvStore, repos, serviceCorrelation, graphStore);
   const catalog = await buildSystemCatalog(kvStore, repos, crossRepoGraph, serviceCorrelation);
 
   // Collect all SARIF
