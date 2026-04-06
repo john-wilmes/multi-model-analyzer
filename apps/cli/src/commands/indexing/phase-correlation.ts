@@ -34,6 +34,7 @@ export async function runPhaseCorrelation(
     repos,
     crossRepoGraph: correlationResult.crossRepoGraph,
     serviceCorrelation: correlationResult.serviceCorrelation,
+    graphStore,
     verbose,
   });
   if (verbose) {
