@@ -3,6 +3,7 @@
  */
 
 import type { GraphEdge, RepoConfig, SarifResult, ServiceCatalogEntry } from "@mma/core";
+import type { GraphStore } from "@mma/storage";
 
 /** A symbol imported from another repo, resolved to its definition. */
 export interface ResolvedImportedSymbol {
@@ -174,6 +175,7 @@ export interface CrossRepoModelsOptions {
   readonly repos: readonly RepoConfig[];
   readonly crossRepoGraph: CrossRepoGraph;
   readonly serviceCorrelation: ServiceCorrelationResult;
+  readonly graphStore?: GraphStore;
   readonly verbose?: boolean;
 }
 
