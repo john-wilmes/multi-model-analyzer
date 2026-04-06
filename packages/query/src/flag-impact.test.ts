@@ -4,15 +4,15 @@ import { InMemoryGraphStore, InMemoryKVStore } from "@mma/storage";
 import type { FlagInventory, GraphEdge } from "@mma/core";
 
 function importEdge(source: string, target: string, repo = "repo"): GraphEdge {
-  return { source, target, kind: "imports", metadata: { repo } };
+  return { source, target, kind: "imports", repo, metadata: { repo } };
 }
 
 function callEdge(source: string, target: string, repo = "repo"): GraphEdge {
-  return { source, target, kind: "calls", metadata: { repo } };
+  return { source, target, kind: "calls", repo, metadata: { repo } };
 }
 
 function serviceEdge(source: string, target: string, repo = "repo"): GraphEdge {
-  return { source, target, kind: "service-call", metadata: { repo } };
+  return { source, target, kind: "service-call", repo, metadata: { repo } };
 }
 
 function makeInventory(repo: string, flags: Array<{ name: string; modules: string[]; sdk?: string }>): FlagInventory {
@@ -265,3 +265,4 @@ describe("computeFlagImpact", () => {
     expect(result.affectedServices[0]!.sourceFile).toBe("handler.ts");
   });
 });
+

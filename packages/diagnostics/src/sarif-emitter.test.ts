@@ -83,7 +83,7 @@ describe("SarifEmitter", () => {
     const log = emitter.toLog();
 
     expect(log.version).toBe("2.1.0");
-    expect(log.$schema).toContain("sarif-schema-2.1.0");
+    expect(log.$schema).toContain("sarif-2.1.0");
     expect(log.runs).toHaveLength(1);
     expect(log.runs[0]!.results).toHaveLength(1);
   });

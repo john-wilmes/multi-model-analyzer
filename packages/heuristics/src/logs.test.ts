@@ -127,4 +127,26 @@ describe("extractLogStatements", () => {
     const result = extractLogStatements(files, "my-repo");
     expect(result.repo).toBe("my-repo");
   });
+
+  it("assigns overflow messages to nearest cluster instead of dropping them", () => {
+    // Each message needs enough unique tokens that pairwise similarity stays
+    // below the merge threshold (0.5). With 4 unique tokens per message out of
+    // 5 total, similarity = 1/5 = 0.2, so each gets its own cluster.
+    const lines: string[] = [];
+    for (let i = 0; i < 100; i++) {
+      const pad = String(i).padStart(3, "0");
+      lines.push(`console.error("aaa-${pad} bbb-${pad} ccc-${pad} ddd-${pad} shared");`);
+    }
+    // 101st message shares structure with index 0 — same length, high similarity.
+    // It must be merged into an existing cluster, not dropped.
+    lines.push(`console.error("aaa-000 bbb-000 ccc-000 ddd-000 shared");`);
+
+    const code = lines.join("\n");
+    const files = makeFiles({ "src/app.ts": code });
+    const result = extractLogStatements(files, "repo");
+
+    // All 101 log calls must appear in some cluster — none dropped.
+    const totalMessages = result.templates.reduce((sum, t) => sum + t.frequency, 0);
+    expect(totalMessages).toBe(101);
+  });
 });

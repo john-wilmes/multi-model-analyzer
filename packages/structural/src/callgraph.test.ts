@@ -4,8 +4,8 @@
 
 import { describe, it, expect, beforeAll } from "vitest";
 import { initTreeSitter, parseSource } from "@mma/parsing";
-import { extractCallEdgesFromTreeSitter } from "../src/index.js";
-import type { TsNode } from "../src/index.js";
+import { extractCallEdgesFromTreeSitter, buildImportScopeFromAst } from "../src/index.js";
+import type { TsNode, ImportBinding } from "../src/index.js";
 
 beforeAll(async () => {
   await initTreeSitter();
@@ -27,7 +27,8 @@ function foo() {
 
     expect(edges).toHaveLength(1);
     expect(edges[0]!.source).toBe("test-repo:test.ts#foo");
-    expect(edges[0]!.target).toBe("bar");
+    // Identifier calls now use makeSymbolId with the calling file as best-guess location
+    expect(edges[0]!.target).toBe("test-repo:test.ts#bar");
     expect(edges[0]!.kind).toBe("calls");
     expect(edges[0]!.metadata?.["repo"]).toBe("test-repo");
   });
@@ -67,7 +68,7 @@ const handler = () => {
 
     expect(edges).toHaveLength(1);
     expect(edges[0]!.source).toBe("test-repo:test.ts#handler");
-    expect(edges[0]!.target).toBe("doSomething");
+    expect(edges[0]!.target).toBe("test-repo:test.ts#doSomething");
   });
 
   it("extracts multiple calls from the same function", () => {
@@ -86,7 +87,7 @@ function a() {
 
     expect(edges).toHaveLength(2);
     const targets = edges.map((e) => e.target).sort();
-    expect(targets).toEqual(["b", "c"]);
+    expect(targets).toEqual(["test-repo:test.ts#b", "test-repo:test.ts#c"]);
   });
 
   it("does not produce edges for new expressions", () => {
@@ -120,7 +121,8 @@ function run() {
     );
 
     expect(edges).toHaveLength(1);
-    expect(edges[0]!.target).toBe("console.log");
+    // obj.method() calls use makeSymbolId with empty filePath (receiver file unknown)
+    expect(edges[0]!.target).toBe("test-repo:#console.log");
   });
 
   it("resolves this.client.fetch() chain via resolveMemberChain", () => {
@@ -139,9 +141,302 @@ class ApiService {
     );
 
     expect(edges).toHaveLength(1);
-    // this.client.fetch() should resolve to "this.client.fetch" via resolveMemberChain
-    expect(edges[0]!.target).toBe("this.client.fetch");
+    // this.client.fetch() — object is "this" but there's an intermediate
+    // member_expression (this.client), so resolveMemberChain is used and the
+    // receiver file is unknown → makeSymbolId with empty filePath.
+    expect(edges[0]!.target).toBe("test-repo:#this.client.fetch");
     expect(edges[0]!.source).toBe("test-repo:test.ts#ApiService.fetch");
+  });
+
+  it("resolves imported bare function call to exporting file", () => {
+    const source = `
+import { fetchData } from "./api.ts";
+function handler() {
+  fetchData();
+}
+`;
+    const tree = parseSource(source, "src/handler.ts");
+    const importScope = buildImportScopeFromAst(
+      tree.rootNode as unknown as TsNode,
+      (specifier) => (specifier === "./api.ts" ? "src/api.ts" : undefined),
+    );
+    const edges = extractCallEdgesFromTreeSitter(
+      tree.rootNode as unknown as TsNode,
+      "src/handler.ts",
+      "test-repo",
+      importScope,
+    );
+
+    expect(edges).toHaveLength(1);
+    expect(edges[0]!.source).toBe("test-repo:src/handler.ts#handler");
+    // Should point to the exporting file, not the calling file
+    expect(edges[0]!.target).toBe("test-repo:src/api.ts#fetchData");
+  });
+
+  it("resolves imported receiver object method call to exporting file", () => {
+    const source = `
+import { httpClient } from "./http.ts";
+function run() {
+  httpClient.get("/api");
+}
+`;
+    const tree = parseSource(source, "src/run.ts");
+    const importScope = buildImportScopeFromAst(
+      tree.rootNode as unknown as TsNode,
+      (specifier) => (specifier === "./http.ts" ? "src/http.ts" : undefined),
+    );
+    const edges = extractCallEdgesFromTreeSitter(
+      tree.rootNode as unknown as TsNode,
+      "src/run.ts",
+      "test-repo",
+      importScope,
+    );
+
+    expect(edges).toHaveLength(1);
+    expect(edges[0]!.source).toBe("test-repo:src/run.ts#run");
+    expect(edges[0]!.target).toBe("test-repo:src/http.ts#httpClient.get");
+  });
+
+  it("resolves aliased default import to exporting file", () => {
+    const source = `
+import axios from "./axios-client.ts";
+function fetch() {
+  axios.get("/data");
+}
+`;
+    const tree = parseSource(source, "src/fetch.ts");
+    const importScope = buildImportScopeFromAst(
+      tree.rootNode as unknown as TsNode,
+      (specifier) => (specifier === "./axios-client.ts" ? "src/axios-client.ts" : undefined),
+    );
+    const edges = extractCallEdgesFromTreeSitter(
+      tree.rootNode as unknown as TsNode,
+      "src/fetch.ts",
+      "test-repo",
+      importScope,
+    );
+
+    expect(edges).toHaveLength(1);
+    // Default import canonicalizes to "default" as exportedName
+    expect(edges[0]!.target).toBe("test-repo:src/axios-client.ts#default.get");
+  });
+
+  it("falls back to current file for unimported bare calls", () => {
+    const source = `
+function doWork() {
+  localHelper();
+}
+`;
+    const tree = parseSource(source, "src/worker.ts");
+    const importScope = new Map<string, ImportBinding>();
+    const edges = extractCallEdgesFromTreeSitter(
+      tree.rootNode as unknown as TsNode,
+      "src/worker.ts",
+      "test-repo",
+      importScope,
+    );
+
+    expect(edges).toHaveLength(1);
+    // localHelper is not imported — should pin to current file
+    expect(edges[0]!.target).toBe("test-repo:src/worker.ts#localHelper");
+  });
+
+  it("resolves aliased named import to exported name, not local alias", () => {
+    const source = `
+import { fetchData as load } from "./api.ts";
+function handler() {
+  load();
+}
+`;
+    const tree = parseSource(source, "src/handler.ts");
+    const importScope = buildImportScopeFromAst(
+      tree.rootNode as unknown as TsNode,
+      (specifier) => (specifier === "./api.ts" ? "src/api.ts" : undefined),
+    );
+    const edges = extractCallEdgesFromTreeSitter(
+      tree.rootNode as unknown as TsNode,
+      "src/handler.ts",
+      "test-repo",
+      importScope,
+    );
+
+    expect(edges).toHaveLength(1);
+    expect(edges[0]!.source).toBe("test-repo:src/handler.ts#handler");
+    // Must use original export name "fetchData", not the local alias "load"
+    expect(edges[0]!.target).toBe("test-repo:src/api.ts#fetchData");
+  });
+
+  it("resolves namespace import method call by stripping namespace prefix", () => {
+    const source = `
+import * as api from "./api.ts";
+function handler() {
+  api.fetchData();
+}
+`;
+    const tree = parseSource(source, "src/handler.ts");
+    const importScope = buildImportScopeFromAst(
+      tree.rootNode as unknown as TsNode,
+      (specifier) => (specifier === "./api.ts" ? "src/api.ts" : undefined),
+    );
+    const edges = extractCallEdgesFromTreeSitter(
+      tree.rootNode as unknown as TsNode,
+      "src/handler.ts",
+      "test-repo",
+      importScope,
+    );
+
+    expect(edges).toHaveLength(1);
+    expect(edges[0]!.source).toBe("test-repo:src/handler.ts#handler");
+    // Namespace import: strip "api." prefix → target is fetchData, not api.fetchData
+    expect(edges[0]!.target).toBe("test-repo:src/api.ts#fetchData");
+  });
+
+  it("does not resolve import when identifier is shadowed by a function parameter", () => {
+    const source = `
+import { client } from "./http.ts";
+function f(client) {
+  client.get("/api");
+}
+`;
+    const tree = parseSource(source, "src/f.ts");
+    const importScope = buildImportScopeFromAst(
+      tree.rootNode as unknown as TsNode,
+      (specifier) => (specifier === "./http.ts" ? "src/http.ts" : undefined),
+    );
+    const edges = extractCallEdgesFromTreeSitter(
+      tree.rootNode as unknown as TsNode,
+      "src/f.ts",
+      "test-repo",
+      importScope,
+    );
+
+    expect(edges).toHaveLength(1);
+    // `client` is shadowed by the parameter — should NOT cross-file resolve
+    expect(edges[0]!.target).not.toContain("src/http.ts");
+    expect(edges[0]!.target).toBe("test-repo:#client.get");
+  });
+
+  it("resolves CJS namespace require: const api = require('./x'); api.fetch()", () => {
+    const source = `
+const api = require('./api.js');
+function handler() {
+  api.fetch('/endpoint');
+}
+`;
+    const tree = parseSource(source, "src/handler.js");
+    const importScope = buildImportScopeFromAst(
+      tree.rootNode as unknown as TsNode,
+      (specifier) => (specifier === "./api.js" ? "src/api.js" : undefined),
+    );
+    expect(importScope.get("api")).toMatchObject({ filePath: "src/api.js", isNamespace: true });
+    const edges = extractCallEdgesFromTreeSitter(
+      tree.rootNode as unknown as TsNode,
+      "src/handler.js",
+      "test-repo",
+      importScope,
+    );
+    const crossFile = edges.filter((e) => e.target.includes("src/api.js"));
+    expect(crossFile).toHaveLength(1);
+    expect(crossFile[0]!.target).toBe("test-repo:src/api.js#fetch");
+  });
+
+  it("resolves var-assigned CJS namespace require: var api = require('./x'); api.fetch()", () => {
+    const source = `
+var api = require('./api.js');
+function handler() {
+  api.fetch('/endpoint');
+}
+`;
+    const tree = parseSource(source, "src/handler.js");
+    const importScope = buildImportScopeFromAst(
+      tree.rootNode as unknown as TsNode,
+      (specifier) => (specifier === "./api.js" ? "src/api.js" : undefined),
+    );
+    expect(importScope.get("api")).toMatchObject({ filePath: "src/api.js", isNamespace: true });
+    const edges = extractCallEdgesFromTreeSitter(
+      tree.rootNode as unknown as TsNode,
+      "src/handler.js",
+      "test-repo",
+      importScope,
+    );
+    const crossFile = edges.filter((e) => e.target.includes("src/api.js"));
+    expect(crossFile).toHaveLength(1);
+    expect(crossFile[0]!.target).toBe("test-repo:src/api.js#fetch");
+  });
+
+  it("resolves CJS destructure require: const { a, b } = require('./x')", () => {
+    const source = `
+const { fetchData, postData } = require('./http.js');
+function run() {
+  fetchData('/url');
+  postData('/url', {});
+}
+`;
+    const tree = parseSource(source, "src/run.js");
+    const importScope = buildImportScopeFromAst(
+      tree.rootNode as unknown as TsNode,
+      (specifier) => (specifier === "./http.js" ? "src/http.js" : undefined),
+    );
+    expect(importScope.get("fetchData")).toMatchObject({ filePath: "src/http.js", exportedName: "fetchData" });
+    expect(importScope.get("postData")).toMatchObject({ filePath: "src/http.js", exportedName: "postData" });
+    const edges = extractCallEdgesFromTreeSitter(
+      tree.rootNode as unknown as TsNode,
+      "src/run.js",
+      "test-repo",
+      importScope,
+    );
+    const targets = edges.map((e) => e.target);
+    expect(targets).toContain("test-repo:src/http.js#fetchData");
+    expect(targets).toContain("test-repo:src/http.js#postData");
+  });
+
+  it("resolves aliased CJS destructure require: const { fetchData: load } = require('./x')", () => {
+    const source = `
+const { fetchData: load } = require('./http.js');
+function run() {
+  load('/url');
+}
+`;
+    const tree = parseSource(source, "src/run.js");
+    const importScope = buildImportScopeFromAst(
+      tree.rootNode as unknown as TsNode,
+      (specifier) => (specifier === "./http.js" ? "src/http.js" : undefined),
+    );
+    expect(importScope.get("load")).toMatchObject({
+      filePath: "src/http.js",
+      exportedName: "fetchData",
+      isNamespace: false,
+    });
+    const edges = extractCallEdgesFromTreeSitter(
+      tree.rootNode as unknown as TsNode,
+      "src/run.js",
+      "test-repo",
+      importScope,
+    );
+    expect(edges).toHaveLength(1);
+    expect(edges[0]!.target).toBe("test-repo:src/http.js#fetchData");
+  });
+
+  it("resolves CJS member require: const helper = require('./x').helper", () => {
+    const source = `
+const helper = require('./utils.js').helper;
+function run() {
+  helper();
+}
+`;
+    const tree = parseSource(source, "src/run.js");
+    const importScope = buildImportScopeFromAst(
+      tree.rootNode as unknown as TsNode,
+      (specifier) => (specifier === "./utils.js" ? "src/utils.js" : undefined),
+    );
+    expect(importScope.get("helper")).toMatchObject({ filePath: "src/utils.js", exportedName: "helper", isNamespace: false });
+    const edges = extractCallEdgesFromTreeSitter(
+      tree.rootNode as unknown as TsNode,
+      "src/run.js",
+      "test-repo",
+      importScope,
+    );
+    expect(edges[0]!.target).toBe("test-repo:src/utils.js#helper");
   });
 
   it("does not attribute nested function calls to the outer function", () => {
@@ -164,8 +459,8 @@ function outer() {
     const outerEdges = edges.filter((e) => e.source === "test-repo:test.ts#outer");
     const innerEdges = edges.filter((e) => e.source === "test-repo:test.ts#inner");
     expect(outerEdges).toHaveLength(1);
-    expect(outerEdges[0]!.target).toBe("a");
+    expect(outerEdges[0]!.target).toBe("test-repo:test.ts#a");
     expect(innerEdges).toHaveLength(1);
-    expect(innerEdges[0]!.target).toBe("b");
+    expect(innerEdges[0]!.target).toBe("test-repo:test.ts#b");
   });
 });

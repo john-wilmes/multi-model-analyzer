@@ -1,8 +1,14 @@
 {
   "mcpServers": {
     "mma": {
+      "type": "stdio",
       "command": "node",
-      "args": ["apps/cli/dist/index.js", "serve"]
+      "args": ["apps/cli/dist/index.js", "serve", "--db", "data/mma.db"],
+      "cwd": "/Users/johnwilmes/Documents/solo/claude/multi-model-analyzer"
+    },
+    "guru": {
+      "type": "url",
+      "url": "https://mcp.api.getguru.com/mcp"
     }
   }
 }

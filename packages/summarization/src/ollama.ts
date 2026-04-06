@@ -22,6 +22,7 @@ const DEFAULT_OPTIONS: OllamaOptions = {
   timeout: 30_000,
 };
 
+/** @internal */
 export async function summarizeWithOllama(
   entityId: string,
   sourceCode: string,

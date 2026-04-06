@@ -130,9 +130,9 @@ export default function CrossRepoView() {
   }, []);
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-1 border-b border-slate-200 dark:border-slate-700 flex-1">
+    <div className="min-w-0">
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+        <div className="flex items-center gap-1 border-b border-slate-200 dark:border-slate-700 flex-1 min-w-0 overflow-x-auto">
           {TABS.map((tab) => (
             <button
               key={tab}

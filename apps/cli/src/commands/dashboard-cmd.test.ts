@@ -119,7 +119,7 @@ beforeAll(async () => {
   // Seed SARIF findings
   const sarif = {
     $schema:
-      "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
+      "https://json.schemastore.org/sarif-2.1.0.json",
     version: "2.1.0",
     runs: [
       {
@@ -153,12 +153,14 @@ beforeAll(async () => {
       source: "src/index.ts",
       target: "src/app.ts",
       kind: "imports",
+      repo: "repo-a",
       metadata: { repo: "repo-a" },
     },
     {
       source: "src/app.ts",
       target: "src/utils.ts",
       kind: "imports",
+      repo: "repo-a",
       metadata: { repo: "repo-a" },
     },
   ]);
@@ -187,12 +189,14 @@ beforeAll(async () => {
       source: "src/index.ts",
       target: "src/app.ts",
       kind: "calls",
+      repo: "repo-a",
       metadata: { repo: "repo-a" },
     },
     {
       source: "src/app.ts",
       target: "src/utils.ts",
       kind: "calls",
+      repo: "repo-a",
       metadata: { repo: "repo-a" },
     },
   ]);
@@ -318,7 +322,7 @@ beforeAll(async () => {
   // Seed additional SARIF findings with specific ruleIds for /api/findings/:ruleId tests
   const sarifWithMultipleRules = {
     $schema:
-      "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
+      "https://json.schemastore.org/sarif-2.1.0.json",
     version: "2.1.0",
     runs: [
       {

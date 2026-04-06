@@ -108,7 +108,7 @@ export async function mergeCommand(
     const merged: SarifLog = {
       version: "2.1.0",
       $schema:
-        "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
+        "https://json.schemastore.org/sarif-2.1.0.json",
       runs: mergedSarifRuns as SarifLog["runs"],
     };
     insertKv.run("sarif:latest", JSON.stringify(merged));

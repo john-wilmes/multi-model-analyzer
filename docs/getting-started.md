@@ -39,7 +39,7 @@ Create a file called `quickstart.config.json` in any working directory:
     { "url": "https://github.com/supabase/ssr.git", "branch": "main" }
   ],
   "mirrorDir": "./mirrors",
-  "outputDb": "./mma-quickstart.db"
+  "dbPath": "./mma-quickstart.db"
 }
 ```
 
@@ -94,15 +94,16 @@ Writes an anonymized SARIF report to `report.json`. Rule IDs and severity levels
 mma dashboard
 ```
 
-Opens a local web UI at `http://localhost:3000`. The dashboard has several tabs:
+Opens a local web UI at `http://localhost:3000`. The dashboard has several views:
 
 - **Overview**: ATDI score trend, top findings by severity, repo summary cards.
-- **Dependencies**: Interactive dependency graph (Cytoscape). Zoom and click nodes to inspect module-level edges.
-- **Call Graph**: Function-level call relationships filtered by repo or package.
 - **Findings**: Filterable table of all SARIF results with rule ID, severity, location, and message.
-- **Feature Flags**: Detected config flags and their usage sites across repos.
-- **Service Catalog**: Inferred service roles (API gateway, data layer, utility, etc.) with confidence scores.
-- **Fault Trees**: Cascading failure paths derived from the dependency graph.
+- **Cross-Repo**: Multi-repo analysis with four sub-tabs — Graph (interactive cross-repo dependency graph), Feature Flags (detected config flags and their usage sites), Cascading Faults (fault propagation across service boundaries), and Service Catalog (inferred service roles with confidence scores).
+- **Temporal Coupling**: Files that change together frequently across commits.
+- **Hotspots**: Files with high churn and complexity.
+- **Patterns**: Detected design patterns and structural conventions.
+
+Drill-down views (navigated from the views above): Repo Detail, Module Detail, Dependency Graph, and Blast Radius.
 
 ## Sharing a Baseline
 
@@ -161,5 +162,4 @@ This scans the org via the GitHub API, clones matching repos in batches, indexes
 
 - **`docs/findings-guide.md`**: Full reference for all SARIF rule IDs, severity levels, trigger thresholds, and metrics (instability, abstractness, coupling zones).
 - **`docs/baseline-sharing.md`**: Detailed baseline workflows for teams, including incremental updates and CI integration.
-- **`CONTRIBUTING.md`**: How to add new heuristics, detectors, or storage backends.
 - **`mma dashboard`**: The fastest way to explore findings visually once your first index run completes.

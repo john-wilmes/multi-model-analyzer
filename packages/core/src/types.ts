@@ -7,11 +7,67 @@
 
 // -- Repository & Ingestion --
 
+export interface ConfigScopeRule {
+  readonly name: string;
+  readonly objectNames?: readonly string[];
+  readonly accessPatterns?: readonly string[];
+  readonly definitionNames?: readonly string[];
+}
+
+/** Custom queue framework pattern for service-topology detection. */
+export interface CustomQueueFramework {
+  /** Package import that activates this framework's patterns (e.g., "my-queue-lib"). */
+  readonly importTrigger: string;
+  /** Producer patterns: member expression objects whose properties are queue names. */
+  readonly producers?: readonly {
+    /** Object name to match in member expressions (e.g., "MyQueues"). */
+    readonly memberObject: string;
+  }[];
+  /** Consumer patterns. */
+  readonly consumers?: readonly {
+    /** Class property whose string value is the queue name (e.g., "queueName"). */
+    readonly classProperty?: string;
+    /** Method call that registers consumers (e.g., "subscribeFromListeners"). */
+    readonly methodCall?: string;
+    /** Fixed target name for method-call consumers (e.g., "event-bus"). */
+    readonly target?: string;
+  }[];
+}
+
+/** Global defaults for feature-flag detection, applied to all repos unless overridden per-repo. */
+export interface FlagDefaults {
+  /** Additional SDK package imports that trigger flag-method scanning (merged with built-in list). */
+  readonly sdkImports?: readonly string[];
+  /** Additional SDK method names that extract flag names from their first argument (merged with built-in list). */
+  readonly sdkMethods?: readonly string[];
+  /** Additional React hook names that extract flag names (merged with built-in list). */
+  readonly hookPatterns?: readonly string[];
+  /** Rollout/flag-check method names (overrides built-in default: isRolledOut, isUserRolledOut, addRollout, removeRollout). */
+  readonly rolloutCallMethods?: readonly string[];
+  /** Property name for array-includes flag checks (default: "featureFlags"). */
+  readonly flagPropertyName?: string;
+  /** Default enum name for flag registry extraction (default: "FeatureFlags"). */
+  readonly registryEnumName?: string;
+}
+
 export interface RepoConfig {
   readonly name: string;
   readonly url: string;
-  readonly branch: string;
-  readonly localPath: string;
+  readonly branch?: string;
+  readonly localPath?: string;
+  readonly flagRegistryFilePaths?: readonly string[];
+  readonly flagRegistryEnumName?: string;
+  readonly rolloutCallMethods?: readonly string[];
+  readonly flagPropertyName?: string;
+  readonly settings?: {
+    readonly configObjectNames?: readonly string[];
+    readonly envVarPrefixes?: readonly string[];
+    readonly credentialPatterns?: readonly string[];
+    readonly validatorLibraries?: readonly string[];
+    readonly configDefinitionNames?: readonly string[];
+    readonly configScopes?: readonly ConfigScopeRule[];
+    readonly configGetObjectNames?: readonly string[];
+  };
 }
 
 export interface ChangeSet {
@@ -93,6 +149,13 @@ export interface GraphEdge {
   readonly source: string;
   readonly target: string;
   readonly kind: EdgeKind;
+  /** Repo partition key — used by all store implementations for repo-scoped queries. */
+  readonly repo?: string;
+  /**
+   * Arbitrary key-value metadata attached to the edge.
+   * Use the top-level `repo` field for the repo partition key.
+   * This field is for truly unstructured supplemental data.
+   */
   readonly metadata?: Record<string, unknown>;
 }
 
@@ -189,11 +252,37 @@ export interface FeatureFlag {
   readonly locations: readonly LogicalLocation[];
   readonly sdk?: string;
   readonly defaultValue?: unknown;
+  readonly isRegistry?: boolean;
+  readonly description?: string;
+  readonly namespaces?: readonly string[];
 }
 
 export interface FlagInventory {
   readonly repo: string;
   readonly flags: readonly FeatureFlag[];
+}
+
+export type ConfigParameterKind = "setting" | "credential" | "flag";
+export type ConfigValueType = "string" | "number" | "boolean" | "enum" | "unknown";
+
+export interface ConfigParameter {
+  readonly name: string;
+  readonly locations: readonly LogicalLocation[];
+  readonly kind: ConfigParameterKind;
+  readonly valueType?: ConfigValueType;
+  readonly defaultValue?: unknown;
+  readonly enumValues?: readonly string[];
+  readonly rangeMin?: number;
+  readonly rangeMax?: number;
+  readonly source?: string;
+  readonly description?: string;
+  readonly required?: boolean;
+  readonly scope?: string;
+}
+
+export interface ConfigInventory {
+  readonly parameters: readonly ConfigParameter[];
+  readonly repo: string;
 }
 
 export interface LogTemplate {
@@ -264,13 +353,16 @@ export type FaultNodeKind =
 export interface FeatureModel {
   readonly flags: readonly FeatureFlag[];
   readonly constraints: readonly FeatureConstraint[];
+  readonly parameters?: readonly ConfigParameter[];
 }
 
 export interface FeatureConstraint {
   readonly kind: ConstraintKind;
   readonly flags: readonly string[];
   readonly description: string;
-  readonly source: "inferred" | "human";
+  readonly source: "inferred" | "human" | "schema";
+  readonly condition?: Record<string, unknown>;
+  readonly allowedValues?: readonly unknown[];
 }
 
 export type ConstraintKind =
@@ -278,7 +370,9 @@ export type ConstraintKind =
   | "excludes"
   | "implies"
   | "mutex"
-  | "range";
+  | "range"
+  | "conditional"
+  | "enum";
 
 export interface ServiceCatalogEntry {
   readonly name: string;

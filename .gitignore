@@ -1,6 +1,7 @@
 node_modules/
 dist/
 !apps/dashboard/dist/
+!apps/dashboard/dist/**
 *.tsbuildinfo
 .env
 .env.local
@@ -13,6 +14,8 @@ data/*.db-wal
 
 # Config with local paths
 mma.config*.json
+luma.config*.json
+luma.mapping*.json
 
 # OS files
 .DS_Store
@@ -41,3 +44,14 @@ data-*/
 # Playwright / test results
 test-results/
 playwright-report/
+
+# Local analysis databases (root-level)
+/*.db
+/*.db-shm
+/*.db-wal
+
+# Git mirrors (local clones for indexing)
+mirrors/
+
+# Misc
+.claire/

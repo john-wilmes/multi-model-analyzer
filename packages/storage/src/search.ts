@@ -24,6 +24,7 @@ export interface SearchStore {
   index(documents: readonly SearchDocument[]): Promise<void>;
   search(query: string, limit?: number, repo?: string): Promise<SearchResult[]>;
   delete(ids: readonly string[]): Promise<void>;
+  deleteByFilePaths(repo: string, filePaths: readonly string[]): Promise<void>;
   clear(repo?: string): Promise<void>;
   close(): Promise<void>;
 }
@@ -119,6 +120,20 @@ export class InMemorySearchStore implements SearchStore {
       this.docLengths.delete(id);
     }
     this.updateAvgDocLength();
+  }
+
+  async deleteByFilePaths(repo: string, filePaths: readonly string[]): Promise<void> {
+    const toDelete: string[] = [];
+    for (const [id, doc] of this.documents) {
+      if (doc.metadata['repo'] !== repo) continue;
+      for (const fp of filePaths) {
+        if (id === fp || id.startsWith(fp + '#')) {
+          toDelete.push(id);
+          break;
+        }
+      }
+    }
+    await this.delete(toDelete);
   }
 
   async clear(repo?: string): Promise<void> {

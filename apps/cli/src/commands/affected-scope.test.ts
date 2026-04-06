@@ -16,7 +16,7 @@ function makeChangeSet(repo: string, added: string[] = [], modified: string[] = 
 }
 
 function importEdge(source: string, target: string, repo = "test"): GraphEdge {
-  return { source, target, kind: "imports", metadata: { repo } };
+  return { source, target, kind: "imports", repo, metadata: { repo } };
 }
 
 describe("computeAffectedScope", () => {

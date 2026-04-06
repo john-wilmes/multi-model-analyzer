@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { fetchRepos, fetchMetricsSummary, fetchPractices, fetchHotspots, fetchAllMetrics, fetchAtdi, type ModuleMetric, type SystemAtdi } from '../api/client.ts';
+import { fetchRepos, fetchMetricsSummary, fetchPractices, fetchHotspots, fetchAtdi, type SystemAtdi } from '../api/client.ts';
 import CrossRepoChart, { type RepoPoint } from './CrossRepoChart.tsx';
-import MainSequenceChart from './MainSequenceChart.tsx';
 import AtdiGauge from './AtdiGauge.tsx';
 import AtdiByRepoChart from './AtdiByRepoChart.tsx';
 import DebtBreakdownChart from './DebtBreakdownChart.tsx';
@@ -12,9 +11,9 @@ import { EmptyState } from './shared/EmptyState.tsx';
 interface RepoSummary {
   name: string;
   grade?: string;
-  errorCount?: number;
-  warningCount?: number;
-  noteCount?: number;
+  painZoneCount?: number;
+  uselessnessZoneCount?: number;
+  moduleCount?: number;
   avgInstability?: number;
   avgAbstractness?: number;
 }
@@ -110,26 +109,18 @@ export default function Overview() {
   const [repoPoints, setRepoPoints] = useState<RepoPoint[]>([]);
   const [practices, setPractices] = useState<PracticesData | null>(null);
   const [hotspots, setHotspots] = useState<HotspotEntry[]>([]);
-  const [moduleMetrics, setModuleMetrics] = useState<ModuleMetric[]>([]);
   const [atdiData, setAtdiData] = useState<SystemAtdi | null>(null);
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
 
   useEffect(() => {
-    Promise.all([fetchRepos(), fetchMetricsSummary(), fetchPractices(), fetchHotspots(), fetchAllMetrics(), fetchAtdi().catch(() => null)])
-      .then(([reposData, metricsSummary, practicesData, hotspotsData, allMetricsData, atdi]) => {
+    Promise.all([fetchRepos(), fetchMetricsSummary(), fetchPractices(), fetchHotspots(), fetchAtdi().catch(() => null)])
+      .then(([reposData, metricsSummary, practicesData, hotspotsData, atdi]) => {
         setAtdiData(atdi as SystemAtdi | null);
-        setModuleMetrics(allMetricsData as ModuleMetric[]);
         setHotspots((hotspotsData as HotspotEntry[]).slice(0, 10));
         const pd = practicesData as PracticesData;
         setPractices(pd);
         const ms = metricsSummary as Record<string, MetricsSummaryEntry>;
-
-        // Build a lookup from scorecard for finding counts
-        const scorecard = pd.scorecard ?? [];
-        const totalErrors = scorecard.reduce((s, c) => s + c.errorCount, 0);
-        const totalWarnings = scorecard.reduce((s, c) => s + c.warningCount, 0);
-        const totalNotes = scorecard.reduce((s, c) => s + c.noteCount, 0);
 
         const summaries: RepoSummary[] = reposData.repos.map((repo) => {
           const mse = ms[repo];
@@ -137,10 +128,9 @@ export default function Overview() {
             name: repo,
             avgInstability: mse?.avgInstability,
             avgAbstractness: mse?.avgAbstractness,
-            // Per-repo finding counts aren't available; show module count instead
-            errorCount: mse?.painZoneCount,
-            warningCount: mse?.uselessnessZoneCount,
-            noteCount: mse?.moduleCount,
+            painZoneCount: mse?.painZoneCount,
+            uselessnessZoneCount: mse?.uselessnessZoneCount,
+            moduleCount: mse?.moduleCount,
           };
         });
         setRepoSummaries(summaries);
@@ -160,8 +150,6 @@ export default function Overview() {
           .filter((p) => p.moduleCount > 0);
         setRepoPoints(points);
 
-        // Store aggregate counts for potential use
-        void totalErrors; void totalWarnings; void totalNotes;
       })
       .catch((err: unknown) => console.error("Failed to fetch overview data:", err))
       .finally(() => setLoading(false));
@@ -272,22 +260,22 @@ export default function Overview() {
                   : 'bg-green-400';
               const shortPath = h.filePath.split('/').slice(-2).join('/');
               return (
-                <div key={`${h.repo}/${h.filePath}`} className="flex flex-col gap-0.5">
-                  <div className="flex items-center gap-2">
-                    <span className="w-48 text-xs text-slate-700 dark:text-slate-300 truncate" title={`[${h.repo}] ${h.filePath}`}>
+                <div key={`${h.repo}/${h.filePath}`} className="flex flex-col gap-0.5 min-w-0">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="w-40 shrink-0 text-xs text-slate-700 dark:text-slate-300 truncate" title={`[${h.repo}] ${h.filePath}`}>
                       {shortPath}
                     </span>
-                    <div className="flex-1 bg-slate-100 dark:bg-slate-700 rounded h-3">
+                    <div className="flex-1 min-w-0 bg-slate-100 dark:bg-slate-700 rounded h-3">
                       <div
                         className={`${barColor} h-3 rounded transition-all`}
                         style={{ width: `${h.hotspotScore}%` }}
                       />
                     </div>
-                    <span className="w-8 text-right text-xs font-medium text-slate-700 dark:text-slate-300">
+                    <span className="w-8 shrink-0 text-right text-xs font-medium text-slate-700 dark:text-slate-300">
                       {h.hotspotScore}
                     </span>
                   </div>
-                  <span className="text-xs text-slate-400 dark:text-slate-500 pl-48">
+                  <span className="text-xs text-slate-400 dark:text-slate-500 pl-40 truncate">
                     {h.churn} commits · {h.symbolCount} symbols · {h.repo}
                   </span>
                 </div>
@@ -297,18 +285,7 @@ export default function Overview() {
         </div>
       )}
 
-      {/* Module-level main sequence */}
-      {moduleMetrics.length > 0 && (
-        <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm border dark:border-slate-700 p-4">
-          <h2 className="text-lg font-semibold text-slate-800 dark:text-slate-100 mb-2">
-            Main Sequence — All Modules
-          </h2>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">
-            Each point is a module. Color indicates zone classification. Distance from the diagonal measures architectural balance.
-          </p>
-          <MainSequenceChart modules={moduleMetrics} />
-        </div>
-      )}
+      {/* Module-level main sequence — hidden until ts-morph provides real coupling data */}
 
       {/* Cross-repo main sequence chart */}
       {repoPoints.length > 0 && (
@@ -355,19 +332,19 @@ export default function Overview() {
 
                 {/* Zone badges */}
                 <div className="flex gap-2 mb-3">
-                  {(repo.errorCount ?? 0) > 0 && (
+                  {(repo.painZoneCount ?? 0) > 0 && (
                     <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400">
-                      {repo.errorCount} pain zone
+                      {repo.painZoneCount} pain zone
                     </span>
                   )}
-                  {(repo.warningCount ?? 0) > 0 && (
+                  {(repo.uselessnessZoneCount ?? 0) > 0 && (
                     <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400">
-                      {repo.warningCount} useless zone
+                      {repo.uselessnessZoneCount} useless zone
                     </span>
                   )}
-                  {(repo.noteCount ?? 0) > 0 && (
+                  {(repo.moduleCount ?? 0) > 0 && (
                     <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
-                      {repo.noteCount} modules
+                      {repo.moduleCount} modules
                     </span>
                   )}
                 </div>

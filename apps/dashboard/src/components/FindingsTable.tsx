@@ -345,6 +345,7 @@ export default function FindingsTable() {
           ) : findings.length === 0 ? (
             <p className="p-4 text-slate-500 dark:text-slate-400 text-sm">No findings found.</p>
           ) : (
+            <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-slate-50 dark:bg-slate-900 border-b dark:border-slate-700">
                 <tr className="text-left text-xs text-slate-500 dark:text-slate-300">
@@ -434,6 +435,7 @@ export default function FindingsTable() {
                 })}
               </tbody>
             </table>
+            </div>
           )}
 
           {/* Pagination */}

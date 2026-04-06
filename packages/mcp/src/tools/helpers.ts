@@ -20,8 +20,16 @@ export type ContentItem =
   | { type: "resource_link"; uri: string; name: string; description?: string };
 export type ToolResult = { content: ContentItem[] };
 
-export function jsonResult(data: unknown, resourceLinks?: Array<{ uri: string; name: string; description?: string }>): ToolResult {
-  const content: ContentItem[] = [{ type: "text" as const, text: JSON.stringify(data, null, 2) }];
+export function jsonResult(data: unknown, resourceLinks?: Array<{ uri: string; name: string; description?: string }>, hints?: string[]): ToolResult {
+  let payload: unknown = data;
+  if (hints && hints.length > 0) {
+    if (typeof data === "object" && data !== null && !Array.isArray(data)) {
+      payload = { ...(data as Record<string, unknown>), _hints: hints };
+    } else {
+      payload = { result: data, _hints: hints };
+    }
+  }
+  const content: ContentItem[] = [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }];
   if (resourceLinks) {
     for (const link of resourceLinks) {
       content.push({ type: "resource_link" as const, ...link });

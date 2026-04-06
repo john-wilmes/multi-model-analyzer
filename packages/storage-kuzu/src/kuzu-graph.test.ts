@@ -16,15 +16,15 @@ function edge(source: string, target: string, kind: string, repo?: string): Grap
     source,
     target,
     kind: kind as GraphEdge["kind"],
-    ...(repo ? { metadata: { repo } } : {}),
+    ...(repo ? { repo, metadata: { repo } } : {}),
   };
 }
 
 const FIXTURE_EDGES: GraphEdge[] = [
-  { source: "a", target: "b", kind: "imports", metadata: { repo: "r1" } },
-  { source: "b", target: "c", kind: "calls",   metadata: { repo: "r1" } },
-  { source: "a", target: "c", kind: "imports", metadata: { repo: "r1" } },
-  { source: "x", target: "y", kind: "imports", metadata: { repo: "r2" } },
+  { source: "a", target: "b", kind: "imports", repo: "r1", metadata: { repo: "r1" } },
+  { source: "b", target: "c", kind: "calls",   repo: "r1", metadata: { repo: "r1" } },
+  { source: "a", target: "c", kind: "imports", repo: "r1", metadata: { repo: "r1" } },
+  { source: "x", target: "y", kind: "imports", repo: "r2", metadata: { repo: "r2" } },
 ];
 
 describe("KuzuGraphStore", () => {

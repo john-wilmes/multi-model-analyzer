@@ -14,7 +14,8 @@
   },
   "scripts": {
     "build": "tsc --build",
-    "type-check": "tsc --build --noEmit"
+    "type-check": "tsc --build --noEmit",
+    "test": "vitest run src/z3.test.ts src/covering-array.test.ts"
   },
   "dependencies": {
     "@mma/core": "*",

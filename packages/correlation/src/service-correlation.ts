@@ -22,13 +22,13 @@ import type {
  * against known repo localPaths via the edge source prefix.
  */
 function resolveRepo(edge: GraphEdge, repos: readonly RepoConfig[]): string | undefined {
-  const metaRepo = edge.metadata?.["repo"];
+  const metaRepo = edge.repo;
   if (typeof metaRepo === "string" && metaRepo.length > 0) {
     return metaRepo;
   }
   // Fall back to matching edge.source prefix against repo localPaths
   for (const repo of repos) {
-    if (edge.source.startsWith(repo.localPath)) {
+    if (repo.localPath !== undefined && edge.source.startsWith(repo.localPath)) {
       return repo.name;
     }
   }

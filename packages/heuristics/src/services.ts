@@ -44,6 +44,7 @@ const ENTRY_POINT_BASENAMES = new Set([
   "main", "app", "server", "bootstrap", "cli", "worker", "lambda", "handler",
 ]);
 
+/** @internal */
 export function inferServices(input: ServiceInferenceInput): InferredService[] {
   const services: InferredService[] = [];
   const seen = new Set<string>();
@@ -213,6 +214,7 @@ export function inferServicesWithMeta(input: ServiceInferenceInput): HeuristicRe
   return runHeuristic(input.repo, "inferServices", () => inferServices(input), (d) => d);
 }
 
+/** @internal */
 export function buildArchitecture(
   repo: string,
   services: readonly InferredService[],
@@ -280,6 +282,7 @@ const INJECTABLE_SUFFIX_ROLES: ReadonlyArray<[RegExp, NestJsRole]> = [
  * const role = classifyNestJsRole({ name: "UserController", decorators: ["Controller"] });
  * // => "controller"
  * ```
+ * @internal
  */
 export function classifyNestJsRole(symbol: Pick<SymbolInfo, "name" | "decorators">): NestJsRole {
   const decorators = symbol.decorators ?? [];

@@ -6,6 +6,7 @@
  */
 
 import type { GraphEdge, SarifResult } from "@mma/core";
+import { createSarifResult } from "@mma/core";
 
 export interface PageRankOptions {
   /** Damping factor (probability of following a link). Default: 0.85 */
@@ -148,7 +149,13 @@ export function pageRankToSarif(
   // (e.g. "novu-api:src/app.ts"). External packages (lodash, @novu/shared,
   // node:fs) lack this prefix.
   const repoPrefix = `${repo}:`;
-  const internal = result.ranked.filter(f => f.path.startsWith(repoPrefix));
+  const internal = result.ranked.filter(f => {
+    if (!f.path.startsWith(repoPrefix)) return false;
+    // Exclude compiled output / vendored paths that shouldn't produce findings
+    const relPath = f.path.slice(repoPrefix.length);
+    if (relPath.startsWith("dist/") || relPath.startsWith("node_modules/") || relPath.startsWith(".next/")) return false;
+    return true;
+  });
 
   // Use explicit minScore if provided, otherwise derive from internal distribution:
   // default to 10% of the top internal score (adapts to different graph sizes).
@@ -159,20 +166,20 @@ export function pageRankToSarif(
 
   return filtered.map((f, i) => {
     const rank = i + 1;
-    return {
-      ruleId: "blast-radius/high-pagerank",
-      level: "note" as const,
-      message: {
-        text: `High blast radius: "${f.path}" has PageRank score ${f.score.toFixed(4)} (rank #${rank}). Changes to this file affect many dependents.`,
-      },
-      locations: [{
-        logicalLocations: [{
-          fullyQualifiedName: f.path,
-          kind: "module",
-          properties: { repo },
+    return createSarifResult(
+      "blast-radius/high-pagerank",
+      "note",
+      `High blast radius: "${f.path}" has PageRank score ${f.score.toFixed(4)} (rank #${rank}). Changes to this file affect many dependents.`,
+      {
+        locations: [{
+          logicalLocations: [{
+            fullyQualifiedName: f.path,
+            kind: "module",
+            properties: { repo },
+          }],
         }],
-      }],
-      properties: { pageRankScore: f.score, rank },
-    };
+        properties: { pageRankScore: f.score, rank },
+      },
+    );
   });
 }

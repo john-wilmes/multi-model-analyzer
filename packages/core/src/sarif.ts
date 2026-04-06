@@ -9,7 +9,7 @@
  */
 
 export interface SarifLog {
-  readonly $schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json";
+  readonly $schema: "https://json.schemastore.org/sarif-2.1.0.json";
   readonly version: "2.1.0";
   readonly runs: readonly SarifRun[];
 }
@@ -140,7 +140,7 @@ function djb2Hash(s: string): string {
 export function createSarifLog(runs: readonly SarifRun[]): SarifLog {
   return {
     $schema:
-      "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
+      "https://json.schemastore.org/sarif-2.1.0.json",
     version: "2.1.0",
     runs,
   };
@@ -182,10 +182,11 @@ export function createSarifResult(
     properties?: Record<string, unknown>;
   },
 ): SarifResult {
-  // Compute a fingerprint from ruleId + first logical location FQN (if any),
-  // falling back to the physical location URI when the FQN is absent.
-  // Mirrors the fingerprint() logic in @mma/diagnostics/baseline.ts but uses
-  // only the first location to keep the value stable across minor location changes.
+  // Compute a SARIF-spec fingerprint from ruleId + first logical location FQN
+  // (if any), falling back to the physical location URI when absent.
+  // Note: this differs from the baseline fingerprint in @mma/diagnostics which
+  // uses ALL locations as a raw string for richer matching across runs. This
+  // stored fingerprint uses only the first location (hashed) for stability.
   const firstLocation = options?.locations?.[0];
   const firstFqn =
     firstLocation?.logicalLocations?.[0]?.fullyQualifiedName ??

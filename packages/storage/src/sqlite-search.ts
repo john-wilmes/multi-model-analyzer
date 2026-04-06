@@ -20,6 +20,7 @@ export class SqliteSearchStore implements SearchStore {
   private readonly stmtClearDocs: Database.Statement;
   private readonly stmtClearFts: Database.Statement;
   private readonly stmtFindByRepo: Database.Statement;
+  private readonly stmtFindByRepoAndFile: Database.Statement;
 
   private readonly insertManyTx: Database.Transaction<
     (docs: readonly SearchDocument[]) => void
@@ -60,6 +61,9 @@ export class SqliteSearchStore implements SearchStore {
     this.stmtClearFts = db.prepare("DELETE FROM search_fts");
     this.stmtFindByRepo = db.prepare(
       "SELECT id FROM search_docs WHERE json_extract(metadata, '$.repo') = ?",
+    );
+    this.stmtFindByRepoAndFile = db.prepare(
+      "SELECT id FROM search_docs WHERE json_extract(metadata, '$.repo') = ? AND (id = ? OR id LIKE ? ESCAPE '!')",
     );
 
     this.insertManyTx = db.transaction((docs: readonly SearchDocument[]) => {
@@ -110,6 +114,22 @@ export class SqliteSearchStore implements SearchStore {
   async delete(ids: readonly string[]): Promise<void> {
     if (ids.length === 0) return;
     this.deleteManyTx(ids);
+  }
+
+  async deleteByFilePaths(repo: string, filePaths: readonly string[]): Promise<void> {
+    if (filePaths.length === 0) return;
+    const ids: string[] = [];
+    for (const fp of filePaths) {
+      // Escape LIKE special characters in the file path (using '!' as escape char)
+      const escaped = fp.replace(/[%_!]/g, (c) => '!' + c);
+      const rows = this.stmtFindByRepoAndFile.all(repo, fp, escaped + '#%') as Array<{ id: string }>;
+      for (const row of rows) {
+        ids.push(row.id);
+      }
+    }
+    if (ids.length > 0) {
+      this.deleteManyTx(ids);
+    }
   }
 
   async clear(repo?: string): Promise<void> {

@@ -127,4 +127,143 @@ describe("scanForFlags", () => {
     });
     expect(result.flags.some((f) => f.name === "experiment_checkout_v2")).toBe(true);
   });
+
+  it("detects rollout flags with direct string literal", () => {
+    const files = makeFiles({
+      "src/service.ts": `
+        this.isRolledOut(rootAccount, 'queue-manager');
+        addRollout(userId, 'beta-feature');
+      `,
+    });
+    const result = scanForFlags(files, "repo");
+    const names = result.flags.map((f) => f.name);
+    expect(names).toContain("queue-manager");
+    expect(names).toContain("beta-feature");
+  });
+
+  it("detects rollout flags via variable reference", () => {
+    const files = makeFiles({
+      "src/service.ts": `
+        const FEATURE_FLAG = 'my-flag';
+        isRolledOut(userId, FEATURE_FLAG);
+      `,
+    });
+    const result = scanForFlags(files, "repo");
+    const names = result.flags.map((f) => f.name);
+    expect(names).toContain("my-flag");
+  });
+
+  it("detects rollout flags via this.CLASS_CONSTANT", () => {
+    const files = makeFiles({
+      "src/manager.ts": `
+        class QueueManager {
+          private readonly QUEUE_MANAGER_ROLLOUT_KEY = 'queue-manager';
+          check(rootAccount: string) {
+            return this.isRolledOut(rootAccount, this.QUEUE_MANAGER_ROLLOUT_KEY);
+          }
+        }
+      `,
+    });
+    const result = scanForFlags(files, "repo");
+    const names = result.flags.map((f) => f.name);
+    expect(names).toContain("queue-manager");
+  });
+
+  it("detects rollout flags when flag name is 2nd of 3 args (isUserRolledOut)", () => {
+    const files = makeFiles({
+      "src/service.ts": `
+        isUserRolledOut(orgId, userId, 'multi-arg-flag');
+      `,
+    });
+    const result = scanForFlags(files, "repo");
+    const names = result.flags.map((f) => f.name);
+    expect(names).toContain("multi-arg-flag");
+  });
+
+  // -- Config-driven options --
+
+  it("detects extra SDK methods via sdkMethods option", () => {
+    const files = makeFiles({
+      "src/feature.ts": `
+        import { Client } from "launchdarkly-node-server-sdk";
+        const val = client.checkFlag("custom-flag", user, false);
+      `,
+    });
+    // Without sdkMethods: checkFlag is not detected
+    const without = scanForFlags(files, "repo");
+    expect(without.flags.find((f) => f.name === "custom-flag")).toBeUndefined();
+
+    // With sdkMethods: checkFlag is detected
+    const withOpt = scanForFlags(files, "repo", { sdkMethods: ["checkFlag"] });
+    const flag = withOpt.flags.find((f) => f.name === "custom-flag");
+    expect(flag).toBeDefined();
+    expect(flag!.sdk).toBe("checkFlag");
+  });
+
+  it("detects extra hook patterns via hookPatterns option", () => {
+    const files = makeFiles({
+      "src/component.tsx": `
+        const isOn = useRolloutFlag("dark-mode");
+      `,
+    });
+    // Without hookPatterns: useRolloutFlag is not detected
+    const without = scanForFlags(files, "repo");
+    expect(without.flags.find((f) => f.name === "dark-mode")).toBeUndefined();
+
+    // With hookPatterns: useRolloutFlag is detected
+    const withOpt = scanForFlags(files, "repo", { hookPatterns: ["useRolloutFlag"] });
+    const flag = withOpt.flags.find((f) => f.name === "dark-mode");
+    expect(flag).toBeDefined();
+    expect(flag!.sdk).toBe("useRolloutFlag");
+  });
+
+  it("uses custom rolloutCallMethods to detect non-default rollout functions", () => {
+    const files = makeFiles({
+      "src/service.ts": `
+        checkRollout(userId, 'custom-rollout');
+      `,
+    });
+    // Without custom methods: not detected
+    const without = scanForFlags(files, "repo");
+    expect(without.flags.find((f) => f.name === "custom-rollout")).toBeUndefined();
+
+    // With custom methods: detected
+    const withOpt = scanForFlags(files, "repo", { rolloutCallMethods: ["checkRollout"] });
+    const flag = withOpt.flags.find((f) => f.name === "custom-rollout");
+    expect(flag).toBeDefined();
+    expect(flag!.sdk).toBe("checkRollout");
+  });
+
+  it("uses custom flagPropertyName for includes-based detection", () => {
+    const files = makeFiles({
+      "src/service.ts": `
+        if (user.rollouts.includes('my-rollout')) {}
+      `,
+    });
+    // Default flagPropertyName ("featureFlags") does not match "rollouts"
+    const without = scanForFlags(files, "repo");
+    expect(without.flags.find((f) => f.name === "my-rollout")).toBeUndefined();
+
+    // Custom flagPropertyName matches
+    const withOpt = scanForFlags(files, "repo", { flagPropertyName: "rollouts" });
+    const flag = withOpt.flags.find((f) => f.name === "my-rollout");
+    expect(flag).toBeDefined();
+  });
+
+  it("uses custom sdkImports to trigger SDK scanning for non-default packages", () => {
+    const files = makeFiles({
+      "src/feature.ts": `
+        import { client } from "my-custom-flag-sdk";
+        const val = client.variation("custom-sdk-flag", user, false);
+      `,
+    });
+    // Without sdkImports: my-custom-flag-sdk not recognized
+    const without = scanForFlags(files, "repo");
+    expect(without.flags.find((f) => f.name === "custom-sdk-flag")).toBeUndefined();
+
+    // With sdkImports: detected
+    const withOpt = scanForFlags(files, "repo", { sdkImports: ["my-custom-flag-sdk"] });
+    const flag = withOpt.flags.find((f) => f.name === "custom-sdk-flag");
+    expect(flag).toBeDefined();
+  });
 });

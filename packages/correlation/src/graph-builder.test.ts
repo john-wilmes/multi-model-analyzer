@@ -41,7 +41,7 @@ describe("buildCrossRepoGraph", () => {
   });
 
   it("returns an empty graph when there are no edges", async () => {
-    const graph = await buildCrossRepoGraph(store, repos, packageRoots);
+    const graph = await buildCrossRepoGraph(store, repos, packageRoots, "/mirrors");
 
     expect(graph.edges).toHaveLength(0);
     expect(graph.repoPairs.size).toBe(0);
@@ -55,11 +55,12 @@ describe("buildCrossRepoGraph", () => {
         source: "repo-a/src/index.ts",
         target: "@org/auth/src/index.ts",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a", targetRepo: "repo-b" },
       },
     ]);
 
-    const graph = await buildCrossRepoGraph(store, repos, packageRoots);
+    const graph = await buildCrossRepoGraph(store, repos, packageRoots, "/mirrors");
 
     expect(graph.edges).toHaveLength(1);
     const edge = graph.edges[0]!;
@@ -74,11 +75,12 @@ describe("buildCrossRepoGraph", () => {
         source: "repo-a/src/service.ts",
         target: "@org/auth/src/client.ts",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
     ]);
 
-    const graph = await buildCrossRepoGraph(store, repos, packageRoots);
+    const graph = await buildCrossRepoGraph(store, repos, packageRoots, "/mirrors");
 
     expect(graph.edges).toHaveLength(1);
     const edge = graph.edges[0]!;
@@ -93,11 +95,12 @@ describe("buildCrossRepoGraph", () => {
         source: "repo-a/package.json",
         target: "@org/shared",
         kind: "depends-on",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
     ]);
 
-    const graph = await buildCrossRepoGraph(store, repos, packageRoots);
+    const graph = await buildCrossRepoGraph(store, repos, packageRoots, "/mirrors");
 
     expect(graph.edges).toHaveLength(1);
     expect(graph.edges[0]!.targetRepo).toBe("repo-c");
@@ -110,11 +113,12 @@ describe("buildCrossRepoGraph", () => {
         source: "repo-b/src/a.ts",
         target: "@org/auth/src/b.ts",
         kind: "imports",
+        repo: "repo-b",
         metadata: { repo: "repo-b" },
       },
     ]);
 
-    const graph = await buildCrossRepoGraph(store, repos, packageRoots);
+    const graph = await buildCrossRepoGraph(store, repos, packageRoots, "/mirrors");
 
     expect(graph.edges).toHaveLength(0);
   });
@@ -125,11 +129,12 @@ describe("buildCrossRepoGraph", () => {
         source: "repo-a/src/a.ts",
         target: "./utils/helper.ts",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
     ]);
 
-    const graph = await buildCrossRepoGraph(store, repos, packageRoots);
+    const graph = await buildCrossRepoGraph(store, repos, packageRoots, "/mirrors");
 
     expect(graph.edges).toHaveLength(0);
   });
@@ -140,11 +145,12 @@ describe("buildCrossRepoGraph", () => {
         source: "repo-a/src/a.ts",
         target: "some-unknown-package/index.js",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
     ]);
 
-    const graph = await buildCrossRepoGraph(store, repos, packageRoots);
+    const graph = await buildCrossRepoGraph(store, repos, packageRoots, "/mirrors");
 
     expect(graph.edges).toHaveLength(0);
   });
@@ -155,23 +161,26 @@ describe("buildCrossRepoGraph", () => {
         source: "repo-a/src/index.ts",
         target: "@org/auth/src/index.ts",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
       {
         source: "repo-a/src/index.ts",
         target: "@org/shared/src/index.ts",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
       {
         source: "repo-b/src/index.ts",
         target: "@org/shared/src/types.ts",
         kind: "imports",
+        repo: "repo-b",
         metadata: { repo: "repo-b" },
       },
     ]);
 
-    const graph = await buildCrossRepoGraph(store, repos, packageRoots);
+    const graph = await buildCrossRepoGraph(store, repos, packageRoots, "/mirrors");
 
     // repo-a depends on repo-b and repo-c
     expect(graph.downstreamMap.get("repo-a")).toEqual(
@@ -194,6 +203,7 @@ describe("buildCrossRepoGraph", () => {
         source: "repo-a/src/index.ts",
         target: "@org/auth/src/index.ts",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
       // Duplicate pair — should only appear once in repoPairs
@@ -201,11 +211,12 @@ describe("buildCrossRepoGraph", () => {
         source: "repo-a/src/other.ts",
         target: "@org/auth/src/utils.ts",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
     ]);
 
-    const graph = await buildCrossRepoGraph(store, repos, packageRoots);
+    const graph = await buildCrossRepoGraph(store, repos, packageRoots, "/mirrors");
 
     expect(graph.repoPairs.size).toBe(1);
     expect(graph.repoPairs.has("repo-a->repo-b")).toBe(true);
@@ -220,11 +231,12 @@ describe("buildCrossRepoGraph", () => {
         source: "repo-a/src/utils.ts",
         target: "lodash/cloneDeep",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
     ]);
 
-    const graph = await buildCrossRepoGraph(store, repos, packageRoots);
+    const graph = await buildCrossRepoGraph(store, repos, packageRoots, "/mirrors");
 
     expect(graph.edges).toHaveLength(1);
     expect(graph.edges[0]!.packageName).toBe("lodash");
@@ -238,11 +250,12 @@ describe("buildCrossRepoGraph", () => {
         source: "src/service.ts",
         target: "repo-b:src/index.ts",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
     ]);
 
-    const graph = await buildCrossRepoGraph(store, repos, new Map());
+    const graph = await buildCrossRepoGraph(store, repos, new Map(), "/mirrors");
 
     expect(graph.edges).toHaveLength(1);
     expect(graph.edges[0]!.sourceRepo).toBe("repo-a");
@@ -258,11 +271,12 @@ describe("buildCrossRepoGraph", () => {
         source: "src/a.ts",
         target: "repo-a:src/b.ts",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
     ]);
 
-    const graph = await buildCrossRepoGraph(store, repos, new Map());
+    const graph = await buildCrossRepoGraph(store, repos, new Map(), "/mirrors");
 
     expect(graph.edges).toHaveLength(0);
   });
@@ -275,11 +289,12 @@ describe("buildCrossRepoGraph", () => {
         source: "src/a.ts",
         target: "repo-b:src/lib.ts",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a", targetRepo: "repo-c" },
       },
     ]);
 
-    const graph = await buildCrossRepoGraph(store, repos, new Map());
+    const graph = await buildCrossRepoGraph(store, repos, new Map(), "/mirrors");
 
     expect(graph.edges).toHaveLength(1);
     expect(graph.edges[0]!.targetRepo).toBe("repo-b");
@@ -291,12 +306,13 @@ describe("buildCrossRepoGraph", () => {
         source: "src/controller.ts#AppController",
         target: "repo-b:src/auth.ts#AuthService",
         kind: "calls",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
     ]);
 
     // buildCrossRepoGraph only queries imports and depends-on, not calls
-    const graph = await buildCrossRepoGraph(store, repos, new Map());
+    const graph = await buildCrossRepoGraph(store, repos, new Map(), "/mirrors");
 
     expect(graph.edges).toHaveLength(0);
   });
@@ -307,23 +323,26 @@ describe("buildCrossRepoGraph", () => {
         source: "repo-a/src/utils.ts",
         target: "node:path",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
       {
         source: "repo-a/src/server.ts",
         target: "node:fs",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
       {
         source: "repo-a/src/stream.ts",
         target: "node:stream/promises",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
     ]);
 
-    const graph = await buildCrossRepoGraph(store, repos, packageRoots);
+    const graph = await buildCrossRepoGraph(store, repos, packageRoots, "/mirrors");
 
     // node: built-ins must never appear as cross-repo edges
     expect(graph.edges).toHaveLength(0);
@@ -336,29 +355,33 @@ describe("buildCrossRepoGraph", () => {
         source: "repo-a/src/server.ts",
         target: "https://deno.land/std/http/server.ts",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
       {
         source: "repo-a/src/db.ts",
         target: "npm:postgres",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
       {
         source: "repo-a/src/test.ts",
         target: "bun:test",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
       {
         source: "repo-a/src/lib.ts",
         target: "jsr:@supabase/ssr",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
     ]);
 
-    const graph = await buildCrossRepoGraph(store, repos, packageRoots);
+    const graph = await buildCrossRepoGraph(store, repos, packageRoots, "/mirrors");
 
     expect(graph.edges).toHaveLength(0);
     expect(graph.repoPairs.size).toBe(0);
@@ -370,11 +393,12 @@ describe("buildCrossRepoGraph", () => {
         source: "repo-a/src/index.ts",
         target: "unknown-repo:src/lib.ts",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
     ]);
 
-    const graph = await buildCrossRepoGraph(store, repos, packageRoots);
+    const graph = await buildCrossRepoGraph(store, repos, packageRoots, "/mirrors");
 
     expect(graph.edges).toHaveLength(0);
   });
@@ -404,13 +428,14 @@ describe("buildCrossRepoGraph", () => {
         source: "repo-a/src/index.ts",
         target: "@org/extra/src/index.ts",
         kind: "imports",
+        repo: "repo-a",
         metadata: { repo: "repo-a" },
       },
     ]);
 
     // Build with all three repos so repo-a exists and self-edge filtering works
     const threeRepos = [repoA, repoShort, repoLong] as const;
-    const graph = await buildCrossRepoGraph(store, threeRepos, ambiguousRoots);
+    const graph = await buildCrossRepoGraph(store, threeRepos, ambiguousRoots, "/mirrors");
 
     // Without the separator guard, /repos/repo-b-extra/... would match repo-b
     // (because "/repos/repo-b-extra".startsWith("/repos/repo-b") is true).

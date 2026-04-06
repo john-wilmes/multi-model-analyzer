@@ -457,6 +457,47 @@ require("directcss:./styles.css");
     expect(appEdges[0]!.target).toBe("test-repo:src/styles.css");
   });
 
+  it("extracts CJS const/let/var require() declarations", () => {
+    const files = new Map<string, TreeSitterTree>();
+
+    files.set("src/app.ts", parseSource(`
+const express = require('express');
+let config = require('./config');
+var utils = require('./utils');
+`, "src/app.ts"));
+
+    files.set("src/config.ts", parseSource(``, "src/config.ts"));
+    files.set("src/utils.ts", parseSource(``, "src/utils.ts"));
+
+    const graph = extractDependencyGraph(files, "test-repo");
+    const appEdges = graph.edges.filter((e) => e.source === "test-repo:src/app.ts");
+    const targets = appEdges.map((e) => e.target).sort();
+
+    expect(targets).toEqual(["express", "test-repo:src/config.ts", "test-repo:src/utils.ts"]);
+  });
+
+  it("extracts destructured CJS require() names", () => {
+    const files = new Map<string, TreeSitterTree>();
+
+    files.set("src/app.ts", parseSource(`
+const { Router, json } = require('express');
+const { readFile: rf } = require('fs');
+`, "src/app.ts"));
+
+    const graph = extractDependencyGraph(files, "test-repo");
+    const appEdges = graph.edges.filter((e) => e.source === "test-repo:src/app.ts");
+
+    expect(appEdges).toHaveLength(2);
+
+    const expressEdge = appEdges.find((e) => e.target === "express");
+    expect(expressEdge).toBeDefined();
+    expect(expressEdge!.metadata?.importedNames).toEqual(["Router", "json"]);
+
+    const fsEdge = appEdges.find((e) => e.target === "fs");
+    expect(fsEdge).toBeDefined();
+    expect(fsEdge!.metadata?.importedNames).toEqual(["readFile"]);
+  });
+
   it("strips loader prefix from re-export statements", () => {
     const files = new Map<string, TreeSitterTree>();
 

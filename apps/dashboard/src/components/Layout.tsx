@@ -95,6 +95,17 @@ function IconTarget() {
   );
 }
 
+function IconConstraints() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+      <rect x="3" y="2" width="12" height="14" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
+      <line x1="6" y1="6" x2="12" y2="6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <line x1="6" y1="9" x2="12" y2="9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <line x1="6" y1="12" x2="9" y2="12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function IconFolder() {
   return (
     <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
@@ -196,6 +207,32 @@ function useBreadcrumbs(): BreadcrumbSegment[] {
     return segments;
   }
 
+  // /constraints
+  if (pathname === '/constraints') {
+    segments.push({ label: 'Constraints', to: null });
+    return segments;
+  }
+
+  // /constraints/:type
+  const constraintMatch = pathname.match(/^\/constraints\/(.+)$/);
+  if (constraintMatch) {
+    segments.push({ label: 'Constraints', to: '/constraints' });
+    segments.push({ label: decodeURIComponent(constraintMatch[1]), to: null });
+    return segments;
+  }
+
+  // /cross-entity
+  if (pathname === '/cross-entity') {
+    segments.push({ label: 'Cross-Entity Deps', to: null });
+    return segments;
+  }
+
+  // /validate
+  if (pathname === '/validate') {
+    segments.push({ label: 'Config Validator', to: null });
+    return segments;
+  }
+
   // /blast-radius/:name
   const blastMatch = pathname.match(/^\/blast-radius\/(.+)$/);
   if (blastMatch) {
@@ -254,6 +291,7 @@ export default function Layout() {
   const [repos, setRepos] = useState<string[]>([]);
   const [repoSearch, setRepoSearch] = useState('');
   const [repoShowAll, setRepoShowAll] = useState(false);
+  const [indexedOnly, setIndexedOnly] = useState(true);
   const location = useLocation();
 
   // Sidebar collapsed state — persisted
@@ -312,10 +350,10 @@ export default function Layout() {
   }, [collapsed]);
 
   useEffect(() => {
-    fetchRepos()
+    fetchRepos({ indexed: indexedOnly })
       .then((data) => setRepos(data.repos))
       .catch(() => setRepos([]));
-  }, []);
+  }, [indexedOnly]);
 
   const breadcrumbs = useBreadcrumbs();
   usePageTitle(breadcrumbs);
@@ -417,6 +455,15 @@ export default function Layout() {
             {!collapsed && <span>Design Patterns</span>}
           </Link>
 
+          <Link
+            to="/constraints"
+            className={navClass('/constraints', true)}
+            title={collapsed ? 'Constraints' : undefined}
+          >
+            <IconConstraints />
+            {!collapsed && <span>Constraints</span>}
+          </Link>
+
           {repos[0] ? (
             <Link
               to={`/blast-radius/${encodeURIComponent(repos[0])}`}
@@ -453,6 +500,15 @@ export default function Layout() {
                       {repos.length}
                     </span>
                   </div>
+                  <label className="flex items-center gap-1.5 px-3 mb-1 text-xs text-slate-400 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={indexedOnly}
+                      onChange={(e) => setIndexedOnly(e.target.checked)}
+                      className="accent-blue-500"
+                    />
+                    Indexed only
+                  </label>
                   {/* B5: Repo search filter */}
                   <div className="px-3 mb-1">
                     <input
@@ -522,7 +578,7 @@ export default function Layout() {
       </aside>
 
       {/* Main content */}
-      <main className={`${mainMargin} flex-1 p-6 transition-all duration-200`}>
+      <main className={`${mainMargin} flex-1 p-6 transition-all duration-200 min-w-0 overflow-x-hidden`}>
         {breadcrumbs.length > 0 && (
           <nav aria-label="Breadcrumb" className="flex items-center gap-1 text-sm text-slate-500 dark:text-slate-400 mb-4 flex-wrap">
             <Link

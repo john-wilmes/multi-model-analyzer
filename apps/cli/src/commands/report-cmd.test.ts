@@ -66,9 +66,9 @@ async function seedRepo(
 
   // Graph edges
   await graphStore.addEdges([
-    { source: `${repoName}/src/api.ts`, target: `${repoName}/src/auth.ts`, kind: "imports", metadata: { repo: repoName } },
-    { source: `${repoName}/src/api.ts`, target: `${repoName}/src/util.ts`, kind: "imports", metadata: { repo: repoName } },
-    { source: `${repoName}/src/auth.ts`, target: `${repoName}/src/types.ts`, kind: "imports", metadata: { repo: repoName } },
+    { source: `${repoName}/src/api.ts`, target: `${repoName}/src/auth.ts`, kind: "imports", repo: repoName, metadata: { repo: repoName } },
+    { source: `${repoName}/src/api.ts`, target: `${repoName}/src/util.ts`, kind: "imports", repo: repoName, metadata: { repo: repoName } },
+    { source: `${repoName}/src/auth.ts`, target: `${repoName}/src/types.ts`, kind: "imports", repo: repoName, metadata: { repo: repoName } },
   ]);
 }
 
@@ -102,7 +102,7 @@ async function aggregateSarif(kvStore: InMemoryKVStore, repoNames: string[]): Pr
   }
   if (allResults.length > 0) {
     const sarifLog: SarifLog = {
-      $schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
+      $schema: "https://json.schemastore.org/sarif-2.1.0.json",
       version: "2.1.0",
       runs: [{
         tool: { driver: { name: "multi-model-analyzer", version: "0.1.0", rules: [] } },

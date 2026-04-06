@@ -95,12 +95,17 @@ export async function watchLoop(opts: WatchOptions): Promise<WatchResult> {
 
       // Sleep with early-exit support
       await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, intervalMs);
         const onStop = () => {
           clearTimeout(timer);
           running = false;
           resolve();
         };
+        const timer = setTimeout(() => {
+          if (signal) signal.removeEventListener("abort", onStop);
+          process.removeListener("SIGINT", onStop);
+          process.removeListener("SIGTERM", onStop);
+          resolve();
+        }, intervalMs);
         if (signal) {
           signal.addEventListener("abort", onStop, { once: true });
         }

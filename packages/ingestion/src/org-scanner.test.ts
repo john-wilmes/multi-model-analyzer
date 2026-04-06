@@ -50,7 +50,7 @@ function setupOctokit(pages: object[][]) {
       iterator: vi.fn().mockReturnValue(makeAsyncIterable(pages)),
     },
   };
-  OctokitMock.mockImplementation(() => mockInstance as unknown as Octokit);
+  OctokitMock.mockImplementation(function() { return mockInstance as unknown as Octokit; });
   return mockInstance;
 }
 

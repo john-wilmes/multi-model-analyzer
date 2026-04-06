@@ -24,17 +24,34 @@ export interface EmitterOptions {
 export class SarifEmitter {
   private results: SarifResult[] = [];
   private readonly options: EmitterOptions;
+  private readonly knownRuleIds: ReadonlySet<string>;
+  private readonly warnedRuleIds = new Set<string>();
 
   constructor(options: EmitterOptions) {
     this.options = options;
+    this.knownRuleIds = new Set(options.rules.map((r) => r.id));
   }
 
   emit(result: SarifResult): void {
+    this.validateRuleId(result.ruleId);
     this.results.push(result);
   }
 
   emitAll(results: readonly SarifResult[]): void {
+    for (const result of results) {
+      this.validateRuleId(result.ruleId);
+    }
     this.results.push(...results);
+  }
+
+  private validateRuleId(ruleId: string): void {
+    if (!this.knownRuleIds.has(ruleId) && !this.warnedRuleIds.has(ruleId)) {
+      this.warnedRuleIds.add(ruleId);
+      console.warn(
+        `[SarifEmitter] Unknown ruleId "${ruleId}" has no matching rule in tool "${this.options.toolName}". ` +
+          `Known rules: ${[...this.knownRuleIds].join(", ") || "(none)"}`,
+      );
+    }
   }
 
   toRun(properties?: Record<string, unknown>): SarifRun {

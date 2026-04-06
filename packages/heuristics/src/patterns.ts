@@ -205,7 +205,11 @@ function detectStrategyPattern(input: PatternDetectionInput, indexes: Map<string
   // Detect by naming convention (XxxStrategy)
   patterns.push(...detectByNaming(input, indexes, "strategy", /[Ss]trategy$/));
 
-  // Detect by structural signature: interface with a single method + multiple implementations
+  // Detect by structural signature: interface with a single method + multiple implementations.
+  // Collect candidates grouped by file; require at least 2 per file to avoid false positives
+  // (a lone RequestHandler with handle() is just a handler, not a strategy pattern).
+  const candidatesByFile = new Map<string, DetectedPattern[]>();
+
   for (const [filePath, index] of indexes) {
     for (const cls of index.classes) {
       const methods = index.methodsByContainer.get(cls.name) ?? [];
@@ -219,14 +223,24 @@ function detectStrategyPattern(input: PatternDetectionInput, indexes: Map<string
       if (hasStrategyMethod && hasStrategyName) {
         // Avoid duplicating if already matched by naming
         if (!/[Ss]trategy$/.test(cls.name)) {
-          patterns.push({
+          const candidate: DetectedPattern = {
             name: `Strategy: ${cls.name}`,
             kind: "strategy",
             locations: [makeLocation(input.repo, filePath, cls.name)],
             confidence: 0.6,
-          });
+          };
+          const bucket = candidatesByFile.get(filePath) ?? [];
+          bucket.push(candidate);
+          candidatesByFile.set(filePath, bucket);
         }
       }
+    }
+  }
+
+  // Only emit strategy detections when at least 2 sibling classes match in the same file.
+  for (const candidates of candidatesByFile.values()) {
+    if (candidates.length >= 2) {
+      patterns.push(...candidates);
     }
   }
 

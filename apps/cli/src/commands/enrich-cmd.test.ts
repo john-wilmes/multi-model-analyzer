@@ -100,7 +100,7 @@ describe("enrichCommand", () => {
       description: "Handles authentication and session management",
       confidence: 0.9,
     };
-    await kvStore.set(`summary:t3:${entityId}`, JSON.stringify(cachedT3));
+    await kvStore.set(`summary:t3:repo-a:${entityId}`, JSON.stringify(cachedT3));
 
     const result = await enrichCommand({ kvStore, searchStore, verbose: false });
 
@@ -214,6 +214,7 @@ describe("enrichCommand", () => {
 
     // Stub tier3 to return upgraded summaries for whatever slice is passed
     tier3Mock.mockImplementation(
+      // eslint-disable-next-line @typescript-eslint/no-misused-promises
       async (candidates: Array<{ entityId: string }>) =>
         candidates.map((c) => ({
           entityId: c.entityId,

@@ -5,11 +5,11 @@ import type { GraphEdge } from "@mma/core";
 import type { CrossRepoGraph } from "@mma/correlation";
 
 function importEdge(source: string, target: string, repo = "test"): GraphEdge {
-  return { source, target, kind: "imports", metadata: { repo } };
+  return { source, target, kind: "imports", repo, metadata: { repo } };
 }
 
 function callEdge(source: string, target: string, repo = "test"): GraphEdge {
-  return { source, target, kind: "calls", metadata: { repo } };
+  return { source, target, kind: "calls", repo, metadata: { repo } };
 }
 
 describe("computeBlastRadius", () => {

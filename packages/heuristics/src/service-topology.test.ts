@@ -125,6 +125,46 @@ class BulkSender {
       expect(queueEdge!.target).toBe("workflow");
       expect(queueEdge!.metadata?.detail).toContain("addBulk");
     });
+
+    describe("custom queue framework patterns", () => {
+      const customFrameworks = [{
+        importTrigger: "my-queue-lib",
+        producers: [{ memberObject: "MyQueues" }],
+        consumers: [
+          { classProperty: "queueName" },
+          { methodCall: "subscribeFromListeners", target: "event-bus" },
+        ],
+      }];
+
+      it("detects custom member access producer with matching import", () => {
+        const source = `
+const MyQueues = lib.queues;
+function enqueue() {
+  MyQueues.StatusQueue.add({ status: 'sent' });
+}`;
+        const input = makeInput([
+          { path: "enqueue.ts", source, imports: ["my-queue-lib"] },
+        ]);
+        const edges = extractServiceTopology({ ...input, customQueueFrameworks: customFrameworks });
+        const queueEdge = edges.find(
+          (e) => e.metadata?.protocol === "queue" && e.metadata?.role === "producer",
+        );
+        expect(queueEdge).toBeDefined();
+        expect(queueEdge!.target).toBe("StatusQueue");
+        expect(queueEdge!.metadata?.detail).toContain("MyQueues");
+      });
+
+      it("ignores custom member access without matching import", () => {
+        const source = `
+MyQueues.SomeQueue.add({ data: 1 });`;
+        const input = makeInput([{ path: "no-import.ts", source }]);
+        const edges = extractServiceTopology({ ...input, customQueueFrameworks: customFrameworks });
+        const queueEdge = edges.find(
+          (e) => e.metadata?.protocol === "queue" && e.metadata?.role === "producer",
+        );
+        expect(queueEdge).toBeUndefined();
+      });
+    });
   });
 
   describe("queue consumers", () => {
@@ -191,6 +231,91 @@ class Scheduler {
       expect(consumerEdge).toBeDefined();
       expect(consumerEdge!.target).toBe("email-queue");
     });
+
+    describe("custom queue framework patterns", () => {
+      const customFrameworks = [{
+        importTrigger: "my-queue-lib",
+        producers: [{ memberObject: "MyQueues" }],
+        consumers: [
+          { classProperty: "queueName" },
+          { methodCall: "subscribeFromListeners", target: "event-bus" },
+        ],
+      }];
+
+      it("detects classProperty consumer with matching import", () => {
+        const source = `
+class ReminderHandler {
+  readonly queueName = 'ReminderFailures';
+  async handle(context) {}
+}`;
+        const input = makeInput([
+          { path: "handler.ts", source, imports: ["my-queue-lib"] },
+        ]);
+        const edges = extractServiceTopology({ ...input, customQueueFrameworks: customFrameworks });
+        const consumerEdge = edges.find(
+          (e) => e.metadata?.protocol === "queue" && e.metadata?.role === "consumer",
+        );
+        expect(consumerEdge).toBeDefined();
+        expect(consumerEdge!.target).toBe("ReminderFailures");
+        expect(consumerEdge!.metadata?.detail).toContain("queueName");
+      });
+
+      it("detects methodCall consumer with matching import", () => {
+        const source = `
+const sf = new lib.serverFramework();
+sf.subscribeFromListeners(listeners);`;
+        const input = makeInput([
+          { path: "server.ts", source, imports: ["my-queue-lib"] },
+        ]);
+        const edges = extractServiceTopology({ ...input, customQueueFrameworks: customFrameworks });
+        const consumerEdge = edges.find(
+          (e) => e.metadata?.protocol === "queue" && e.metadata?.role === "consumer",
+        );
+        expect(consumerEdge).toBeDefined();
+        expect(consumerEdge!.target).toBe("event-bus");
+        expect(consumerEdge!.metadata?.detail).toContain("subscribeFromListeners");
+      });
+
+      it("ignores classProperty consumer without matching import", () => {
+        const source = `
+class SomeHandler {
+  readonly queueName = 'TestQueue';
+}`;
+        const input = makeInput([{ path: "no-import.ts", source }]);
+        const edges = extractServiceTopology({ ...input, customQueueFrameworks: customFrameworks });
+        const consumerEdge = edges.find(
+          (e) =>
+            e.metadata?.protocol === "queue" &&
+            e.metadata?.role === "consumer" &&
+            (e.metadata?.detail as string)?.includes("queueName"),
+        );
+        expect(consumerEdge).toBeUndefined();
+      });
+
+      it("deduplicates consumer with both methodCall and classProperty", () => {
+        const combinedFrameworks = [{
+          importTrigger: "my-queue-lib",
+          producers: [],
+          consumers: [
+            { methodCall: "subscribeFromListeners", classProperty: "queueName", target: "fallback-queue" },
+          ],
+        }];
+        const source = `
+class MyHandler {
+  readonly queueName = 'ActualQueue';
+  async subscribeFromListeners() {}
+}`;
+        const input = makeInput([
+          { path: "handler.ts", source, imports: ["my-queue-lib"] },
+        ]);
+        const edges = extractServiceTopology({ ...input, customQueueFrameworks: combinedFrameworks });
+        const consumerEdges = edges.filter(
+          (e) => e.metadata?.protocol === "queue" && e.metadata?.role === "consumer",
+        );
+        expect(consumerEdges).toHaveLength(1);
+        expect(consumerEdges[0]!.target).toBe("ActualQueue");
+      });
+    });
   });
 
   describe("HTTP clients", () => {
@@ -250,6 +375,89 @@ class ApiClient {
       const httpEdge = edges.find((e) => e.metadata?.protocol === "http");
       expect(httpEdge).toBeDefined();
       expect(httpEdge!.metadata?.detail).toContain("HttpService");
+    });
+
+    it("detects superagent.get() with import", () => {
+      const source = `
+async function getUser() {
+  const res = await superagent.get('/api/users');
+}`;
+      const input = makeInput([
+        { path: "client.ts", source, imports: ["superagent"] },
+      ]);
+      const edges = extractServiceTopology(input);
+
+      const httpEdge = edges.find((e) => e.metadata?.protocol === "http");
+      expect(httpEdge).toBeDefined();
+      expect(httpEdge!.metadata?.detail).toBe("superagent.get()");
+    });
+
+    it("detects superagent direct call with method+url args", () => {
+      const source = `
+const res = superagent('GET', '/api/users');`;
+      const input = makeInput([
+        { path: "client.ts", source, imports: ["superagent"] },
+      ]);
+      const edges = extractServiceTopology(input);
+
+      const httpEdge = edges.find((e) => e.metadata?.protocol === "http");
+      expect(httpEdge).toBeDefined();
+      expect(httpEdge!.target).toBe("/api/users");
+      expect(httpEdge!.metadata?.detail).toBe("superagent()");
+    });
+
+    it("detects superagent direct call with url-only arg", () => {
+      const source = `
+const res = superagent('/api/users');`;
+      const input = makeInput([
+        { path: "client.ts", source, imports: ["superagent"] },
+      ]);
+      const edges = extractServiceTopology(input);
+
+      const httpEdge = edges.find((e) => e.metadata?.protocol === "http");
+      expect(httpEdge).toBeDefined();
+      expect(httpEdge!.target).toBe("/api/users");
+      expect(httpEdge!.metadata?.detail).toBe("superagent()");
+    });
+
+    it("detects undici.request() with import", () => {
+      const source = `
+async function callApi() {
+  const { body } = await undici.request('https://api.example.com/data');
+}`;
+      const input = makeInput([
+        { path: "client.ts", source, imports: ["undici"] },
+      ]);
+      const edges = extractServiceTopology(input);
+
+      const httpEdge = edges.find((e) => e.metadata?.protocol === "http");
+      expect(httpEdge).toBeDefined();
+      expect(httpEdge!.metadata?.detail).toBe("undici.request()");
+    });
+
+    it("detects node-fetch() with import", () => {
+      const source = `
+async function callApi() {
+  const res = await fetch('https://api.example.com/data');
+}`;
+      const input = makeInput([
+        { path: "client.ts", source, imports: ["node-fetch"] },
+      ]);
+      const edges = extractServiceTopology(input);
+
+      const httpEdge = edges.find((e) => e.metadata?.protocol === "http");
+      expect(httpEdge).toBeDefined();
+      expect(httpEdge!.metadata?.detail).toBe("node-fetch()");
+    });
+
+    it("ignores superagent-like calls without import", () => {
+      const source = `
+const result = superagent.get('/api/data');`;
+      const input = makeInput([{ path: "no-import.ts", source }]);
+      const edges = extractServiceTopology(input);
+
+      const httpEdge = edges.find((e) => e.metadata?.protocol === "http");
+      expect(httpEdge).toBeUndefined();
     });
   });
 

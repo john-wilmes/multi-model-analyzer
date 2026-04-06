@@ -12,7 +12,7 @@ function edge(source: string, target: string, kind: string, repo?: string): Grap
     source,
     target,
     kind: kind as GraphEdge["kind"],
-    ...(repo ? { metadata: { repo } } : {}),
+    ...(repo ? { repo, metadata: { repo } } : {}),
   };
 }
 

@@ -50,6 +50,8 @@ vi.mock("@mma/structural", () => ({
   buildControlFlowGraph: vi.fn(),
   createCfgIdCounter: vi.fn().mockReturnValue({ next: () => 0 }),
   extractCallEdgesFromTreeSitter: vi.fn().mockReturnValue([]),
+  buildImportScopeFromAst: vi.fn().mockReturnValue(new Map()),
+  resolveImportSpecifier: vi.fn().mockReturnValue(undefined),
   computeModuleMetrics: vi.fn().mockReturnValue([]),
   summarizeRepoMetrics: vi.fn().mockReturnValue({
     repo: "", moduleCount: 0, avgInstability: 0, avgAbstractness: 0,
@@ -64,6 +66,7 @@ vi.mock("@mma/heuristics", () => ({
   inferServicesWithMeta: vi.fn().mockReturnValue({ services: [], warnings: [] }),
   detectPatterns: vi.fn().mockReturnValue([]),
   scanForFlags: vi.fn().mockReturnValue({ flags: [] }),
+  extractFlagRegistry: vi.fn().mockReturnValue([]),
   extractLogStatements: vi.fn().mockReturnValue({ repo: "", templates: [] }),
   analyzeNaming: vi.fn().mockReturnValue({ methods: [] }),
   extractServiceTopology: vi.fn().mockReturnValue([]),

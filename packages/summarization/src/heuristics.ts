@@ -7,6 +7,7 @@
 
 import type { MethodPurpose, Summary } from "@mma/core";
 
+/** @internal */
 export function summarizeFromNaming(
   purpose: MethodPurpose,
 ): Summary {

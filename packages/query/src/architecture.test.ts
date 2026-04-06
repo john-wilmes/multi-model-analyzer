@@ -14,7 +14,7 @@ function makeEdge(
   repo: string,
   extra?: Record<string, unknown>,
 ): GraphEdge {
-  return { source, target, kind, metadata: { repo, ...extra } };
+  return { source, target, kind, repo, metadata: { repo, ...extra } };
 }
 
 describe("executeArchitectureQuery", () => {

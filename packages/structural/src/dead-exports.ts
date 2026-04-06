@@ -30,7 +30,7 @@ export function detectDeadExports(
   // Build set of all files that are import targets (filtered to this repo)
   const importedFiles = new Set<string>();
   for (const edge of importEdges) {
-    if (edge.kind === "imports" && (!edge.metadata?.["repo"] || edge.metadata["repo"] === repo)) {
+    if (edge.kind === "imports" && (!edge.repo || edge.repo === repo)) {
       importedFiles.add(edge.target);
     }
   }

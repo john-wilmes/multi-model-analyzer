@@ -79,6 +79,7 @@ export function extractDependencyGraph(
         source,
         target,
         kind: "imports",
+        repo,
         metadata,
       });
     }
@@ -143,13 +144,26 @@ function extractImports(rootNode: TreeSitterNode): ImportInfo[] {
         imports.push({ specifier: stripLoaderPrefix(source), importedNames: names });
       }
     } else if (child.type === "expression_statement") {
-      // Handle require() calls
+      // Handle bare require() calls: require('./side-effect')
       const req = findRequireCall(child);
       if (req) imports.push({ specifier: stripLoaderPrefix(req), importedNames: [] });
+    } else if (
+      child.type === "lexical_declaration" ||
+      child.type === "variable_declaration"
+    ) {
+      // Handle CJS: const x = require('...'), const { a, b } = require('...')
+      for (const declarator of child.namedChildren) {
+        if (declarator.type !== "variable_declarator") continue;
+        const req = findRequireCall(declarator);
+        if (req) {
+          const names = extractRequireNames(declarator);
+          imports.push({ specifier: stripLoaderPrefix(req), importedNames: names });
+        }
+      }
     } else if (child.type === "export_statement") {
       // Handle re-exports: export * from './x', export { X } from './x'
       // Use the "source" field to avoid matching strings inside exported class/function bodies
-      const sourceNode = (child as any).childForFieldName?.("source");
+      const sourceNode = child.childForFieldName("source");
       if (sourceNode) {
         const source = findStringLiteral(sourceNode);
         if (source) {
@@ -186,7 +200,7 @@ function extractImportedNames(importNode: TreeSitterNode): string[] {
           for (const spec of clauseChild.namedChildren) {
             if (spec.type === "import_specifier") {
               // The "name" field is the imported name; "alias" is the local name
-              const nameNode = (spec as any).childForFieldName?.("name");
+              const nameNode = spec.childForFieldName("name");
               if (nameNode) {
                 names.push(nameNode.text);
               } else if (spec.namedChildren.length > 0) {
@@ -217,7 +231,7 @@ function extractReexportNames(exportNode: TreeSitterNode): string[] {
       hasNamedExports = true;
       for (const spec of child.namedChildren) {
         if (spec.type === "export_specifier") {
-          const nameNode = (spec as any).childForFieldName?.("name");
+          const nameNode = spec.childForFieldName("name");
           if (nameNode) {
             names.push(nameNode.text);
           } else if (spec.namedChildren.length > 0) {
@@ -270,6 +284,37 @@ function findRequireCall(node: TreeSitterNode): string | null {
     if (found) return found;
   }
   return null;
+}
+
+/**
+ * Extract imported names from a CJS variable_declarator node.
+ * - `const x = require('…')` → `["default"]`
+ * - `const { a, b } = require('…')` → `["a", "b"]`
+ * - `const { a: renamed } = require('…')` → `["a"]`
+ */
+function extractRequireNames(declarator: TreeSitterNode): string[] {
+  const nameNode = declarator.childForFieldName("name");
+  if (!nameNode) return [];
+
+  if (nameNode.type === "identifier") {
+    return ["default"];
+  }
+
+  if (nameNode.type === "object_pattern") {
+    const names: string[] = [];
+    for (const prop of nameNode.namedChildren) {
+      if (prop.type === "shorthand_property_identifier_pattern") {
+        names.push(prop.text);
+      } else if (prop.type === "pair_pattern") {
+        // const { original: alias } = require('...') → extract "original"
+        const key = prop.childForFieldName("key");
+        if (key) names.push(key.text);
+      }
+    }
+    return names;
+  }
+
+  return [];
 }
 
 /**
@@ -338,6 +383,14 @@ const EXTENSIONS = [
 ];
 
 function probeExtensions(base: string, knownPaths: ReadonlySet<string>): string | undefined {
+  // When the specifier already ends in `.js` (common in CJS require and ESM with
+  // explicit extensions), also try the TypeScript source equivalents so that
+  // `require('./utils.js')` resolves to `utils.ts` when indexed as TypeScript.
+  if (base.endsWith(".js")) {
+    const stem = base.slice(0, -3);
+    if (knownPaths.has(stem + ".ts")) return stem + ".ts";
+    if (knownPaths.has(stem + ".tsx")) return stem + ".tsx";
+  }
   for (const ext of EXTENSIONS) {
     const candidate = base + ext;
     if (knownPaths.has(candidate)) return candidate;
@@ -395,6 +448,17 @@ export function findCircularDependencies(edges: readonly GraphEdge[]): string[][
   }
 
   const cycles: string[][] = [];
+  // 3-color DFS (Tarjan-style):
+  // WHITE = not yet visited (not in either set)
+  // GRAY  = on the current DFS stack (in `stack` but not yet in `visited`)
+  // BLACK = fully processed (in `visited`)
+  //
+  // A back-edge to a GRAY node indicates a cycle.
+  // BLACK nodes are guaranteed cycle-free from that node onward — skip them.
+  // The key fix vs the naive approach: we only move a node to BLACK (visited)
+  // AFTER all its neighbors have been processed. Adding to visited on entry
+  // (before processing neighbors) conflates GRAY and BLACK, causing cycles to
+  // be missed when a node is reached via a non-cyclic path before a cyclic one.
   const visited = new Set<string>();
   const stack = new Set<string>();
 
@@ -402,15 +466,16 @@ export function findCircularDependencies(edges: readonly GraphEdge[]): string[][
 
   function dfs(node: string): void {
     if (stack.has(node)) {
+      // Back-edge to a GRAY node — we found a cycle
       const cycleStart = path.indexOf(node);
       if (cycleStart >= 0) {
         cycles.push(path.slice(cycleStart));
       }
       return;
     }
-    if (visited.has(node)) return;
+    if (visited.has(node)) return; // BLACK — already fully processed
 
-    visited.add(node);
+    // Mark GRAY: on the current stack
     stack.add(node);
     path.push(node);
 
@@ -420,6 +485,8 @@ export function findCircularDependencies(edges: readonly GraphEdge[]): string[][
 
     path.pop();
     stack.delete(node);
+    // Mark BLACK: fully processed
+    visited.add(node);
   }
 
   for (const node of adjacency.keys()) {
@@ -464,7 +531,7 @@ export function isBarrelFile(tree: TreeSitterTree): boolean {
         continue;
       case "export_statement": {
         // Re-export: must have a "source" field (the `from '…'` clause).
-        const sourceNode = (child as any).childForFieldName?.("source");
+        const sourceNode = child.childForFieldName("source");
         if (sourceNode) {
           hasReexport = true;
         } else {

@@ -25,7 +25,7 @@ describe("extractHeritageEdges", () => {
     const edges = extractHeritageEdges(trees, "test-repo");
 
     expect(edges).toHaveLength(1);
-    expect(edges[0]!.source).toBe("animal.ts:Dog");
+    expect(edges[0]!.source).toBe("test-repo:animal.ts#Dog");
     expect(edges[0]!.target).toBe("Animal");
     expect(edges[0]!.kind).toBe("extends");
     expect(edges[0]!.metadata?.["repo"]).toBe("test-repo");
@@ -39,7 +39,7 @@ describe("extractHeritageEdges", () => {
     const edges = extractHeritageEdges(trees, "test-repo");
 
     expect(edges).toHaveLength(1);
-    expect(edges[0]!.source).toBe("user-service.ts:UserService");
+    expect(edges[0]!.source).toBe("test-repo:user-service.ts#UserService");
     expect(edges[0]!.target).toBe("IUserService");
     expect(edges[0]!.kind).toBe("implements");
   });
@@ -53,11 +53,11 @@ describe("extractHeritageEdges", () => {
     expect(edges).toHaveLength(2);
 
     const extendsEdge = edges.find((e) => e.kind === "extends");
-    expect(extendsEdge?.source).toBe("foo.ts:Foo");
+    expect(extendsEdge?.source).toBe("test-repo:foo.ts#Foo");
     expect(extendsEdge?.target).toBe("Bar");
 
     const implementsEdge = edges.find((e) => e.kind === "implements");
-    expect(implementsEdge?.source).toBe("foo.ts:Foo");
+    expect(implementsEdge?.source).toBe("test-repo:foo.ts#Foo");
     expect(implementsEdge?.target).toBe("Baz");
   });
 
@@ -80,7 +80,7 @@ describe("extractHeritageEdges", () => {
     const edges = extractHeritageEdges(trees, "test-repo");
 
     expect(edges).toHaveLength(1);
-    expect(edges[0]!.source).toBe("cmd.ts:BaseCmd");
+    expect(edges[0]!.source).toBe("test-repo:cmd.ts#BaseCmd");
     expect(edges[0]!.target).toBe("Command");
     expect(edges[0]!.kind).toBe("extends");
   });
@@ -102,11 +102,11 @@ class Gamma {}
 
     expect(edges).toHaveLength(2);
 
-    const alpha = edges.find((e) => e.source === "multi.ts:Alpha");
+    const alpha = edges.find((e) => e.source === "test-repo:multi.ts#Alpha");
     expect(alpha?.kind).toBe("extends");
     expect(alpha?.target).toBe("Base");
 
-    const beta = edges.find((e) => e.source === "multi.ts:Beta");
+    const beta = edges.find((e) => e.source === "test-repo:multi.ts#Beta");
     expect(beta?.kind).toBe("implements");
     expect(beta?.target).toBe("IService");
   });
@@ -119,12 +119,26 @@ class Gamma {}
     const edges = extractHeritageEdges(trees, "test-repo");
 
     expect(edges).toHaveLength(2);
-    expect(edges.find((e) => e.source === "a.ts:A")?.kind).toBe("extends");
-    expect(edges.find((e) => e.source === "c.ts:C")?.kind).toBe("implements");
+    expect(edges.find((e) => e.source === "test-repo:a.ts#A")?.kind).toBe("extends");
+    expect(edges.find((e) => e.source === "test-repo:c.ts#C")?.kind).toBe("implements");
   });
 
   it("returns empty for an empty file map", () => {
     const edges = extractHeritageEdges(new Map(), "test-repo");
     expect(edges).toHaveLength(0);
+  });
+
+  it("edge source uses repo-prefixed canonical ID matching deleteEdgesForFiles cleanup pattern", () => {
+    // deleteEdgesForFiles matches sources starting with `${repo}:${filePath}#`
+    // Heritage edge sources must use makeSymbolId(repo, filePath, className)
+    // which produces `repo:filePath#className`.
+    const trees = makeTrees([["src/service.ts", `class MyService extends BaseService {}`]]);
+    const edges = extractHeritageEdges(trees, "my-repo");
+
+    expect(edges).toHaveLength(1);
+    const edge = edges[0]!;
+    // Must start with `my-repo:src/service.ts#` for deleteEdgesForFiles to clean it up
+    expect(edge.source).toBe("my-repo:src/service.ts#MyService");
+    expect(edge.source.startsWith("my-repo:src/service.ts#")).toBe(true);
   });
 });

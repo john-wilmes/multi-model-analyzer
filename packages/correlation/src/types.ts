@@ -106,6 +106,7 @@ export interface OrphanedService {
 export interface CorrelationOptions {
   readonly repos: readonly RepoConfig[];
   readonly packageRoots: ReadonlyMap<string, string>;
+  readonly mirrorDir: string;
   readonly verbose?: boolean;
 }
 

@@ -70,6 +70,25 @@ describe("SqliteGraphStore", () => {
       expect(result).toHaveLength(1);
       expect(result[0]!.metadata).toBeUndefined();
     });
+
+    it("propagates top-level repo into metadata so repo-filtered queries find it", async () => {
+      // Edge has repo set at top level but no metadata.repo — repo-filtered
+      // queries use json_extract(metadata, '$.repo') so without propagation
+      // they silently miss this edge.
+      await graphStore.addEdges([{
+        source: "x.ts",
+        target: "y.ts",
+        kind: "imports",
+        repo: "my-repo",
+      }]);
+
+      const byRepo = await graphStore.getEdgesFrom("x.ts", "my-repo");
+      expect(byRepo).toHaveLength(1);
+      expect(byRepo[0]!.target).toBe("y.ts");
+
+      const byKindAndRepo = await graphStore.getEdgesByKind("imports", "my-repo");
+      expect(byKindAndRepo).toHaveLength(1);
+    });
   });
 
   describe("getEdgesFrom / getEdgesTo", () => {
@@ -336,16 +355,16 @@ describe("SqliteGraphStore", () => {
       expect(remaining).toHaveLength(1);
     });
 
-    it("does not delete edges where the file is the target, not the source", async () => {
+    it("also deletes edges where the deleted file is the target (stale inbound refs)", async () => {
       await graphStore.addEdges([
         edge("myrepo:src/other.ts", "myrepo:src/a.ts", "imports", "myrepo"),
       ]);
 
       await graphStore.deleteEdgesForFiles("myrepo", ["src/a.ts"]);
 
+      // Inbound edges to a deleted file are stale and must be removed
       const remaining = await graphStore.getEdgesByKind("imports", "myrepo");
-      expect(remaining).toHaveLength(1);
-      expect(remaining[0]!.target).toBe("myrepo:src/a.ts");
+      expect(remaining).toHaveLength(0);
     });
 
     it("handles multiple files in a single call", async () => {

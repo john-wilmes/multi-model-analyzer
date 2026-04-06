@@ -48,6 +48,7 @@ async function seedRepo(
       source: `${repo}/src/api.ts`,
       target: `${repo}/src/auth.ts`,
       kind: "imports",
+      repo,
       metadata: { repo },
     },
   ]);
@@ -144,7 +145,9 @@ describe("importCommand", () => {
 
     expect(result.edgeCount).toBe(1);
 
-    const edges = await graphStore.getEdgesByKind("imports", "edge-repo");
+    // Query without repo filter: import-cmd reconstructs edges from SQLite rows
+    // which only carry metadata; top-level repo is populated from metadata.repo.
+    const edges = await graphStore.getEdgesByKind("imports");
     expect(edges.length).toBe(1);
     expect(edges[0]!.source).toBe("edge-repo/src/api.ts");
     expect(edges[0]!.target).toBe("edge-repo/src/auth.ts");

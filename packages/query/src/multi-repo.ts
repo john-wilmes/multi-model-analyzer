@@ -47,7 +47,7 @@ export async function findCrossRepoDependencies(
   const pairMap = new Map<string, GraphEdge[]>();
 
   for (const edge of allEdges) {
-    const srcRepo = (edge.metadata?.repo as string) ?? "unknown";
+    const srcRepo = edge.repo ?? (edge.metadata?.repo as string | undefined) ?? "unknown";
     const tgtRepo = (edge.metadata?.targetRepo as string | undefined) ?? inferTargetRepo(edge.target);
 
     // Skip edges where target repo can't be determined (assumed intra-repo)

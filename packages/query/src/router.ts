@@ -69,8 +69,8 @@ export function routeQuery(query: string): RouteDecision {
     return decision("flagimpact", 0.9);
   }
 
-  // Blast radius patterns
-  if (/\b(blast\s*radius|impact|affected\s*by|ripple|critical|high[\s-]?risk|hotspot|risky|important)\b/.test(normalized)) {
+  // Blast radius patterns (includes complexity — hotspots are churn × complexity)
+  if (/\b(blast\s*radius|impact|affected\s*by|ripple|critical|high[\s-]?risk|hotspot|risky|important|complex(?:ity)?)\b/.test(normalized)) {
     return decision("blastradius", 0.9);
   }
 
@@ -91,9 +91,9 @@ export function routeQuery(query: string): RouteDecision {
     return decision("pattern", 0.85);
   }
 
-  // Complexity/temporal patterns — before structural so "most complex files" and
-  // "history of X module" route to analytical rather than matching incidental structural terms
-  if (/\b(complex(?:ity)?|recent(?:ly)?|changed?|updated?|history|modified|last\s+commit)\b/.test(normalized)) {
+  // Temporal/change-history patterns — before structural so
+  // "history of X module" routes to analytical rather than matching incidental structural terms
+  if (/\b(recent(?:ly)?|changed?|updated?|history|modified|last\s+commit)\b/.test(normalized)) {
     return decision("analytical", 0.85);
   }
 

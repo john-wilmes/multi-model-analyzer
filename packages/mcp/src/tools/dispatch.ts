@@ -84,7 +84,8 @@ export async function dispatchRoute(
       if (decision.extractedEntities.length > 0) {
         return await computeBlastRadiusFromDispatch(decision.extractedEntities, graphStore, searchStore, repo);
       }
-      return { error: "No files specified for blast radius analysis." };
+      // No specific entity — return hotspots (churn × complexity) as the default
+      return await getHotspotsForDispatch(kvStore, repo);
     }
 
     case "flagimpact": {
@@ -341,6 +342,38 @@ export async function getMetrics(kvStore: KVStore, moduleFilter?: string, repo?:
     return { moduleFilter, total: allModules.length, modules: allModules };
   }
   return { total: results.length, repos: results };
+}
+
+export async function getHotspotsForDispatch(kvStore: KVStore, repo?: string): Promise<unknown> {
+  const keys = await kvStore.keys("hotspots:");
+  const raw: Array<Record<string, unknown>> = [];
+  for (const key of keys) {
+    const keyRepo = key.slice("hotspots:".length);
+    if (repo && keyRepo !== repo) continue;
+    const json = await kvStore.get(key);
+    if (json) {
+      try {
+        const hotspots = JSON.parse(json) as Array<Record<string, unknown>>;
+        for (const h of hotspots) raw.push({ ...h, repo: keyRepo });
+      } catch { /* skip malformed */ }
+    }
+  }
+  // Re-normalize scores globally
+  let maxChurn = 0;
+  let maxSymbols = 0;
+  for (const h of raw) {
+    const c = h["churn"] as number ?? 0;
+    const s = h["symbolCount"] as number ?? 0;
+    if (c > maxChurn) maxChurn = c;
+    if (s > maxSymbols) maxSymbols = s;
+  }
+  const result = raw.map((h) => {
+    const churnScore = maxChurn > 0 ? ((h["churn"] as number ?? 0) / maxChurn) * 100 : 0;
+    const complexityScore = maxSymbols > 0 ? ((h["symbolCount"] as number ?? 0) / maxSymbols) * 100 : 0;
+    return { ...h, hotspotScore: Math.round((churnScore + complexityScore) / 2) };
+  });
+  result.sort((a, b) => (b.hotspotScore) - (a.hotspotScore));
+  return { total: result.length, results: result.slice(0, 20) };
 }
 
 export async function computeBlastRadiusFromDispatch(

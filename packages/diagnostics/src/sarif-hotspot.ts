@@ -8,6 +8,7 @@
  *   otherwise                 → not reported
  */
 
+import { createSarifResult } from "@mma/core";
 import type { SarifResult } from "@mma/core";
 
 /** Minimal shape needed from a hotspot entry — mirrors FileHotspot in @mma/heuristics */
@@ -44,32 +45,32 @@ export function hotspotFindings(
       continue;
     }
 
-    results.push({
-      ruleId: "hotspot/high-churn-complexity",
+    results.push(createSarifResult(
+      "hotspot/high-churn-complexity",
       level,
-      message: {
-        text: `File has high churn (${h.churn} commits) and complexity (${h.symbolCount} symbols) — hotspot score ${h.hotspotScore}/100`,
-      },
-      locations: [
-        {
-          physicalLocation: {
-            artifactLocation: { uri: h.filePath },
-          },
-          logicalLocations: [
-            {
-              fullyQualifiedName: h.filePath,
-              kind: "module",
-              properties: { repo },
+      `File has high churn (${h.churn} commits) and complexity (${h.symbolCount} symbols) — hotspot score ${h.hotspotScore}/100`,
+      {
+        locations: [
+          {
+            physicalLocation: {
+              artifactLocation: { uri: h.filePath },
             },
-          ],
+            logicalLocations: [
+              {
+                fullyQualifiedName: h.filePath,
+                kind: "module",
+                properties: { repo },
+              },
+            ],
+          },
+        ],
+        properties: {
+          churn: h.churn,
+          symbolCount: h.symbolCount,
+          hotspotScore: h.hotspotScore,
         },
-      ],
-      properties: {
-        churn: h.churn,
-        symbolCount: h.symbolCount,
-        hotspotScore: h.hotspotScore,
       },
-    });
+    ));
   }
 
   return results;

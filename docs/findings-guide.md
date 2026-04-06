@@ -11,6 +11,13 @@ Reference for all diagnostics produced by Multi-Model Analyzer. Each finding app
 | `config/missing-constraint` | warning | Configuration | Flag used without dependency validation |
 | `config/untested-interaction` | note | Configuration | Flag pair lacks test coverage |
 | `config/format-violation` | error | Configuration | Parameter violates type/range constraint |
+| `config/unused-registry-flag` | note | Configuration | Registry flag declared but never consumed |
+| `config/unregistered-flag` | warning | Configuration | Flag exists in code but not in the registry |
+| `config/dead-setting` | warning | Configuration | Setting exists but is never read |
+| `config/missing-dependency` | warning | Configuration | Setting depends on another setting that is absent |
+| `config/conflicting-settings` | error | Configuration | Two settings have contradictory values |
+| `config/high-interaction-strength` | note | Configuration | Parameter pair has high interaction strength |
+| `config/hardcoded-credential-default` | warning | Configuration | Credential field has a hardcoded default that appears to be a real secret |
 | `fault/unhandled-error-path` | warning | Fault Tree | Catch block with no logging or re-throw |
 | `fault/silent-failure` | warning | Fault Tree | Error condition swallowed silently |
 | `fault/missing-error-boundary` | warning | Fault Tree | Async operation with no error handler |
@@ -31,6 +38,7 @@ Reference for all diagnostics produced by Multi-Model Analyzer. Each finding app
 | `cross-repo/shared-flag` | note | Cross-Repo | Feature flag is shared across multiple repos |
 | `cross-repo/cascading-fault` | warning | Cross-Repo | Fault in one repo can cascade to dependents |
 | `cross-repo/undocumented-consumer` | note | Cross-Repo | Repo consumes a service with no documentation |
+| `cross-repo/critical-path` | warning | Cross-Repo | Repo heads a dependency chain 4+ hops long |
 
 ## Reading SARIF Output
 
@@ -113,6 +121,92 @@ These rules validate feature flag models built from code scanning. Constraint ch
 
 **When to ignore:** Rarely safe to ignore. If the constraint definition is wrong rather than the value, update the constraint.
 
+### `config/unused-registry-flag`
+
+**Severity:** note
+
+**What it means:** A flag that is marked as the authoritative registry definition (`isRegistry: true`) appears in only one location — the registry itself. This means the flag was declared in the registry but is never referenced in any consuming code.
+
+**Trigger:** `flag.isRegistry === true && flag.locations.length <= 1`. The registry entry is counted as one location; a flag with no additional usages has length 1 (or 0).
+
+**Action:** Either add usages of the flag in consuming code, or remove the registry entry if the flag is no longer needed. Registry flags with no consumers add dead weight to the feature model.
+
+**When to ignore:** Flags that are pre-declared in the registry in advance of rollout. If the flag is actively being developed and consumption code is forthcoming, it is safe to suppress temporarily.
+
+### `config/unregistered-flag`
+
+**Severity:** warning
+
+**What it means:** A feature flag appears in code but has no corresponding registry entry. The model contains at least one registry flag (`isRegistry: true`), indicating a registry is in use for this codebase, but this flag was not registered there.
+
+**Trigger:** The model contains at least one flag with `isRegistry === true`, and this flag does not have `isRegistry === true`. Only fires when a registry exists — models with no registry flags produce no `config/unregistered-flag` findings.
+
+**Action:** Add the flag to the feature registry so it is tracked, searchable, and subject to lifecycle governance (e.g., stale-flag cleanup). Unregistered flags are invisible to tooling that relies on the registry.
+
+**When to ignore:** Flags that are intentionally managed outside the registry (e.g., third-party SDK flags or infrastructure toggles that follow a different governance process). Document the exception if suppressing.
+
+### `config/dead-setting`
+
+**Severity:** warning
+
+**What it means:** A non-flag parameter (setting or credential) exists in the model but can never be used. Like `config/dead-flag`, but for settings: the parameter is excluded by at least one constraint and no constraint requires it.
+
+**Trigger:** The parameter has `kind !== "flag"`, appears in at least one `excludes` constraint, and no `requires` constraint names it as a target. Mirrors `findDeadFlags` logic but operates on `model.parameters`.
+
+**Action:** Remove the dead setting or fix the constraints if the exclusion was unintentional. Dead settings add noise to the configuration model and may indicate stale configuration that was never cleaned up.
+
+**When to ignore:** Settings that are intentionally disabled as kill switches or reserved for future use. Check whether the exclusion constraint is correct before removing the setting.
+
+### `config/missing-dependency`
+
+**Severity:** warning
+
+**What it means:** A setting has a `requires` constraint pointing at another parameter, but that target parameter is not defined anywhere in the model (neither in flags nor parameters). The dependency cannot be satisfied.
+
+**Trigger:** A `requires` constraint has a `source` parameter that exists in the model but a `target` parameter that does not appear in `model.flags` or `model.parameters`. Emits the message: `"<requiredBy>" requires "<parameter>"[when <condition>] but no definition was found`.
+
+**Action:** Either add the missing parameter to the model, or remove the `requires` constraint if the dependency is no longer needed. This typically indicates a parameter was renamed or removed without updating its dependents.
+
+**When to ignore:** Rarely safe to ignore. If the dependency is on a parameter from an external configuration source not scanned by the analyzer, suppress with a comment explaining the external dependency.
+
+### `config/conflicting-settings`
+
+**Severity:** error
+
+**What it means:** Two settings have contradictory constraints — one parameter both requires and excludes another, making it impossible to satisfy both constraints simultaneously.
+
+**Trigger:** A parameter `A` has a `requires` constraint targeting `B`, and also an `excludes` constraint targeting `B` (directly or symmetrically). Emits: `"<A>" both requires and excludes "<B>" — contradictory constraints`.
+
+**Action:** Fix the constraint model. Either the `requires` or the `excludes` constraint is wrong. This is a modeling error that must be resolved — there is no valid configuration that can satisfy both.
+
+**When to ignore:** Never — contradictory constraints indicate a logic error in the feature model.
+
+### `config/high-interaction-strength`
+
+**Severity:** note
+
+**What it means:** A parameter participates in complex interactions with 3 or more other parameters. High interaction strength means the parameter's behavior depends on many others, requiring higher-order combinatorial testing to cover all interaction paths.
+
+**Trigger:** A parameter either (a) appears in a single constraint of arity ≥ 3, or (b) co-occurs with 3 or more distinct other parameters across all constraints. Emits: `Parameter "<name>" participates in 3+ way interactions — consider higher-order combinatorial testing`.
+
+**Action:** Add pairwise or higher-order combinatorial tests (e.g., using t-way testing tools) that cover the parameter's interactions. Consider whether the parameter can be decomposed into simpler, more independent units.
+
+**When to ignore:** Parameters that are central to the system architecture will naturally have many interactions. This finding is informational — it highlights which parameters need the most thorough test coverage.
+
+### `config/hardcoded-credential-default`
+
+**Severity:** warning
+
+**What it means:** A credential-like field in the integrator configuration schema has a non-placeholder string default value. Any account that does not explicitly override this field will silently use the hardcoded value, which may be a real secret committed to source code.
+
+**Trigger:** A `FieldConstraint` with a credential-like field name (`password`, `apiKey`, `api_key`, `clientSecret`, `client_secret`, `secret`, `token`, `accessToken`, `access_token`, `refreshToken`, `refresh_token`, `privateKey`, `private_key`, or `username`) has a `defaultValue` that is a non-empty string of length ≥ 3 (≥ 4 for `username`) and is not a known placeholder (`changeme`, `TODO`, `REPLACE_ME`, `your-api-key`, `xxx`, `test`, `default`, etc.). Boolean, numeric, array, and object defaults are not flagged.
+
+**Example:** A configuration schema with `password: { default: 'realPassword123' }` produces this finding for each integrator type that defines that schema.
+
+**Action:** Remove the hardcoded default from the configuration schema, or replace it with a well-known placeholder string (e.g., `"REPLACE_ME"`). Ensure accounts that previously relied on the default are updated with explicit values.
+
+**When to ignore:** If the value is intentionally a non-secret string that happens to match a credential field name (e.g., a `token` field that holds a fixed protocol token rather than an auth secret), add the value to the placeholder list or rename the field to something non-credential-like.
+
 ---
 
 ## Fault Tree
@@ -127,7 +221,7 @@ These rules analyze control flow graphs to find gaps in error handling. The faul
 
 **What it means:** A `catch` block in the control flow graph has no logging statement and no re-throw. The error is silently swallowed — if something goes wrong at runtime, there will be no trace in logs and no propagation to callers.
 
-**Trigger:** A CFG node of kind `catch` has no successor nodes matching the logging pattern (`/\b(log(ger)?|error|warn(ing)?|console)\s*[.(]/i`) and no successor of kind `throw`.
+**Trigger:** A CFG node of kind `catch` has no successor nodes matching the logging pattern (`/\b(console|log(ger)?)\s*\.\s*(log|error|warn|info|debug)\s*\(|\b(log|warn|error)\s*\(/`) and no successor of kind `throw`, and no error-forwarding pattern (`.catch(`, `reject(`, `next(err)`).
 
 **Action:** Add logging inside the catch block (at minimum) or re-throw the error if the caller should handle it. Even a `console.error` is better than silence.
 
@@ -137,25 +231,25 @@ These rules analyze control flow graphs to find gaps in error handling. The faul
 
 **Severity:** warning
 
-**What it means:** An error condition is detected (e.g., a null check, an error code comparison) but the failure path produces no observable side effect — no log, no throw, no return value change.
+**What it means:** A `catch` block exists but has no reachable successor nodes — it is completely empty. The caught error is silently discarded with no logging, re-throw, or forwarding.
 
-**Trigger:** Defined in `FAULT_RULES`. Detection is part of gap analysis expansion.
+**Trigger:** A CFG node of kind `catch` has zero reachable nodes (`reachable.length === 0`). Emits: `Empty catch block in <functionId> silently swallows errors`.
 
-**Action:** Ensure the failure path either logs the condition, propagates an error, or returns a distinguishable result.
+**Action:** Add at minimum a logging statement inside the catch block. Even `console.error(err)` is better than silence. If the error is truly expected and harmless, add a comment explaining why it is safe to suppress.
 
-**When to ignore:** Defensive checks that guard against theoretically impossible states may intentionally do nothing on the "impossible" path.
+**When to ignore:** Catch blocks that intentionally suppress known-harmless errors (e.g., `JSON.parse` of optional config that may be absent). Add a comment so the intent is clear to future readers.
 
 ### `fault/missing-error-boundary`
 
 **Severity:** warning
 
-**What it means:** An async operation (Promise, async/await) has no `.catch()` handler, no try/catch wrapper, and no error boundary component (in React contexts).
+**What it means:** An async function uses `await` but has no `try/catch` wrapper, meaning unhandled rejections can escape the function boundary.
 
-**Trigger:** Defined in `FAULT_RULES` with `enabled: false` — detection is not yet implemented. This rule is declared but does not currently fire; no findings are emitted for it.
+**Trigger:** Fires when a function's control flow graph contains an `await` statement with no surrounding `try/catch` block. Implemented in `detectMissingErrorBoundaries()` (`apps/cli/src/commands/indexing/ast-utils.ts`).
 
-**Action:** When implemented, add error handling around the async operation. Unhandled promise rejections crash Node.js processes and create silent failures in browsers.
+**Action:** Wrap the `await` expression (or the entire async function body) in a `try/catch`. Unhandled promise rejections crash Node.js processes and create silent failures in browsers.
 
-**When to ignore:** Not applicable — the rule is currently disabled.
+**When to ignore:** Top-level entry points (CLI scripts, test runners) that intentionally let errors propagate to an outer process handler may not need an explicit boundary.
 
 ### `fault/cascading-failure-risk`
 
@@ -185,7 +279,7 @@ Structural rules analyze the import/export graph and apply Robert C. Martin's pa
 
 **Trigger:** The file has exported symbols (`symbol.exported === true`), is not in the entry points set (package.json `main`/`bin`), and no import edge targets this file.
 
-**Message format:** `Exported <kind> "<name>" in <path> is not imported by any other file`
+**Message format:** `N dead export(s) in <path>: <kind1> <name1>, <kind2> <name2>, ...` (one finding per file, listing all dead exports together)
 
 **Action:** Remove the `export` keyword if the symbol is only used locally, or remove the symbol entirely if it's unused. Dead exports increase API surface area and create maintenance burden.
 
@@ -405,9 +499,10 @@ Hotspot analysis identifies files that are both frequently modified and structur
 **Trigger:** The hotspot score must meet the threshold:
 - **Churn** = number of distinct commits that touched the file (from `git log`)
 - **Complexity proxy** = number of parsed symbols in the file
-- **Raw score** = `churn × symbolCount`
-- **Normalized score** = `(rawScore / maxRawScore) × 100`, rounded to an integer (0–100 scale, relative to the highest-scoring file in the repo)
-- Files with zero symbols are excluded (config files, docs, etc.)
+- **churnScore** = `(churn / maxChurn) × 100` (normalized independently, 0–100)
+- **complexityScore** = `(symbolCount / maxSymbolCount) × 100` (normalized independently, 0–100)
+- **Hotspot score** = `round((churnScore + complexityScore) / 2)` (average of the two dimensions, 0–100)
+- Files with zero symbols are excluded (config files, docs, etc.). Test and spec files are also unconditionally excluded.
 - Default warning threshold: **50**; note threshold: **25** (half of warning)
 
 **Message format:** `File has high churn (<churn> commits) and complexity (<symbolCount> symbols) — hotspot score <score>/100`
@@ -461,7 +556,7 @@ Source: `packages/query/src/pagerank.ts`
 
 **What it means:** The file has a high PageRank score in the dependency graph, meaning many other files transitively depend on it. Changes to this file have a wide blast radius — a bug here affects a large portion of the codebase.
 
-**Trigger:** The file ranks in the **top 10** (default `topN: 10`) by PageRank score and exceeds the minimum score threshold (default `minScore: 0`).
+**Trigger:** The file ranks in the **top 10** (default `topN: 10`) by PageRank score and exceeds the minimum score threshold (default minScore: 10% of the top score, adapting to graph size).
 
 PageRank parameters: damping factor = 0.85, max iterations = 100, convergence tolerance = 1e-6. Dangling nodes (files with no outgoing imports) distribute rank evenly to all nodes.
 
@@ -479,7 +574,7 @@ PageRank parameters: damping factor = 0.85, max iterations = 100, convergence to
 
 ## Cross-Repo
 
-Source: `packages/correlation/src/cross-repo-models.ts`
+Source: `packages/correlation/src/sarif-rules.ts`
 
 Cross-repo rules detect risks that emerge from dependencies between repositories. These findings require multi-repo indexing (2+ repos in `mma.config.json`).
 
@@ -532,6 +627,16 @@ Cross-repo rules detect risks that emerge from dependencies between repositories
 **Action:** Run `mma index --enrich` to generate summaries, or add manual documentation to the consumed module.
 
 **When to ignore:** If the consumed module is a well-known utility with self-documenting API (e.g., type definitions).
+
+### `cross-repo/critical-path`
+
+**Severity:** warning
+
+**What it means:** A repo sits at the head of a dependency chain that is 4 or more hops long. Any failure in this repo — a breaking API change, an outage, or a build regression — cascades to every repo downstream in the chain.
+
+**Action:** Treat this repo's public API as high-risk to change. Prioritize reliability work (error handling, retries, SLOs) in this repo. Consider adding integration tests that exercise the downstream chain.
+
+**When to ignore:** If the downstream chain consists of low-criticality repos or the chain length is inflated by test/dev-only dependencies.
 
 ---
 

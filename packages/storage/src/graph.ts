@@ -32,10 +32,6 @@ export interface GraphStore {
   close(): Promise<void>;
 }
 
-export interface GraphStoreOptions {
-  readonly dbPath: string;
-}
-
 /**
  * In-memory graph store for POC and testing.
  * Replace with SQLite adapter for persistent POC, Neo4j for scale.
@@ -49,19 +45,19 @@ export class InMemoryGraphStore implements GraphStore {
 
   async getEdgesFrom(source: string, repo?: string): Promise<GraphEdge[]> {
     return this.edges.filter((e) =>
-      e.source === source && (!repo || e.metadata?.["repo"] === repo),
+      e.source === source && (!repo || e.repo === repo),
     );
   }
 
   async getEdgesTo(target: string, repo?: string): Promise<GraphEdge[]> {
     return this.edges.filter((e) =>
-      e.target === target && (!repo || e.metadata?.["repo"] === repo),
+      e.target === target && (!repo || e.repo === repo),
     );
   }
 
   async getEdgesByKind(kind: EdgeKind, repo?: string, options?: EdgeQueryOptions): Promise<GraphEdge[]> {
     const filtered = this.edges.filter((e) =>
-      e.kind === kind && (!repo || e.metadata?.["repo"] === repo),
+      e.kind === kind && (!repo || e.repo === repo),
     );
     return options?.limit ? filtered.slice(0, options.limit) : filtered;
   }
@@ -70,7 +66,7 @@ export class InMemoryGraphStore implements GraphStore {
     const counts = new Map<string, number>();
     for (const e of this.edges) {
       if (e.kind !== kind) continue;
-      const repo = (e.metadata?.["repo"] as string) ?? "unknown";
+      const repo = e.repo ?? "unknown";
       counts.set(repo, (counts.get(repo) ?? 0) + 1);
     }
     return counts;
@@ -92,7 +88,7 @@ export class InMemoryGraphStore implements GraphStore {
       visited.add(current.node);
 
       const outEdges = this.edges.filter((e) =>
-        e.source === current.node && (!repo || e.metadata?.["repo"] === repo),
+        e.source === current.node && (!repo || e.repo === repo),
       );
       for (const edge of outEdges) {
         result.push(edge);
@@ -108,7 +104,7 @@ export class InMemoryGraphStore implements GraphStore {
   async clear(repo?: string): Promise<void> {
     if (repo) {
       this.edges = this.edges.filter(
-        (e) => e.metadata?.["repo"] !== repo,
+        (e) => e.repo !== repo,
       );
     } else {
       this.edges = [];
@@ -120,7 +116,7 @@ export class InMemoryGraphStore implements GraphStore {
     const canonicalFiles = new Set(filePaths.map(p => repo + ":" + p));
     const prefixes = filePaths.map(p => repo + ":" + p + "#");
     this.edges = this.edges.filter(e => {
-      if (e.metadata?.["repo"] !== repo) return true;
+      if (e.repo !== repo) return true;
       if (canonicalFiles.has(e.source)) return false;
       return !prefixes.some(pfx => e.source.startsWith(pfx));
     });

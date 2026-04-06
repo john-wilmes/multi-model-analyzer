@@ -7,6 +7,7 @@
 
 import type { Summary, SymbolInfo } from "@mma/core";
 
+/** @internal */
 export function summarizeFromTemplate(
   symbol: SymbolInfo,
   filePath: string,

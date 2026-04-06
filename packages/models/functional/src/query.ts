@@ -25,6 +25,7 @@ export interface QuerySource {
   readonly snippet: string;
 }
 
+/** @internal */
 export function classifyQuery(query: string): QueryKind {
   const structural = /\b(calls?|depends?|imports?|extends?|implements?|graph|reference|definition)\b/i;
   const analytical = /\b(risk|fault|error|failure|bug|vulnerability|issue|problem|configuration|flag)\b/i;
@@ -34,6 +35,7 @@ export function classifyQuery(query: string): QueryKind {
   return "search";
 }
 
+/** @internal */
 export async function executeQuery(
   query: string,
   searchStore: SearchStore,

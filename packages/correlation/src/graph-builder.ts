@@ -3,40 +3,25 @@
  * from the graph store.
  */
 
+import { join } from "node:path";
 import type { GraphStore } from "@mma/storage";
 import { extractRepo } from "@mma/core";
 import type { GraphEdge, RepoConfig } from "@mma/core";
 import type { CrossRepoGraph, ResolvedCrossRepoEdge } from "./types.js";
-
-/**
- * Extracts a package name from an edge target string.
- * - Scoped: `@org/auth/src/index.ts` → `@org/auth`
- * - Unscoped: `lodash/utils` → `lodash`
- * - Relative paths (starting with `.`) → null (skip)
- */
-function extractPackageName(target: string): string | null {
-  if (target.startsWith(".")) return null;
-
-  if (target.startsWith("@")) {
-    // Scoped package: first two path segments
-    const parts = target.split("/");
-    if (parts.length < 2) return null;
-    return `${parts[0]}/${parts[1]}`;
-  }
-
-  // Unscoped: first path segment
-  return target.split("/")[0] ?? null;
-}
+import { extractPackageName } from "./connection-discovery.js";
 
 /**
  * Finds which repo owns a given directory path by checking localPath prefix.
+ * Falls back to mirrorDir/<repo.name>.git for repos without localPath.
  */
 function findRepoForPath(
   dirPath: string,
   repos: readonly RepoConfig[],
+  mirrorDir: string,
 ): string | null {
   for (const repo of repos) {
-    if (dirPath === repo.localPath || dirPath.startsWith(repo.localPath + "/")) {
+    const repoPath = repo.localPath ?? join(mirrorDir, `${repo.name}.git`);
+    if (dirPath === repoPath || dirPath.startsWith(repoPath + "/")) {
       return repo.name;
     }
   }
@@ -51,6 +36,7 @@ function resolveTargetRepo(
   edge: GraphEdge,
   repos: readonly RepoConfig[],
   packageRoots: ReadonlyMap<string, string>,
+  mirrorDir: string,
 ): { targetRepo: string; packageName: string } | null {
   // Skip non-repo specifiers (node:fs, https://..., npm:pkg, bun:test, jsr:@pkg)
   if (/^(?:node|https?|npm|bun|jsr|data):/.test(edge.target)) return null;
@@ -78,7 +64,7 @@ function resolveTargetRepo(
   const dirPath = packageRoots.get(packageName);
   if (!dirPath) return null;
 
-  const targetRepo = findRepoForPath(dirPath, repos);
+  const targetRepo = findRepoForPath(dirPath, repos, mirrorDir);
   if (!targetRepo) return null;
 
   return { targetRepo, packageName };
@@ -94,6 +80,7 @@ export async function buildCrossRepoGraph(
   graphStore: GraphStore,
   repos: readonly RepoConfig[],
   packageRoots: ReadonlyMap<string, string>,
+  mirrorDir: string,
 ): Promise<CrossRepoGraph> {
   const resolvedEdges: ResolvedCrossRepoEdge[] = [];
   const repoPairs = new Set<string>();
@@ -110,7 +97,7 @@ export async function buildCrossRepoGraph(
     const edges = [...importEdges, ...dependsOnEdges];
 
     for (const edge of edges) {
-      const resolution = resolveTargetRepo(edge, repos, packageRoots);
+      const resolution = resolveTargetRepo(edge, repos, packageRoots, mirrorDir);
       if (!resolution) continue;
 
       const { targetRepo, packageName } = resolution;

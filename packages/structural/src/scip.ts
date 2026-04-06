@@ -13,6 +13,7 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
+/** @internal */
 export interface ScipIndexResult {
   readonly repo: string;
   readonly indexPath: string;
@@ -20,12 +21,14 @@ export interface ScipIndexResult {
   readonly documentCount: number;
 }
 
+/** @internal */
 export interface ScipSymbol {
   readonly symbol: string;
   readonly documentation: readonly string[];
   readonly relationships: readonly ScipRelationship[];
 }
 
+/** @internal */
 export interface ScipRelationship {
   readonly symbol: string;
   readonly isDefinition: boolean;
@@ -33,6 +36,7 @@ export interface ScipRelationship {
   readonly isImplementation: boolean;
 }
 
+/** @internal */
 export async function generateScipIndex(
   repoPath: string,
   repo: string,
@@ -79,6 +83,7 @@ export async function generateScipIndex(
   };
 }
 
+/** @internal */
 export function parseScipSymbolString(symbol: string): {
   scheme: string;
   package: string;

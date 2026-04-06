@@ -8,7 +8,7 @@ import { InMemorySearchStore } from "@mma/storage";
 function edge(source: string, target: string, kind: GraphEdge["kind"], repo: string, targetRepo?: string): GraphEdge {
   const metadata: Record<string, unknown> = { repo };
   if (targetRepo) metadata.targetRepo = targetRepo;
-  return { source, target, kind, metadata };
+  return { source, target, kind, repo, metadata };
 }
 
 describe("findCrossRepoDependencies", () => {
@@ -143,6 +143,7 @@ describe("findCrossRepoDependencies — canonical ID fast path", () => {
       source: "src/service.ts",
       target: "repoB:src/index.ts",
       kind: "imports",
+      repo: "repoA",
       metadata: { repo: "repoA" },
     };
     await store.addEdges([e]);
@@ -162,6 +163,7 @@ describe("findCrossRepoDependencies — canonical ID fast path", () => {
       source: "src/a.ts",
       target: "repoA:src/b.ts",
       kind: "imports",
+      repo: "repoA",
       metadata: { repo: "repoA" },
     };
     await store.addEdges([e]);
@@ -178,6 +180,7 @@ describe("findCrossRepoDependencies — canonical ID fast path", () => {
       source: "src/a.ts",
       target: "./utils.ts",
       kind: "imports",
+      repo: "repoA",
       metadata: { repo: "repoA" },
     };
     await store.addEdges([e]);
@@ -195,6 +198,7 @@ describe("findCrossRepoDependencies — canonical ID fast path", () => {
       source: "src/a.ts",
       target: "repoB:src/index.ts",
       kind: "imports",
+      repo: "repoA",
       metadata: { repo: "repoA", targetRepo: "repoC" },
     };
     await store.addEdges([e]);
@@ -210,8 +214,8 @@ describe("findCrossRepoDependencies — canonical ID fast path", () => {
   it("filters by targetRepo option with canonical IDs", async () => {
     const store = new InMemoryGraphStore();
     await store.addEdges([
-      { source: "a.ts", target: "repoB:src/b.ts", kind: "imports", metadata: { repo: "repoA" } },
-      { source: "a.ts", target: "repoC:src/c.ts", kind: "imports", metadata: { repo: "repoA" } },
+      { source: "a.ts", target: "repoB:src/b.ts", kind: "imports", repo: "repoA", metadata: { repo: "repoA" } },
+      { source: "a.ts", target: "repoC:src/c.ts", kind: "imports", repo: "repoA", metadata: { repo: "repoA" } },
     ]);
 
     const result = await findCrossRepoDependencies(store, { sourceRepo: "repoA", targetRepo: "repoB" });
@@ -220,12 +224,32 @@ describe("findCrossRepoDependencies — canonical ID fast path", () => {
     expect(result.dependencies[0]!.targetRepo).toBe("repoB");
   });
 
+  it("falls back to metadata.repo when top-level repo field is absent (legacy edges)", async () => {
+    const store = new InMemoryGraphStore();
+    // Legacy edge: only metadata.repo is set, no top-level repo field
+    const legacyEdge: GraphEdge = {
+      source: "src/app.ts",
+      target: "@lib/core",
+      kind: "imports",
+      metadata: { repo: "legacy-repo", targetRepo: "lib-repo" },
+    };
+    await store.addEdges([legacyEdge]);
+
+    const result = await findCrossRepoDependencies(store);
+
+    expect(result.totalCrossRepoEdges).toBe(1);
+    expect(result.dependencies).toHaveLength(1);
+    expect(result.dependencies[0]!.sourceRepo).toBe("legacy-repo");
+    expect(result.dependencies[0]!.targetRepo).toBe("lib-repo");
+  });
+
   it("detects cross-repo edge via scoped package heuristic (non-canonical)", async () => {
     const store = new InMemoryGraphStore();
     const e: GraphEdge = {
       source: "src/app.ts",
       target: "@nestjs/core",
       kind: "imports",
+      repo: "my-app",
       metadata: { repo: "my-app" },
     };
     await store.addEdges([e]);
@@ -242,6 +266,7 @@ describe("findCrossRepoDependencies — canonical ID fast path", () => {
       source: "src/controller.ts#AppController",
       target: "repoB:src/auth.ts#AuthService.validate",
       kind: "calls",
+      repo: "repoA",
       metadata: { repo: "repoA" },
     };
     await store.addEdges([e]);
